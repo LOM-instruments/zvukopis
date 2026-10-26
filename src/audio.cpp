@@ -4,6 +4,7 @@
 #include <driver/i2s.h>
 #include <math.h>
 
+#include "clock.h"
 #include "es8311.h"
 #include "storage.h"
 
@@ -56,6 +57,7 @@ static int nextMemoNumber = 1;
 static int16_t *scratch = nullptr;
 static volatile size_t scratchLength = 0;
 static volatile size_t recordLimit = 0;
+static time_t recordStartedAt = 0;
 
 static volatile AudioState state = AUDIO_IDLE;
 static volatile int playingIndex = -1;
@@ -87,8 +89,9 @@ static void startRecording() {
         return;
     }
     scratchLength = 0;
+    recordStartedAt = clockValid() ? time(nullptr) : 0;
     state = AUDIO_RECORDING;
-    Serial.println("Recording...");
+    Serial.printf("Recording started at %lu ms\n", millis());
 }
 
 // Playback gain and list waveform
@@ -115,13 +118,14 @@ static void finishRecording() {
     }
     Memo memo = {};
     memo.number = nextMemoNumber++;
+    memo.recordedAt = recordStartedAt;
     memo.length = length;
     analyse(memo, scratch);
 
     // On the card if possible, else (no card, or the write failed) in PSRAM
     state = AUDIO_SAVING;
     uint32_t start = millis();
-    bool onCard = storageAvailable() && storageSaveMemo(memo, scratch);
+    bool onCard = storageAvailable() && storageSaveMemo(memo, scratch); // sets memo.fileName
     if (!onCard) {
         memo.samples = (int16_t *)ps_malloc(length * sizeof(int16_t));
         if (!memo.samples) {
@@ -139,8 +143,8 @@ static void finishRecording() {
     listVersion++;
     xSemaphoreGive(memoLock);
     state = AUDIO_IDLE;
-    Serial.printf("Saved Memo %d %s in %lu ms: %.2f s, playback gain %.1fx\n",
-                  memo.number, onCard ? "to SD card" : "in memory", millis() - start,
+    Serial.printf("Saved Memo %d %s%s in %lu ms: %.2f s, playback gain %.1fx\n",
+                  memo.number, onCard ? "to SD card as " : "in memory", memo.fileName, millis() - start,
                   (float)length / SAMPLE_RATE, memo.gain);
 }
 
@@ -173,7 +177,7 @@ static void deleteMemo(int index) {
     if (playingIndex == index) stopPlayback();
     int number = memos[index].number;
     if (memos[index].samples) free(memos[index].samples);
-    else if (!storageDeleteMemo(number)) Serial.printf("Couldn't delete Memo %d from the SD card\n", number);
+    else if (!storageDeleteMemo(memos[index])) Serial.printf("Couldn't delete Memo %d from the SD card\n", number);
 
     xSemaphoreTake(memoLock, portMAX_DELAY);
     memmove(&memos[index], &memos[index + 1], (memoTotal - index - 1) * sizeof(Memo));

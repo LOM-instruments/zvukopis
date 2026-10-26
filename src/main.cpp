@@ -1,11 +1,13 @@
 #include <Arduino.h>
 #include <esp_sleep.h>
+#include <mbedtls/base64.h>
 
 #include "EPD_3in97.h"
 
 #include "audio.h"
 #include "board_power.h"
 #include "buttons.h"
+#include "clock.h"
 #include "ui.h"
 
 // How often the sleeping chip wakes briefly to check the PWR key
@@ -40,6 +42,7 @@ static bool sleepUntilPowerKey() {
 static void goToSleep() {
     Serial.println("[sleep] going to sleep");
     audioSuspend(); // saves a recording in progress first
+    clockPauseSync(true);
     buttonsPause(true);
     uiShowSleepScreen(true);
     Serial.println("[sleep] asleep");
@@ -54,6 +57,27 @@ static void goToSleep() {
     audioResume();
     uiShowSleepScreen(false);
     buttonsPause(false);
+    clockPauseSync(false);
+}
+
+// Debug: newest memo's raw samples as base64, for analysis on a computer
+static void dumpNewestMemo() {
+    Memo memo;
+    if (!memoGet(0, memo) || !memo.samples) {
+        Serial.println("No memo in memory to dump");
+        return;
+    }
+    Serial.printf("AUDIO-BEGIN memo=%d samples=%u\n", memo.number, memo.length);
+    const uint8_t *bytes = (const uint8_t *)memo.samples;
+    size_t total = memo.length * sizeof(int16_t);
+    unsigned char line[80];
+    for (size_t i = 0; i < total; i += 57) {
+        size_t outLen = 0;
+        mbedtls_base64_encode(line, sizeof(line), &outLen, bytes + i, min((size_t)57, total - i));
+        Serial.write(line, outLen);
+        Serial.println();
+    }
+    Serial.println("AUDIO-END");
 }
 
 void setup() {
@@ -62,17 +86,18 @@ void setup() {
     DEV_Module_Init(); // e-paper GPIO setup + Serial.begin(115200)
     // Wait (up to 3 s) for a USB serial monitor so the first lines aren't lost
     while (!Serial && millis() < 3000) delay(10);
-    Serial.println("Voice memos starting");
+    Serial.println("zvukopis starting");
 
     boardPowerInit(); // also starts the I2C bus shared with the audio codec
     epdPowerOn();
     EPD_3IN97_Init();
+    clockInit(); // before audio, so memos get start times
 
     if (!audioInit()) Serial.println("Audio init failed");
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down, c = click, l = long click, "
-                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep)");
+                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest memo");
 }
 
 void loop() {
@@ -89,6 +114,8 @@ void loop() {
         case 't': audioSelfTest(); break;
         case 's': uiRequestScreenshot(); break;
         case 'p': buttonsInject(BTN_POWER); break;
+        case 'a': dumpNewestMemo(); break;
+        case 'T': clockSet((time_t)Serial.parseInt()); break;
         }
     }
 

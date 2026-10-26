@@ -20,6 +20,8 @@ static uint64_t freeBytes = 0;
 // "memo" chunk payload
 struct __attribute__((packed)) MemoChunk {
     uint32_t version;
+    int32_t number;
+    int64_t recordedAt; // UTC, 0 if unknown
     float gain;
     uint8_t waveform[WAVEFORM_BINS];
 };
@@ -33,8 +35,23 @@ struct __attribute__((packed)) WavFormat {
     uint16_t bitsPerSample;
 };
 
-static void memoPath(char *buf, size_t len, int number) {
-    snprintf(buf, len, "%s/MEMO_%04d.WAV", MEMO_DIR, number);
+static void memoPath(char *buf, size_t len, const char *fileName) {
+    snprintf(buf, len, "%s/%s", MEMO_DIR, fileName);
+}
+
+// Local start time if known, else the memo number; made unique if taken
+static void chooseFileName(Memo &memo) {
+    char base[24], path[48];
+    if (memo.recordedAt) {
+        tm local;
+        localtime_r(&memo.recordedAt, &local);
+        strftime(base, sizeof(base), "%Y-%m-%d_%H-%M-%S", &local);
+    } else {
+        snprintf(base, sizeof(base), "MEMO_%04d", memo.number);
+    }
+    snprintf(memo.fileName, sizeof(memo.fileName), "%s.wav", base);
+    memoPath(path, sizeof(path), memo.fileName);
+    if (SD_MMC.exists(path)) snprintf(memo.fileName, sizeof(memo.fileName), "%s_%d.wav", base, memo.number);
 }
 
 bool storageInit() {
@@ -60,17 +77,18 @@ static void writeChunkHeader(File &f, const char *id, uint32_t size) {
     f.write((const uint8_t *)&size, 4);
 }
 
-bool storageSaveMemo(const Memo &memo, const int16_t *samples) {
+bool storageSaveMemo(Memo &memo, const int16_t *samples) {
     if (!mounted) return false;
-    char path[32];
-    memoPath(path, sizeof(path), memo.number);
+    chooseFileName(memo);
+    char path[48];
+    memoPath(path, sizeof(path), memo.fileName);
     File f = SD_MMC.open(path, FILE_WRITE);
     if (!f) {
         Serial.printf("Can't create %s\n", path);
         return false;
     }
 
-    MemoChunk extra = {MEMO_CHUNK_VERSION, memo.gain};
+    MemoChunk extra = {MEMO_CHUNK_VERSION, memo.number, memo.recordedAt, memo.gain};
     memcpy(extra.waveform, memo.waveform, WAVEFORM_BINS);
     const uint32_t extraSize = sizeof(extra);
     const uint32_t extraPadded = extraSize + (extraSize & 1); // RIFF chunks are word aligned
@@ -93,6 +111,7 @@ bool storageSaveMemo(const Memo &memo, const int16_t *samples) {
     if (written != dataSize) {
         Serial.printf("Short write to %s (%u of %u bytes)\n", path, written, dataSize);
         SD_MMC.remove(path);
+        memo.fileName[0] = 0;
         return false;
     }
     freeBytes -= min((uint64_t)fileSize, freeBytes);
@@ -100,7 +119,7 @@ bool storageSaveMemo(const Memo &memo, const int16_t *samples) {
 }
 
 // Reads the header of one memo file. Accepts only what storageSaveMemo writes.
-static bool readMemoHeader(File &f, int number, Memo &memo) {
+static bool readMemoHeader(File &f, Memo &memo) {
     char id[4];
     uint32_t size;
     if (f.read((uint8_t *)id, 4) != 4 || memcmp(id, "RIFF", 4) != 0) return false;
@@ -109,7 +128,7 @@ static bool readMemoHeader(File &f, int number, Memo &memo) {
 
     bool haveFormat = false, haveExtra = false;
     memo = {};
-    memo.number = number;
+    strlcpy(memo.fileName, f.name(), sizeof(memo.fileName));
     while (f.read((uint8_t *)id, 4) == 4 && f.read((uint8_t *)&size, 4) == 4) {
         if (memcmp(id, "fmt ", 4) == 0 && size >= sizeof(WavFormat)) {
             WavFormat fmt;
@@ -120,6 +139,8 @@ static bool readMemoHeader(File &f, int number, Memo &memo) {
         } else if (memcmp(id, "memo", 4) == 0 && size >= sizeof(MemoChunk)) {
             MemoChunk extra;
             f.read((uint8_t *)&extra, sizeof(extra));
+            memo.number = extra.number;
+            memo.recordedAt = extra.recordedAt;
             memo.gain = extra.gain;
             memcpy(memo.waveform, extra.waveform, WAVEFORM_BINS);
             haveExtra = true;
@@ -141,10 +162,10 @@ int storageLoadMemos(Memo *out, int max) {
     int count = 0;
     uint32_t start = millis();
     for (File f = dir.openNextFile(); f && count < max; f = dir.openNextFile()) {
-        int number;
         // f.name() is the bare file name in this core version
-        if (!f.isDirectory() && sscanf(f.name(), "MEMO_%d.WAV", &number) == 1 && number > 0) {
-            if (readMemoHeader(f, number, out[count])) count++;
+        const char *dot = strrchr(f.name(), '.');
+        if (!f.isDirectory() && dot && strcasecmp(dot, ".wav") == 0) {
+            if (readMemoHeader(f, out[count])) count++;
             else Serial.printf("Skipping %s: not a memo file\n", f.name());
         }
         f.close();
@@ -154,10 +175,10 @@ int storageLoadMemos(Memo *out, int max) {
     return count;
 }
 
-bool storageDeleteMemo(int number) {
+bool storageDeleteMemo(const Memo &memo) {
     if (!mounted) return false;
-    char path[32];
-    memoPath(path, sizeof(path), number);
+    char path[48];
+    memoPath(path, sizeof(path), memo.fileName);
     File f = SD_MMC.open(path);
     size_t fileSize = f ? f.size() : 0;
     f.close();
@@ -167,8 +188,8 @@ bool storageDeleteMemo(int number) {
 }
 
 File storageOpenMemo(const Memo &memo) {
-    char path[32];
-    memoPath(path, sizeof(path), memo.number);
+    char path[48];
+    memoPath(path, sizeof(path), memo.fileName);
     File f = SD_MMC.open(path);
     if (f) f.seek(memo.dataOffset);
     return f;

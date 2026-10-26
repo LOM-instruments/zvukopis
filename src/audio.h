@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 // Voice memo engine on the board's ES8311 codec (mic in + speaker out over I2S).
 // A task on core 0 streams audio continuously and carries out the requests below.
@@ -15,6 +16,8 @@ static const int WAVEFORM_BINS = 77;
 
 struct Memo {
     int number;                      // shown as "Memo N"; numbers are never reused
+    time_t recordedAt;               // UTC start of the recording, 0 if the clock wasn't set
+    char fileName[32];               // on the SD card, in /memos
     int16_t *samples;                // mono, SAMPLE_RATE Hz; nullptr when the memo is on the SD card
     size_t length;                   // in samples
     uint32_t dataOffset;             // where the samples start in the memo's file on the SD card
@@ -40,7 +43,6 @@ void audioPlay(int index);
 void audioStopPlayback();
 void audioDelete(int index);
 void audioSelfTest(); // speaker -> mic loopback check, results on serial
-
 // For sleep: suspend finishes any recording, stops playback, powers the codec
 // down and stops I2S, and returns once that's done. Resume undoes it.
 void audioSuspend();

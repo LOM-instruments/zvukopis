@@ -12,6 +12,7 @@
 #include "EPD_3in97.h"
 #include "audio.h"
 #include "board_power.h"
+#include "clock.h"
 
 // Canvas bits match the panel: 1 = white, 0 = black
 static const uint16_t INK = 0;
@@ -62,11 +63,11 @@ struct ViewState {
     int audio;
     int playingIndex;
     int playSeconds;
-    int recordSeconds;
     int secondsLeft;
     int battery;
     int usb;
     int sdCard;
+    int clockMinute; // -1 while the clock isn't set; changes once a minute
 };
 
 static ViewState currentView() {
@@ -89,11 +90,11 @@ static ViewState currentView() {
     v.audio = audioState();
     v.playingIndex = audioPlayingIndex();
     v.playSeconds = (int)audioPlaybackSeconds();
-    v.recordSeconds = (int)audioRecordingSeconds();
     v.secondsLeft = (int)audioSecondsLeft();
     v.battery = battery;
     v.usb = usb;
     v.sdCard = audioUsingSdCard();
+    v.clockMinute = clockValid() ? (int)(time(nullptr) / 60) : -1;
     return v;
 }
 
@@ -106,6 +107,13 @@ static void formatTime(char *buf, size_t len, int seconds) {
 static void formatTimeLeft(char *buf, size_t len, int seconds) {
     if (seconds >= 3600) snprintf(buf, len, "%dh %02dm", seconds / 3600, seconds / 60 % 60);
     else formatTime(buf, len, seconds);
+}
+
+// strftime of a UTC time in local time
+static void formatLocal(char *buf, size_t len, const char *format, time_t t) {
+    tm local;
+    localtime_r(&t, &local);
+    strftime(buf, len, format, &local);
 }
 
 static int memoSeconds(const Memo &memo) {
@@ -248,7 +256,7 @@ static void drawHint(int x, int cy, HintIcon icon, const char *label) {
 // --- Screen sections ---
 
 static void drawHeader(const ViewState &v) {
-    drawText(MARGIN, 50, &FreeSansBold18pt7b, "Voice Memos", INK);
+    drawText(MARGIN, 50, &FreeSansBold18pt7b, "zvukopis", INK);
 
     int x = SW - MARGIN;
     char buf[32];
@@ -279,6 +287,16 @@ static void drawHeader(const ViewState &v) {
     }
     drawText(x + 14, 84, &FreeSans12pt7b, buf, INK);
 
+    // "26 Oct  14:05"
+    if (v.clockMinute >= 0) {
+        time_t now = (time_t)v.clockMinute * 60;
+        formatLocal(buf, sizeof(buf), "%H:%M", now);
+        drawTextRight(SW - MARGIN, 84, &FreeSansBold12pt7b, buf, INK);
+        int right = SW - MARGIN - textWidth(&FreeSansBold12pt7b, buf) - 10;
+        formatLocal(buf, sizeof(buf), "%e %b", now);
+        drawTextRight(right, 84, &FreeSans12pt7b, buf[0] == ' ' ? buf + 1 : buf, INK);
+    }
+
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -306,6 +324,11 @@ static void drawMemoRow(int index, int y, uint16_t fg, const ViewState &v) {
     char buf[32];
     snprintf(buf, sizeof(buf), "Memo %d", memo.number);
     drawText(MARGIN + 44, lineY, &FreeSansBold12pt7b, buf, fg);
+    if (memo.recordedAt) {
+        int x = MARGIN + 44 + textWidth(&FreeSansBold12pt7b, buf) + 12;
+        formatLocal(buf, sizeof(buf), "%e %b %H:%M", memo.recordedAt);
+        drawText(x, lineY, &FreeSans12pt7b, buf[0] == ' ' ? buf + 1 : buf, fg);
+    }
 
     char total[12];
     formatTime(total, sizeof(total), memoSeconds(memo));
@@ -368,6 +391,9 @@ static void drawList(const ViewState &v) {
     }
 }
 
+// Drawn once when recording starts and left alone until it stops: the panel's
+// drive voltages couple into the microphone, so a refresh adds about 0.5 s of
+// static to the audio (measured: ~2.7x the noise floor, whatever the mic gain).
 static void drawRecordingView(const ViewState &v) {
     int cx = SW / 2;
     bool saving = v.audio == AUDIO_SAVING;
@@ -375,19 +401,19 @@ static void drawRecordingView(const ViewState &v) {
     else canvas->fillCircle(cx, 270, 26, INK);
     drawTextCentered(cx, 368, &FreeSansBold24pt7b, saving ? "Saving" : "Recording", INK);
 
-    char elapsed[12], limit[12], buf[32];
-    formatTime(elapsed, sizeof(elapsed), v.recordSeconds);
-    drawTextCentered(cx, 436, &FreeSansBold24pt7b, elapsed, INK);
-
-    // How much of the allowed length is used
-    int limitSeconds = max(1, (int)audioRecordingLimitSeconds());
-    const int barW = 300, barH = 14, barX = cx - barW / 2, barY = 470;
-    canvas->drawRect(barX, barY, barW, barH, INK);
-    canvas->drawRect(barX + 1, barY + 1, barW - 2, barH - 2, INK);
-    canvas->fillRect(barX + 3, barY + 3, (barW - 6) * min(v.recordSeconds, limitSeconds) / limitSeconds, barH - 6, INK);
-    formatTime(limit, sizeof(limit), limitSeconds);
-    snprintf(buf, sizeof(buf), "max %s", limit);
-    drawTextCentered(cx, barY + 46, &FreeSans12pt7b, buf, INK);
+    char limit[12], started[12], buf[48];
+    formatTime(limit, sizeof(limit), max(1, (int)audioRecordingLimitSeconds()));
+    if (v.clockMinute >= 0) {
+        formatLocal(started, sizeof(started), "%H:%M", (time_t)v.clockMinute * 60);
+        snprintf(buf, sizeof(buf), "started %s  -  up to %s", started, limit);
+    } else {
+        snprintf(buf, sizeof(buf), "up to %s", limit);
+    }
+    drawTextCentered(cx, 412, &FreeSans12pt7b, buf, INK);
+    if (!saving) {
+        drawTextCentered(cx, 500, &FreeSans9pt7b, "The screen stays still while recording,", INK);
+        drawTextCentered(cx, 522, &FreeSans9pt7b, "so it doesn't add noise to the audio.", INK);
+    }
 }
 
 // Small modal box over the list: Cancel / Delete, chosen with up/down
@@ -442,9 +468,17 @@ static void drawSleepScreen(const ViewState &v) {
     if (v.memoCount == 1) snprintf(buf, sizeof(buf), "1 memo %s", where);
     else snprintf(buf, sizeof(buf), "%d memos %s", v.memoCount, where);
     drawTextCentered(cx, 500, &FreeSans12pt7b, buf, INK);
+    int y = 532;
+    if (v.clockMinute >= 0) {
+        char since[24];
+        formatLocal(since, sizeof(since), "%H:%M", (time_t)v.clockMinute * 60);
+        snprintf(buf, sizeof(buf), "Asleep since %s", since);
+        drawTextCentered(cx, y, &FreeSans12pt7b, buf, INK);
+        y += 32;
+    }
     if (v.battery >= 0) {
         snprintf(buf, sizeof(buf), "Battery %d%%", v.battery);
-        drawTextCentered(cx, 532, &FreeSans12pt7b, buf, INK);
+        drawTextCentered(cx, y, &FreeSans12pt7b, buf, INK);
     }
 }
 
@@ -551,6 +585,8 @@ static void displayTask(void *) {
             partials = 0;
         } else if (v.sleeping) {
             // leave the sleeping panel alone
+        } else if (v.audio == AUDIO_RECORDING && shown.audio == AUDIO_RECORDING) {
+            // keep the panel still while recording; see drawRecordingView
         } else if (memcmp(&v, &shown, sizeof(v)) != 0) {
             render(v);
             pushPartial(v);
