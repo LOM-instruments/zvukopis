@@ -469,6 +469,25 @@ esp_err_t es8311_microphone_fade(es8311_handle_t dev, const es8311_fade_t fade)
     return es8311_write_reg(dev, ES8311_ADC_REG15, reg15);
 }
 
+esp_err_t es8311_power_down(es8311_handle_t dev)
+{
+    const uint8_t sequence[][2] = {
+        {ES8311_DAC_REG32, 0x00},    // DAC volume to 0
+        {ES8311_ADC_REG17, 0x00},    // ADC volume to 0
+        {ES8311_SYSTEM_REG0E, 0xFF}, // power down PGA and ADC modulator
+        {ES8311_SYSTEM_REG12, 0x02}, // power down DAC
+        {ES8311_SYSTEM_REG14, 0x00}, // disconnect analog mic input
+        {ES8311_SYSTEM_REG0D, 0xFA}, // power down analog circuitry
+        {ES8311_ADC_REG15, 0x00},
+        {ES8311_DAC_REG37, 0x08},
+        {ES8311_GP_REG45, 0x01},
+    };
+    for (const auto &w : sequence) {
+        ESP_RETURN_ON_ERROR(es8311_write_reg(dev, w[0], w[1]), TAG, "I2C read/write error");
+    }
+    return ESP_OK;
+}
+
 void es8311_register_dump(es8311_handle_t dev)
 {
     for (int reg = 0; reg < 0x4A; reg++) {

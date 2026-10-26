@@ -147,6 +147,17 @@ void es8311_register_dump(es8311_handle_t dev);
 esp_err_t es8311_voice_mute(es8311_handle_t dev, bool enable);
 
 /**
+ * @brief Power down the DAC, ADC and analog circuitry (ESP-ADF's es8311 suspend sequence).
+ *        es8311_init() brings the codec back up.
+ *
+ * @param dev ES8311 handle
+ * @return
+ *     - ESP_OK success
+ *     - Else fail
+ */
+esp_err_t es8311_power_down(es8311_handle_t dev);
+
+/**
  * @brief Set Microphone gain
  *
  * @param dev ES8311 handle

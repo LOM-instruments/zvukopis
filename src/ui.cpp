@@ -34,13 +34,18 @@ static const int WAVE_PITCH = 5; // bar width 3 + gap 2
 static const int WAVE_HALF_H = 15;
 
 static const int FULL_REFRESH_EVERY = 30; // partial refreshes, before a full one clears ghosting
-static const uint32_t CONFIRM_TIMEOUT_MS = 5000;
+static const uint32_t CONFIRM_TIMEOUT_MS = 10000;
+static const uint32_t SLEEP_SCREEN_TIMEOUT_MS = 15000;
 static const uint32_t BATTERY_READ_MS = 30000;
 
 // UI state: written by loop(), read by the display task
 static volatile int selected = 0; // row 0 = "New recording", row n = memo n-1
 static volatile bool confirmDelete = false;
+static volatile int confirmChoice = 0; // 0 = Cancel, 1 = Delete
 static uint32_t confirmSince = 0;
+static volatile bool sleepRequested = false;
+static volatile bool sleeping = false;    // what the screen should show
+static volatile bool panelAsleep = false; // what the display task has done
 static int lastMemoCount = 0;
 static volatile bool screenshotRequested = false;
 
@@ -50,6 +55,8 @@ static GFXcanvas1 *canvas;
 struct ViewState {
     int selected;
     int confirmDelete;
+    int confirmChoice;
+    int sleeping;
     int memoCount;
     uint32_t listVersion;
     int audio;
@@ -59,6 +66,7 @@ struct ViewState {
     int secondsLeft;
     int battery;
     int usb;
+    int sdCard;
 };
 
 static ViewState currentView() {
@@ -74,6 +82,8 @@ static ViewState currentView() {
     memset(&v, 0, sizeof(v)); // compared with memcmp
     v.selected = selected;
     v.confirmDelete = confirmDelete;
+    v.confirmChoice = confirmChoice;
+    v.sleeping = sleeping;
     v.memoCount = memoCount();
     v.listVersion = memoListVersion();
     v.audio = audioState();
@@ -83,6 +93,7 @@ static ViewState currentView() {
     v.secondsLeft = (int)audioSecondsLeft();
     v.battery = battery;
     v.usb = usb;
+    v.sdCard = audioUsingSdCard();
     return v;
 }
 
@@ -90,6 +101,11 @@ static ViewState currentView() {
 
 static void formatTime(char *buf, size_t len, int seconds) {
     snprintf(buf, len, "%d:%02d", seconds / 60, seconds % 60);
+}
+
+static void formatTimeLeft(char *buf, size_t len, int seconds) {
+    if (seconds >= 3600) snprintf(buf, len, "%dh %02dm", seconds / 3600, seconds / 60 % 60);
+    else formatTime(buf, len, seconds);
 }
 
 static int memoSeconds(const Memo &memo) {
@@ -153,6 +169,28 @@ static void iconBolt(int cx, int cy) {
     canvas->fillTriangle(cx - 1, cy - 1, cx + 5, cy - 1, cx - 2, cy + 10, INK);
 }
 
+// Returns the icon's left edge
+static int iconSdCard(int right, int cy) {
+    const int w = 16, h = 20;
+    int x = right - w, y = cy - h / 2;
+    canvas->fillRect(x, y, w, h, INK);
+    canvas->fillTriangle(x + w - 6, y, x + w, y, x + w, y + 6, PAPER); // clipped corner
+    for (int i = 0; i < 3; i++) canvas->fillRect(x + 3 + 3 * i, y + 3, 2, 5, PAPER);
+    return x;
+}
+
+static void iconMoon(int cx, int cy, int r) {
+    canvas->fillCircle(cx, cy, r, INK);
+    canvas->fillCircle(cx + r / 2, cy - r / 3, r * 5 / 6, PAPER);
+}
+
+static void iconStar(int cx, int cy, int r) {
+    canvas->fillTriangle(cx - r, cy, cx + r, cy, cx, cy - r / 3, INK);
+    canvas->fillTriangle(cx - r, cy, cx + r, cy, cx, cy + r / 3, INK);
+    canvas->fillTriangle(cx, cy - r, cx, cy + r, cx - r / 3, cy, INK);
+    canvas->fillTriangle(cx, cy - r, cx, cy + r, cx + r / 3, cy, INK);
+}
+
 static void iconTrash(int cx, int cy) {
     canvas->fillRoundRect(cx - 28, cy - 34, 56, 6, 2, INK); // lid
     canvas->fillRect(cx - 9, cy - 40, 18, 6, INK);           // handle
@@ -173,7 +211,15 @@ static int iconBattery(int right, int cy, int percent) {
     return x;
 }
 
-enum HintIcon { HINT_UPDOWN, HINT_CLICK, HINT_HOLD_CLICK, HINT_BOOT };
+enum HintIcon { HINT_UPDOWN, HINT_CLICK, HINT_HOLD_CLICK, HINT_BOOT, HINT_PWR };
+
+// A key name in a rounded box, like a keycap. Returns its width.
+static int drawKeycap(int x, int cy, const char *name) {
+    int w = textWidth(&FreeSans9pt7b, name) + 12;
+    canvas->drawRoundRect(x, cy - 12, w, 24, 5, INK);
+    drawText(x + 6, cy + 6, &FreeSans9pt7b, name, INK);
+    return w;
+}
 
 static void drawHint(int x, int cy, HintIcon icon, const char *label) {
     switch (icon) {
@@ -189,13 +235,12 @@ static void drawHint(int x, int cy, HintIcon icon, const char *label) {
         iconClick(x + 10, cy, true);
         x += 28;
         break;
-    case HINT_BOOT: {
-        int w = textWidth(&FreeSans9pt7b, "BOOT") + 12;
-        canvas->drawRoundRect(x, cy - 12, w, 24, 5, INK);
-        drawText(x + 6, cy + 6, &FreeSans9pt7b, "BOOT", INK);
-        x += w + 8;
+    case HINT_BOOT:
+        x += drawKeycap(x, cy, "BOOT") + 8;
         break;
-    }
+    case HINT_PWR:
+        x += drawKeycap(x, cy, "PWR") + 8;
+        break;
     }
     drawText(x, cy + 7, &FreeSans12pt7b, label, INK);
 }
@@ -213,7 +258,11 @@ static void drawHeader(const ViewState &v) {
         drawTextRight(x, 47, &FreeSans12pt7b, buf, INK);
         x -= textWidth(&FreeSans12pt7b, buf) + 6;
     }
-    if (v.usb) iconBolt(x - 6, 38);
+    if (v.usb) {
+        iconBolt(x - 6, 38);
+        x -= 22;
+    }
+    if (v.sdCard) iconSdCard(x, 38);
 
     // "2 memos  •  3:04 left"
     if (v.memoCount == 1) snprintf(buf, sizeof(buf), "1 memo");
@@ -222,10 +271,10 @@ static void drawHeader(const ViewState &v) {
     x = MARGIN + textWidth(&FreeSans12pt7b, buf) + 14;
     canvas->fillCircle(x, 78, 2, INK);
     if (v.secondsLeft < 1) {
-        snprintf(buf, sizeof(buf), "memory full");
+        snprintf(buf, sizeof(buf), v.sdCard ? "card full" : "memory full");
     } else {
-        char left[12];
-        formatTime(left, sizeof(left), v.secondsLeft);
+        char left[16];
+        formatTimeLeft(left, sizeof(left), v.secondsLeft);
         snprintf(buf, sizeof(buf), "%s left", left);
     }
     drawText(x + 14, 84, &FreeSans12pt7b, buf, INK);
@@ -238,7 +287,7 @@ static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewS
     iconRecord(MARGIN + 14, cy, fg);
     drawText(MARGIN + 44, cy + 8, &FreeSansBold12pt7b, "New recording", fg);
     if (isSelected) {
-        const char *hint = v.secondsLeft < 1 ? "memory full" : "click to record";
+        const char *hint = v.secondsLeft < 1 ? (v.sdCard ? "card full" : "memory full") : "click to record";
         drawTextRight(SW - MARGIN, cy + 8, &FreeSans12pt7b, hint, fg);
     }
 }
@@ -321,8 +370,10 @@ static void drawList(const ViewState &v) {
 
 static void drawRecordingView(const ViewState &v) {
     int cx = SW / 2;
-    canvas->fillCircle(cx, 270, 26, INK);
-    drawTextCentered(cx, 368, &FreeSansBold24pt7b, "Recording", INK);
+    bool saving = v.audio == AUDIO_SAVING;
+    if (saving) canvas->drawCircle(cx, 270, 26, INK);
+    else canvas->fillCircle(cx, 270, 26, INK);
+    drawTextCentered(cx, 368, &FreeSansBold24pt7b, saving ? "Saving" : "Recording", INK);
 
     char elapsed[12], limit[12], buf[32];
     formatTime(elapsed, sizeof(elapsed), v.recordSeconds);
@@ -339,19 +390,62 @@ static void drawRecordingView(const ViewState &v) {
     drawTextCentered(cx, barY + 46, &FreeSans12pt7b, buf, INK);
 }
 
-static void drawDeleteView(const ViewState &v) {
+// Small modal box over the list: Cancel / Delete, chosen with up/down
+static void drawDeleteDialog(const ViewState &v) {
     Memo memo;
     if (!memoGet(v.selected - 1, memo)) return;
-    int cx = SW / 2;
-    iconTrash(cx, 280);
 
+    // Shade the list behind it so the dialog stands out
+    for (int y = LIST_TOP; y < FOOTER_LINE_Y - 4; y += 2) {
+        for (int x = (y / 2 % 2) * 2; x < SW; x += 4) canvas->drawPixel(x, y, INK);
+    }
+
+    const int w = SW - 2 * MARGIN - 16, h = 250;
+    const int x = (SW - w) / 2, y = 268, cx = SW / 2;
+    canvas->fillRoundRect(x - 6, y - 6, w + 12, h + 12, 20, PAPER);
+    canvas->fillRoundRect(x, y, w, h, 16, INK);
+    canvas->fillRoundRect(x + 3, y + 3, w - 6, h - 6, 13, PAPER);
+
+    iconTrash(cx, y + 58);
     char buf[48], duration[12];
     snprintf(buf, sizeof(buf), "Delete Memo %d?", memo.number);
-    drawTextCentered(cx, 390, &FreeSansBold18pt7b, buf, INK);
+    drawTextCentered(cx, y + 134, &FreeSansBold18pt7b, buf, INK);
     formatTime(duration, sizeof(duration), memoSeconds(memo));
-    snprintf(buf, sizeof(buf), "%s recording", duration);
-    drawTextCentered(cx, 432, &FreeSans12pt7b, buf, INK);
-    drawTextCentered(cx, 462, &FreeSans12pt7b, "This can't be undone.", INK);
+    snprintf(buf, sizeof(buf), "%s  -  can't be undone", duration);
+    drawTextCentered(cx, y + 166, &FreeSans12pt7b, buf, INK);
+
+    const char *labels[2] = {"Cancel", "Delete"};
+    const int gap = 20, bw = (w - 3 * gap) / 2, bh = 48, by = y + h - bh - 18;
+    for (int i = 0; i < 2; i++) {
+        int bx = x + gap + i * (bw + gap);
+        bool chosen = i == v.confirmChoice;
+        if (chosen) {
+            canvas->fillRoundRect(bx, by, bw, bh, 10, INK);
+        } else {
+            canvas->drawRoundRect(bx, by, bw, bh, 10, INK);
+            canvas->drawRoundRect(bx + 1, by + 1, bw - 2, bh - 2, 9, INK);
+        }
+        drawTextCentered(bx + bw / 2, by + 32, &FreeSansBold12pt7b, labels[i], chosen ? PAPER : INK);
+    }
+}
+
+static void drawSleepScreen(const ViewState &v) {
+    int cx = SW / 2;
+    iconMoon(cx - 10, 290, 70);
+    iconStar(cx + 78, 236, 12);
+    iconStar(cx + 52, 330, 7);
+    iconStar(cx - 92, 214, 8);
+    drawTextCentered(cx, 448, &FreeSansBold24pt7b, "Sleeping", INK);
+
+    char buf[48];
+    const char *where = v.sdCard ? "on SD card" : "in memory";
+    if (v.memoCount == 1) snprintf(buf, sizeof(buf), "1 memo %s", where);
+    else snprintf(buf, sizeof(buf), "%d memos %s", v.memoCount, where);
+    drawTextCentered(cx, 500, &FreeSans12pt7b, buf, INK);
+    if (v.battery >= 0) {
+        snprintf(buf, sizeof(buf), "Battery %d%%", v.battery);
+        drawTextCentered(cx, 532, &FreeSans12pt7b, buf, INK);
+    }
 }
 
 // Context hints in a 2x2 grid
@@ -361,15 +455,20 @@ static void drawFooter(const ViewState &v) {
         const char *label;
     } hints[4];
     int n = 0;
-    if (v.audio == AUDIO_RECORDING) {
+    if (v.sleeping) {
+        hints[n++] = {HINT_PWR, "Press to wake"};
+    } else if (v.audio == AUDIO_SAVING) {
+        // nothing to press while saving
+    } else if (v.audio == AUDIO_RECORDING) {
         hints[n++] = {HINT_CLICK, "Stop recording"};
     } else if (v.confirmDelete) {
-        hints[n++] = {HINT_CLICK, "Delete"};
-        hints[n++] = {HINT_UPDOWN, "Cancel"};
+        hints[n++] = {HINT_UPDOWN, "Choose"};
+        hints[n++] = {HINT_CLICK, "Confirm"};
     } else if (v.selected == 0) {
         hints[n++] = {HINT_UPDOWN, "Select"};
         hints[n++] = {HINT_CLICK, "Record"};
         hints[n++] = {HINT_BOOT, "Hold to record"};
+        hints[n++] = {HINT_PWR, "Sleep"};
     } else {
         bool playingThis = v.audio == AUDIO_PLAYING && v.playingIndex == v.selected - 1;
         hints[n++] = {HINT_UPDOWN, "Select"};
@@ -388,10 +487,18 @@ static void drawFooter(const ViewState &v) {
 
 static void render(const ViewState &v) {
     canvas->fillScreen(PAPER);
+    if (v.sleeping) {
+        drawSleepScreen(v);
+        drawFooter(v);
+        return;
+    }
     drawHeader(v);
-    if (v.audio == AUDIO_RECORDING) drawRecordingView(v);
-    else if (v.confirmDelete) drawDeleteView(v);
-    else drawList(v);
+    if (v.audio == AUDIO_RECORDING || v.audio == AUDIO_SAVING) {
+        drawRecordingView(v);
+    } else {
+        drawList(v);
+        if (v.confirmDelete) drawDeleteDialog(v);
+    }
     drawFooter(v);
 }
 
@@ -432,7 +539,19 @@ static void displayTask(void *) {
     int partials = 0;
     for (;;) {
         ViewState v = currentView();
-        if (memcmp(&v, &shown, sizeof(v)) != 0) {
+        if (v.sleeping != shown.sleeping) {
+            // Going to sleep: full refresh for a clean sleep screen, then the panel's
+            // deep sleep. Waking: the full refresh's init also wakes the panel.
+            Serial.printf("[display] %s\n", v.sleeping ? "sleep screen" : "waking");
+            render(v);
+            pushFull();
+            if (v.sleeping) EPD_3IN97_Sleep();
+            panelAsleep = v.sleeping;
+            shown = v;
+            partials = 0;
+        } else if (v.sleeping) {
+            // leave the sleeping panel alone
+        } else if (memcmp(&v, &shown, sizeof(v)) != 0) {
             render(v);
             pushPartial(v);
             shown = v;
@@ -463,6 +582,7 @@ static const char *eventName(ButtonEvent event) {
     case BTN_DOWN: return "down";
     case BTN_CLICK: return "click";
     case BTN_LONG_CLICK: return "long click";
+    case BTN_POWER: return "power";
     }
     return "?";
 }
@@ -472,12 +592,28 @@ void uiHandleEvent(ButtonEvent event) {
     Serial.printf("[ui] %lu ms: %s (selected %d, audio %d, confirm %d)\n",
                   millis(), eventName(event), (int)selected, (int)audio, (int)confirmDelete);
 
-    if (confirmDelete) {
-        if (event == BTN_CLICK) audioDelete(selected - 1);
-        confirmDelete = false; // any other button cancels
+    if (event == BTN_POWER) {
+        confirmDelete = false;
+        sleepRequested = true;
         return;
     }
-    if (audio == AUDIO_RECORDING) {
+    if (confirmDelete) {
+        switch (event) {
+        case BTN_UP:
+        case BTN_DOWN:
+            confirmChoice = 1 - confirmChoice;
+            confirmSince = millis();
+            break;
+        case BTN_CLICK:
+            if (confirmChoice == 1) audioDelete(selected - 1);
+            confirmDelete = false;
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+    if (audio == AUDIO_RECORDING || audio == AUDIO_SAVING) {
         if (event == BTN_CLICK) audioStopRecording();
         return;
     }
@@ -494,9 +630,12 @@ void uiHandleEvent(ButtonEvent event) {
         else if (audio == AUDIO_PLAYING && audioPlayingIndex() == selected - 1) audioStopPlayback();
         else audioPlay(selected - 1);
         break;
+    case BTN_POWER:
+        break; // handled above
     case BTN_LONG_CLICK:
         if (selected > 0) {
             if (audio == AUDIO_PLAYING) audioStopPlayback();
+            confirmChoice = 0;
             confirmDelete = true;
             confirmSince = millis();
         }
@@ -513,3 +652,16 @@ void uiTick() {
 }
 
 void uiRequestScreenshot() { screenshotRequested = true; }
+
+bool uiTakeSleepRequest() {
+    bool requested = sleepRequested;
+    sleepRequested = false;
+    return requested;
+}
+
+void uiShowSleepScreen(bool on) {
+    sleeping = on;
+    if (!on) return; // waking happens in the background
+    uint32_t start = millis();
+    while (!panelAsleep && millis() - start < SLEEP_SCREEN_TIMEOUT_MS) delay(20);
+}

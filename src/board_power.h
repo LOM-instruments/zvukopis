@@ -11,3 +11,7 @@ void epdPowerOff();
 
 int batteryPercent(); // 0-100, or -1 without a battery
 bool usbPowered();
+
+// True once for each short press of PWR since the last call. A long hold
+// (about 6 s) still powers the board off in hardware.
+bool powerKeyPressed();

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "audio.h"
+#include "board_power.h"
 
 // All active low
 static const int BOOT_PIN = 0;
@@ -13,8 +14,10 @@ static const int DOWN_PIN = 6;
 static const uint32_t POLL_MS = 10;
 static const uint32_t LONG_PRESS_MS = 800;
 static const uint32_t BOOT_HOLD_TO_RECORD_MS = 300;
+static const int POWER_KEY_POLL_EVERY = 10; // polls, so every 100 ms
 
 static QueueHandle_t eventQueue;
+static volatile bool paused = false;
 
 struct Key {
     int pin;
@@ -44,8 +47,13 @@ static int updateKey(Key &key) {
 
 static void buttonTask(void *) {
     Key boot = {BOOT_PIN}, up = {UP_PIN}, click = {CLICK_PIN}, down = {DOWN_PIN};
+    int polls = 0;
 
     for (;;) {
+        if (paused) {
+            vTaskDelay(pdMS_TO_TICKS(POLL_MS));
+            continue;
+        }
         if (updateKey(up) == 1) buttonsInject(BTN_UP);
         if (updateKey(down) == 1) buttonsInject(BTN_DOWN);
         int clickChange = updateKey(click);
@@ -67,6 +75,8 @@ static void buttonTask(void *) {
             else buttonsInject(BTN_CLICK);
         }
 
+        if (++polls % POWER_KEY_POLL_EVERY == 0 && powerKeyPressed()) buttonsInject(BTN_POWER);
+
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
 }
@@ -83,4 +93,10 @@ bool buttonsNextEvent(ButtonEvent &event) {
 
 void buttonsInject(ButtonEvent event) {
     xQueueSend(eventQueue, &event, 0);
+}
+
+void buttonsPause(bool pause) {
+    if (!pause) xQueueReset(eventQueue);
+    paused = pause;
+    if (pause) vTaskDelay(pdMS_TO_TICKS(2 * POLL_MS)); // let a poll in progress finish
 }

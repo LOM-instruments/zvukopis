@@ -34,7 +34,21 @@ bool boardPowerInit() {
     pmu.enableBattVoltageMeasure();
     pmu.enableVbusVoltageMeasure();
     pmu.fuelGaugeControl(true, true);
+
+    // The PWR key isn't wired to the ESP32; the PMIC flags presses in its IRQ
+    // status registers, which powerKeyPressed() polls
+    pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+    pmu.clearIrqStatus();
+    pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
     return true;
+}
+
+bool powerKeyPressed() {
+    if (!pmuReady) return false;
+    if (pmu.getIrqStatus() == 0) return false;
+    bool pressed = pmu.isPekeyShortPressIrq();
+    pmu.clearIrqStatus();
+    return pressed;
 }
 
 int batteryPercent() {

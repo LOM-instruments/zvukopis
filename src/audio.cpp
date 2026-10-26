@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "es8311.h"
+#include "storage.h"
 
 static const int I2S_MCK_PIN = 13;
 static const int I2S_BCK_PIN = 14;
@@ -22,7 +23,9 @@ static const float MAX_PLAYBACK_GAIN = 8.0f;
 static const size_t MAX_MEMO_SAMPLES = (size_t)SAMPLE_RATE * MAX_MEMO_SECONDS;
 static const size_t MIN_MEMO_SAMPLES = SAMPLE_RATE / 4; // anything shorter is an accidental tap
 static const size_t PSRAM_RESERVE = 256 * 1024;         // left free for the rest of the app
+static const uint64_t SD_RESERVE = 1024 * 1024;         // for file system overhead
 static const int CHUNK_FRAMES = 256;                    // 16 ms at 16 kHz
+static const size_t PLAY_BUFFER_SAMPLES = 16 * CHUNK_FRAMES; // read from the SD card 256 ms at a time
 
 enum CommandType : uint8_t {
     CMD_RECORD_START,
@@ -31,6 +34,7 @@ enum CommandType : uint8_t {
     CMD_STOP_PLAYBACK,
     CMD_DELETE,
     CMD_SELF_TEST,
+    CMD_SUSPEND,
 };
 
 struct Command {
@@ -43,7 +47,7 @@ static QueueHandle_t commandQueue;
 // The memo list is only modified by the audio task; the lock keeps readers on
 // other tasks from seeing it half-updated
 static SemaphoreHandle_t memoLock;
-static Memo memos[MAX_MEMOS];
+static Memo *memos = nullptr; // MAX_MEMOS entries, in PSRAM
 static volatile int memoTotal = 0;
 static volatile uint32_t listVersion = 0;
 static int nextMemoNumber = 1;
@@ -57,15 +61,27 @@ static volatile AudioState state = AUDIO_IDLE;
 static volatile int playingIndex = -1;
 static volatile size_t playPos = 0;
 
-static size_t samplesLeft() {
+// Playback of memos on the SD card streams through this buffer
+static File playFile;
+static int16_t playBuffer[PLAY_BUFFER_SAMPLES];
+static size_t playBufferStart = 0, playBufferLength = 0; // in samples of the memo
+
+static es8311_handle_t codec = nullptr;
+static SemaphoreHandle_t suspendDone;
+
+static uint64_t samplesLeft() {
     if (memoTotal >= MAX_MEMOS) return 0;
+    if (storageAvailable()) {
+        uint64_t freeBytes = storageFreeBytes();
+        return freeBytes > SD_RESERVE ? (freeBytes - SD_RESERVE) / sizeof(int16_t) : 0;
+    }
     size_t freeBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     if (freeBytes <= PSRAM_RESERVE) return 0;
     return (freeBytes - PSRAM_RESERVE) / sizeof(int16_t);
 }
 
 static void startRecording() {
-    recordLimit = min(MAX_MEMO_SAMPLES, samplesLeft());
+    recordLimit = (size_t)min((uint64_t)MAX_MEMO_SAMPLES, samplesLeft());
     if (recordLimit < MIN_MEMO_SAMPLES) {
         Serial.println("No room for another recording");
         return;
@@ -75,24 +91,9 @@ static void startRecording() {
     Serial.println("Recording...");
 }
 
-static void finishRecording() {
-    state = AUDIO_IDLE;
-    size_t length = scratchLength;
-    if (length < MIN_MEMO_SAMPLES) {
-        Serial.println("Recording too short, discarded");
-        return;
-    }
-    int16_t *samples = (int16_t *)ps_malloc(length * sizeof(int16_t));
-    if (!samples) {
-        Serial.println("Out of memory, recording discarded");
-        return;
-    }
-    memcpy(samples, scratch, length * sizeof(int16_t));
-
-    Memo memo = {};
-    memo.number = nextMemoNumber++;
-    memo.samples = samples;
-    memo.length = length;
+// Playback gain and list waveform
+static void analyse(Memo &memo, const int16_t *samples) {
+    size_t length = memo.length;
     int peak = 1;
     for (size_t i = 0; i < length; i++) peak = max(peak, abs((int)samples[i]));
     memo.gain = min(MAX_PLAYBACK_GAIN, 29000.0f / peak);
@@ -103,6 +104,33 @@ static void finishRecording() {
         // sqrt keeps quiet passages visible next to loud ones
         memo.waveform[b] = (uint8_t)(255 * sqrtf((float)binPeak / peak));
     }
+}
+
+static void finishRecording() {
+    size_t length = scratchLength;
+    if (length < MIN_MEMO_SAMPLES) {
+        state = AUDIO_IDLE;
+        Serial.println("Recording too short, discarded");
+        return;
+    }
+    Memo memo = {};
+    memo.number = nextMemoNumber++;
+    memo.length = length;
+    analyse(memo, scratch);
+
+    // On the card if possible, else (no card, or the write failed) in PSRAM
+    state = AUDIO_SAVING;
+    uint32_t start = millis();
+    bool onCard = storageAvailable() && storageSaveMemo(memo, scratch);
+    if (!onCard) {
+        memo.samples = (int16_t *)ps_malloc(length * sizeof(int16_t));
+        if (!memo.samples) {
+            state = AUDIO_IDLE;
+            Serial.println("Out of memory, recording discarded");
+            return;
+        }
+        memcpy(memo.samples, scratch, length * sizeof(int16_t));
+    }
 
     xSemaphoreTake(memoLock, portMAX_DELAY);
     memmove(&memos[1], &memos[0], memoTotal * sizeof(Memo));
@@ -110,12 +138,22 @@ static void finishRecording() {
     memoTotal++;
     listVersion++;
     xSemaphoreGive(memoLock);
-    Serial.printf("Saved Memo %d: %.2f s, peak %d, playback gain %.1fx\n",
-                  memo.number, (float)length / SAMPLE_RATE, peak, memo.gain);
+    state = AUDIO_IDLE;
+    Serial.printf("Saved Memo %d %s in %lu ms: %.2f s, playback gain %.1fx\n",
+                  memo.number, onCard ? "to SD card" : "in memory", millis() - start,
+                  (float)length / SAMPLE_RATE, memo.gain);
 }
 
 static void startPlayback(int index) {
     if (index < 0 || index >= memoTotal) return;
+    if (!memos[index].samples) {
+        playFile = storageOpenMemo(memos[index]);
+        if (!playFile) {
+            Serial.printf("Can't open Memo %d on the SD card\n", memos[index].number);
+            return;
+        }
+        playBufferStart = playBufferLength = 0;
+    }
     playingIndex = index;
     playPos = 0;
     digitalWrite(PA_ENABLE_PIN, HIGH);
@@ -125,6 +163,7 @@ static void startPlayback(int index) {
 
 static void stopPlayback() {
     digitalWrite(PA_ENABLE_PIN, LOW);
+    if (playFile) playFile.close();
     playingIndex = -1;
     state = AUDIO_IDLE;
 }
@@ -133,7 +172,8 @@ static void deleteMemo(int index) {
     if (index < 0 || index >= memoTotal) return;
     if (playingIndex == index) stopPlayback();
     int number = memos[index].number;
-    free(memos[index].samples);
+    if (memos[index].samples) free(memos[index].samples);
+    else if (!storageDeleteMemo(number)) Serial.printf("Couldn't delete Memo %d from the SD card\n", number);
 
     xSemaphoreTake(memoLock, portMAX_DELAY);
     memmove(&memos[index], &memos[index + 1], (memoTotal - index - 1) * sizeof(Memo));
@@ -210,7 +250,32 @@ static void handleCommand(const Command &cmd) {
     case CMD_SELF_TEST:
         if (state == AUDIO_IDLE) startSelfTest();
         break;
+    case CMD_SUSPEND:
+        if (state == AUDIO_RECORDING) finishRecording();
+        if (state == AUDIO_PLAYING) stopPlayback();
+        digitalWrite(PA_ENABLE_PIN, LOW);
+        state = AUDIO_IDLE;
+        if (codec) es8311_power_down(codec);
+        i2s_stop(I2S_NUM_0); // the next i2s_read() blocks until audioResume()
+        xSemaphoreGive(suspendDone);
+        break;
     }
+}
+
+// Next stretch of the playing memo, at most `max` samples; 0 at the end
+static size_t nextPlaybackSamples(const Memo &memo, size_t max, const int16_t *&src) {
+    size_t left = memo.length - playPos;
+    if (memo.samples) {
+        src = memo.samples + playPos;
+        return min(max, left);
+    }
+    if (playPos >= playBufferStart + playBufferLength) {
+        size_t want = min(PLAY_BUFFER_SAMPLES, left);
+        playBufferStart = playPos;
+        playBufferLength = playFile.read((uint8_t *)playBuffer, want * sizeof(int16_t)) / sizeof(int16_t);
+    }
+    src = playBuffer + (playPos - playBufferStart);
+    return min(max, playBufferStart + playBufferLength - playPos);
 }
 
 static void audioTask(void *) {
@@ -235,15 +300,16 @@ static void audioTask(void *) {
             if (scratchLength >= recordLimit) finishRecording();
         } else if (state == AUDIO_PLAYING) {
             const Memo &memo = memos[playingIndex];
-            size_t n = min((size_t)CHUNK_FRAMES, memo.length - playPos);
+            const int16_t *src;
+            size_t n = nextPlaybackSamples(memo, CHUNK_FRAMES, src);
             for (size_t i = 0; i < n; i++) {
-                float s = memo.samples[playPos + i] * memo.gain;
+                float s = src[i] * memo.gain;
                 out[2 * i] = out[2 * i + 1] = (int16_t)constrain(s, -32768.0f, 32767.0f);
             }
             size_t written;
             i2s_write(I2S_NUM_0, out, n * 4, &written, portMAX_DELAY);
             playPos += n;
-            if (playPos >= memo.length) {
+            if (n == 0 || playPos >= memo.length) { // n == 0: the file ended early
                 delay(150); // let the DMA buffers drain before muting the amp
                 stopPlayback();
             }
@@ -254,7 +320,7 @@ static void audioTask(void *) {
 }
 
 static bool codecInit() {
-    es8311_handle_t codec = es8311_create(I2C_NUM_0, ES8311_ADDRRES_0);
+    if (!codec) codec = es8311_create(I2C_NUM_0, ES8311_ADDRRES_0);
     if (!codec) return false;
     const es8311_clock_config_t clk = {
         .mclk_inverted = false,
@@ -297,6 +363,12 @@ bool audioInit() {
     // Created first so the memo getters are safe even if the rest fails
     memoLock = xSemaphoreCreateMutex();
     commandQueue = xQueueCreate(8, sizeof(Command));
+    suspendDone = xSemaphoreCreateBinary();
+    memos = (Memo *)ps_calloc(MAX_MEMOS, sizeof(Memo));
+    if (!memos) {
+        Serial.println("Failed to allocate the memo list");
+        return false;
+    }
 
     pinMode(PA_ENABLE_PIN, OUTPUT);
     digitalWrite(PA_ENABLE_PIN, LOW);
@@ -306,6 +378,14 @@ bool audioInit() {
         Serial.println("Failed to allocate recording buffer");
         return false;
     }
+    if (storageInit()) {
+        memoTotal = storageLoadMemos(memos, MAX_MEMOS);
+        qsort(memos, memoTotal, sizeof(Memo), [](const void *a, const void *b) {
+            return ((const Memo *)b)->number - ((const Memo *)a)->number; // newest first
+        });
+        if (memoTotal > 0) nextMemoNumber = memos[0].number + 1;
+    }
+
     // Start I2S first so the codec sees MCLK while it is configured
     if (!i2sInit()) {
         Serial.println("I2S init failed");
@@ -331,10 +411,23 @@ void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
 void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 
+void audioSuspend() {
+    xSemaphoreTake(suspendDone, 0);
+    sendCommand(CMD_SUSPEND);
+    // Waits for the audio task, which may be saving a long recording first
+    if (xSemaphoreTake(suspendDone, pdMS_TO_TICKS(15000)) != pdTRUE) Serial.println("Audio suspend timed out");
+}
+
+void audioResume() {
+    i2s_zero_dma_buffer(I2S_NUM_0);
+    i2s_start(I2S_NUM_0);
+    if (!codecInit()) Serial.println("ES8311 codec init failed after sleep");
+}
+
 AudioState audioState() { return state; }
 
 float audioRecordingSeconds() {
-    return state == AUDIO_RECORDING ? (float)scratchLength / SAMPLE_RATE : 0;
+    return state == AUDIO_RECORDING || state == AUDIO_SAVING ? (float)scratchLength / SAMPLE_RATE : 0;
 }
 
 float audioRecordingLimitSeconds() { return (float)recordLimit / SAMPLE_RATE; }
@@ -346,6 +439,8 @@ float audioPlaybackSeconds() {
 }
 
 float audioSecondsLeft() { return (float)samplesLeft() / SAMPLE_RATE; }
+
+bool audioUsingSdCard() { return storageAvailable(); }
 
 int memoCount() { return memoTotal; }
 
