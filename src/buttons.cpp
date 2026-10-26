@@ -1,0 +1,86 @@
+#include "buttons.h"
+
+#include <Arduino.h>
+
+#include "audio.h"
+
+// All active low
+static const int BOOT_PIN = 0;
+static const int UP_PIN = 4;
+static const int CLICK_PIN = 5;
+static const int DOWN_PIN = 6;
+
+static const uint32_t POLL_MS = 10;
+static const uint32_t LONG_PRESS_MS = 800;
+static const uint32_t BOOT_HOLD_TO_RECORD_MS = 300;
+
+static QueueHandle_t eventQueue;
+
+struct Key {
+    int pin;
+    bool down;
+    uint8_t disagreeing; // consecutive polls that differ from `down`, for debouncing
+    uint32_t pressedAt;
+    bool held; // long-press action already fired for this press
+};
+
+// Returns +1 on press, -1 on release, 0 otherwise
+static int updateKey(Key &key) {
+    bool raw = digitalRead(key.pin) == LOW;
+    if (raw == key.down) {
+        key.disagreeing = 0;
+        return 0;
+    }
+    if (++key.disagreeing < 2) return 0;
+    key.disagreeing = 0;
+    key.down = raw;
+    if (raw) {
+        key.pressedAt = millis();
+        key.held = false;
+        return 1;
+    }
+    return -1;
+}
+
+static void buttonTask(void *) {
+    Key boot = {BOOT_PIN}, up = {UP_PIN}, click = {CLICK_PIN}, down = {DOWN_PIN};
+
+    for (;;) {
+        if (updateKey(up) == 1) buttonsInject(BTN_UP);
+        if (updateKey(down) == 1) buttonsInject(BTN_DOWN);
+        int clickChange = updateKey(click);
+        int bootChange = updateKey(boot);
+        uint32_t now = millis();
+
+        if (click.down && !click.held && now - click.pressedAt >= LONG_PRESS_MS) {
+            click.held = true;
+            buttonsInject(BTN_LONG_CLICK);
+        }
+        if (clickChange == -1 && !click.held) buttonsInject(BTN_CLICK);
+
+        if (boot.down && !boot.held && now - boot.pressedAt >= BOOT_HOLD_TO_RECORD_MS) {
+            boot.held = true;
+            audioStartRecording();
+        }
+        if (bootChange == -1) {
+            if (boot.held) audioStopRecording();
+            else buttonsInject(BTN_CLICK);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(POLL_MS));
+    }
+}
+
+void buttonsInit() {
+    eventQueue = xQueueCreate(16, sizeof(ButtonEvent));
+    for (int pin : {BOOT_PIN, UP_PIN, CLICK_PIN, DOWN_PIN}) pinMode(pin, INPUT_PULLUP);
+    xTaskCreatePinnedToCore(buttonTask, "buttons", 3072, NULL, 3, NULL, 1);
+}
+
+bool buttonsNextEvent(ButtonEvent &event) {
+    return xQueueReceive(eventQueue, &event, 0) == pdTRUE;
+}
+
+void buttonsInject(ButtonEvent event) {
+    xQueueSend(eventQueue, &event, 0);
+}

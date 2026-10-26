@@ -1,0 +1,363 @@
+#include "audio.h"
+
+#include <Arduino.h>
+#include <driver/i2s.h>
+#include <math.h>
+
+#include "es8311.h"
+
+static const int I2S_MCK_PIN = 13;
+static const int I2S_BCK_PIN = 14;
+static const int I2S_WS_PIN = 47;
+static const int I2S_DOUT_PIN = 48; // to codec DAC (speaker)
+static const int I2S_DIN_PIN = 21;  // from codec ADC (mic)
+static const int PA_ENABLE_PIN = 39; // speaker amplifier
+
+static const int MCLK_MULTIPLE = 256;
+static const int SPEAKER_VOLUME = 80; // 0-100
+static const es8311_mic_gain_t MIC_GAIN = ES8311_MIC_GAIN_24DB;
+// Playback boosts each memo so its loudest moment is near full scale, up to this much
+static const float MAX_PLAYBACK_GAIN = 8.0f;
+
+static const size_t MAX_MEMO_SAMPLES = (size_t)SAMPLE_RATE * MAX_MEMO_SECONDS;
+static const size_t MIN_MEMO_SAMPLES = SAMPLE_RATE / 4; // anything shorter is an accidental tap
+static const size_t PSRAM_RESERVE = 256 * 1024;         // left free for the rest of the app
+static const int CHUNK_FRAMES = 256;                    // 16 ms at 16 kHz
+
+enum CommandType : uint8_t {
+    CMD_RECORD_START,
+    CMD_RECORD_STOP,
+    CMD_PLAY,
+    CMD_STOP_PLAYBACK,
+    CMD_DELETE,
+    CMD_SELF_TEST,
+};
+
+struct Command {
+    CommandType type;
+    int arg;
+};
+
+static QueueHandle_t commandQueue;
+
+// The memo list is only modified by the audio task; the lock keeps readers on
+// other tasks from seeing it half-updated
+static SemaphoreHandle_t memoLock;
+static Memo memos[MAX_MEMOS];
+static volatile int memoTotal = 0;
+static volatile uint32_t listVersion = 0;
+static int nextMemoNumber = 1;
+
+// Recording goes into a max-length scratch buffer, then is copied into a right-sized memo
+static int16_t *scratch = nullptr;
+static volatile size_t scratchLength = 0;
+static volatile size_t recordLimit = 0;
+
+static volatile AudioState state = AUDIO_IDLE;
+static volatile int playingIndex = -1;
+static volatile size_t playPos = 0;
+
+static size_t samplesLeft() {
+    if (memoTotal >= MAX_MEMOS) return 0;
+    size_t freeBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (freeBytes <= PSRAM_RESERVE) return 0;
+    return (freeBytes - PSRAM_RESERVE) / sizeof(int16_t);
+}
+
+static void startRecording() {
+    recordLimit = min(MAX_MEMO_SAMPLES, samplesLeft());
+    if (recordLimit < MIN_MEMO_SAMPLES) {
+        Serial.println("No room for another recording");
+        return;
+    }
+    scratchLength = 0;
+    state = AUDIO_RECORDING;
+    Serial.println("Recording...");
+}
+
+static void finishRecording() {
+    state = AUDIO_IDLE;
+    size_t length = scratchLength;
+    if (length < MIN_MEMO_SAMPLES) {
+        Serial.println("Recording too short, discarded");
+        return;
+    }
+    int16_t *samples = (int16_t *)ps_malloc(length * sizeof(int16_t));
+    if (!samples) {
+        Serial.println("Out of memory, recording discarded");
+        return;
+    }
+    memcpy(samples, scratch, length * sizeof(int16_t));
+
+    Memo memo = {};
+    memo.number = nextMemoNumber++;
+    memo.samples = samples;
+    memo.length = length;
+    int peak = 1;
+    for (size_t i = 0; i < length; i++) peak = max(peak, abs((int)samples[i]));
+    memo.gain = min(MAX_PLAYBACK_GAIN, 29000.0f / peak);
+    for (int b = 0; b < WAVEFORM_BINS; b++) {
+        size_t from = length * b / WAVEFORM_BINS, to = length * (b + 1) / WAVEFORM_BINS;
+        int binPeak = 0;
+        for (size_t i = from; i < to; i++) binPeak = max(binPeak, abs((int)samples[i]));
+        // sqrt keeps quiet passages visible next to loud ones
+        memo.waveform[b] = (uint8_t)(255 * sqrtf((float)binPeak / peak));
+    }
+
+    xSemaphoreTake(memoLock, portMAX_DELAY);
+    memmove(&memos[1], &memos[0], memoTotal * sizeof(Memo));
+    memos[0] = memo;
+    memoTotal++;
+    listVersion++;
+    xSemaphoreGive(memoLock);
+    Serial.printf("Saved Memo %d: %.2f s, peak %d, playback gain %.1fx\n",
+                  memo.number, (float)length / SAMPLE_RATE, peak, memo.gain);
+}
+
+static void startPlayback(int index) {
+    if (index < 0 || index >= memoTotal) return;
+    playingIndex = index;
+    playPos = 0;
+    digitalWrite(PA_ENABLE_PIN, HIGH);
+    state = AUDIO_PLAYING;
+    Serial.printf("Playing Memo %d\n", memos[index].number);
+}
+
+static void stopPlayback() {
+    digitalWrite(PA_ENABLE_PIN, LOW);
+    playingIndex = -1;
+    state = AUDIO_IDLE;
+}
+
+static void deleteMemo(int index) {
+    if (index < 0 || index >= memoTotal) return;
+    if (playingIndex == index) stopPlayback();
+    int number = memos[index].number;
+    free(memos[index].samples);
+
+    xSemaphoreTake(memoLock, portMAX_DELAY);
+    memmove(&memos[index], &memos[index + 1], (memoTotal - index - 1) * sizeof(Memo));
+    memoTotal--;
+    if (playingIndex > index) playingIndex--;
+    listVersion++;
+    xSemaphoreGive(memoLock);
+    Serial.printf("Deleted Memo %d\n", number);
+}
+
+// Self-test: 0.5 s of silence, then 1 s of a 1 kHz tone through the speaker,
+// measuring the mic input during each phase. A working speaker + mic shows a
+// clearly higher level during the tone.
+static const size_t TEST_QUIET_FRAMES = SAMPLE_RATE / 2;
+static const size_t TEST_TONE_FRAMES = SAMPLE_RATE;
+static size_t testFrame = 0;
+static int testPeak = 0;
+static double testSumSq = 0;
+
+static void printTestLevel(const char *label, size_t frames) {
+    Serial.printf("  %s: peak %d, rms %.0f\n", label, testPeak, sqrt(testSumSq / frames));
+    testPeak = 0;
+    testSumSq = 0;
+}
+
+static void startSelfTest() {
+    testFrame = 0;
+    testPeak = 0;
+    testSumSq = 0;
+    digitalWrite(PA_ENABLE_PIN, HIGH);
+    state = AUDIO_SELF_TEST;
+    Serial.println("Self-test: measuring silence, then a 1 kHz tone...");
+}
+
+static void selfTestChunk(const int16_t *in, int16_t *out, size_t frames) {
+    for (size_t i = 0; i < frames; i++) {
+        size_t frame = testFrame + i;
+        if (frame == TEST_QUIET_FRAMES) printTestLevel("silence", TEST_QUIET_FRAMES);
+        int s = in[2 * i];
+        testPeak = max(testPeak, abs(s));
+        testSumSq += (double)s * s;
+        int16_t tone = frame < TEST_QUIET_FRAMES ? 0 : (int16_t)(8000 * sin(2 * M_PI * 1000 * frame / SAMPLE_RATE));
+        out[2 * i] = out[2 * i + 1] = tone;
+    }
+    size_t written;
+    i2s_write(I2S_NUM_0, out, frames * 4, &written, portMAX_DELAY);
+    testFrame += frames;
+    if (testFrame >= TEST_QUIET_FRAMES + TEST_TONE_FRAMES) {
+        printTestLevel("tone   ", TEST_TONE_FRAMES);
+        digitalWrite(PA_ENABLE_PIN, LOW);
+        state = AUDIO_IDLE;
+    }
+}
+
+static void handleCommand(const Command &cmd) {
+    switch (cmd.type) {
+    case CMD_RECORD_START:
+        if (state == AUDIO_PLAYING) stopPlayback();
+        if (state == AUDIO_IDLE) startRecording();
+        break;
+    case CMD_RECORD_STOP:
+        if (state == AUDIO_RECORDING) finishRecording();
+        break;
+    case CMD_PLAY:
+        if (state == AUDIO_PLAYING) stopPlayback();
+        if (state == AUDIO_IDLE) startPlayback(cmd.arg);
+        break;
+    case CMD_STOP_PLAYBACK:
+        if (state == AUDIO_PLAYING) stopPlayback();
+        break;
+    case CMD_DELETE:
+        deleteMemo(cmd.arg);
+        break;
+    case CMD_SELF_TEST:
+        if (state == AUDIO_IDLE) startSelfTest();
+        break;
+    }
+}
+
+static void audioTask(void *) {
+    static int16_t in[CHUNK_FRAMES * 2];
+    static int16_t out[CHUNK_FRAMES * 2];
+
+    for (;;) {
+        // Reading paces the loop: blocks until the next 16 ms of mic audio arrives
+        size_t bytesRead = 0;
+        i2s_read(I2S_NUM_0, in, sizeof(in), &bytesRead, portMAX_DELAY);
+        size_t frames = bytesRead / 4;
+
+        Command cmd;
+        while (xQueueReceive(commandQueue, &cmd, 0) == pdTRUE) handleCommand(cmd);
+
+        if (state == AUDIO_RECORDING) {
+            size_t n = min(frames, recordLimit - scratchLength);
+            for (size_t i = 0; i < n; i++) {
+                scratch[scratchLength + i] = in[2 * i]; // ES8311 ADC is on the left slot
+            }
+            scratchLength += n;
+            if (scratchLength >= recordLimit) finishRecording();
+        } else if (state == AUDIO_PLAYING) {
+            const Memo &memo = memos[playingIndex];
+            size_t n = min((size_t)CHUNK_FRAMES, memo.length - playPos);
+            for (size_t i = 0; i < n; i++) {
+                float s = memo.samples[playPos + i] * memo.gain;
+                out[2 * i] = out[2 * i + 1] = (int16_t)constrain(s, -32768.0f, 32767.0f);
+            }
+            size_t written;
+            i2s_write(I2S_NUM_0, out, n * 4, &written, portMAX_DELAY);
+            playPos += n;
+            if (playPos >= memo.length) {
+                delay(150); // let the DMA buffers drain before muting the amp
+                stopPlayback();
+            }
+        } else if (state == AUDIO_SELF_TEST) {
+            selfTestChunk(in, out, frames);
+        }
+    }
+}
+
+static bool codecInit() {
+    es8311_handle_t codec = es8311_create(I2C_NUM_0, ES8311_ADDRRES_0);
+    if (!codec) return false;
+    const es8311_clock_config_t clk = {
+        .mclk_inverted = false,
+        .sclk_inverted = false,
+        .mclk_from_mclk_pin = true,
+        .mclk_frequency = SAMPLE_RATE * MCLK_MULTIPLE,
+        .sample_frequency = SAMPLE_RATE,
+    };
+    if (es8311_init(codec, &clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) != ESP_OK) return false;
+    es8311_voice_volume_set(codec, SPEAKER_VOLUME, NULL);
+    es8311_microphone_config(codec, false); // analog mic
+    es8311_microphone_gain_set(codec, MIC_GAIN);
+    return true;
+}
+
+static bool i2sInit() {
+    i2s_config_t cfg = {};
+    cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX);
+    cfg.sample_rate = SAMPLE_RATE;
+    cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+    cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    cfg.dma_buf_count = 8;
+    cfg.dma_buf_len = CHUNK_FRAMES;
+    cfg.tx_desc_auto_clear = true; // output silence when nothing is being played
+    cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+
+    i2s_pin_config_t pins = {};
+    pins.mck_io_num = I2S_MCK_PIN;
+    pins.bck_io_num = I2S_BCK_PIN;
+    pins.ws_io_num = I2S_WS_PIN;
+    pins.data_out_num = I2S_DOUT_PIN;
+    pins.data_in_num = I2S_DIN_PIN;
+
+    if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) != ESP_OK) return false;
+    return i2s_set_pin(I2S_NUM_0, &pins) == ESP_OK;
+}
+
+bool audioInit() {
+    // Created first so the memo getters are safe even if the rest fails
+    memoLock = xSemaphoreCreateMutex();
+    commandQueue = xQueueCreate(8, sizeof(Command));
+
+    pinMode(PA_ENABLE_PIN, OUTPUT);
+    digitalWrite(PA_ENABLE_PIN, LOW);
+
+    scratch = (int16_t *)ps_malloc(MAX_MEMO_SAMPLES * sizeof(int16_t));
+    if (!scratch) {
+        Serial.println("Failed to allocate recording buffer");
+        return false;
+    }
+    // Start I2S first so the codec sees MCLK while it is configured
+    if (!i2sInit()) {
+        Serial.println("I2S init failed");
+        return false;
+    }
+    if (!codecInit()) {
+        Serial.println("ES8311 codec init failed");
+        return false;
+    }
+    xTaskCreatePinnedToCore(audioTask, "audio", 4096, NULL, 5, NULL, 0);
+    return true;
+}
+
+static void sendCommand(CommandType type, int arg = 0) {
+    Command cmd = {type, arg};
+    xQueueSend(commandQueue, &cmd, 0);
+}
+
+void audioStartRecording() { sendCommand(CMD_RECORD_START); }
+void audioStopRecording() { sendCommand(CMD_RECORD_STOP); }
+void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
+void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
+void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
+void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
+
+AudioState audioState() { return state; }
+
+float audioRecordingSeconds() {
+    return state == AUDIO_RECORDING ? (float)scratchLength / SAMPLE_RATE : 0;
+}
+
+float audioRecordingLimitSeconds() { return (float)recordLimit / SAMPLE_RATE; }
+
+int audioPlayingIndex() { return playingIndex; }
+
+float audioPlaybackSeconds() {
+    return state == AUDIO_PLAYING ? (float)playPos / SAMPLE_RATE : 0;
+}
+
+float audioSecondsLeft() { return (float)samplesLeft() / SAMPLE_RATE; }
+
+int memoCount() { return memoTotal; }
+
+bool memoGet(int index, Memo &out) {
+    bool found = false;
+    xSemaphoreTake(memoLock, portMAX_DELAY);
+    if (index >= 0 && index < memoTotal) {
+        out = memos[index];
+        found = true;
+    }
+    xSemaphoreGive(memoLock);
+    return found;
+}
+
+uint32_t memoListVersion() { return listVersion; }
