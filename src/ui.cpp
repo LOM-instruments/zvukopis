@@ -10,6 +10,7 @@
 #include "board_power.h"
 #include "cardreader.h"
 #include "clock.h"
+#include "config.h"
 #include "fonts.h"
 #include "quotes.h"
 #include "storage.h"
@@ -68,14 +69,13 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_SETTINGS = -2; // main list
 
-enum SettingsRow { SET_SYNC, SET_GAIN, SET_TRANSFER, SET_CARD_READER, SET_FORMAT, SET_ROWS };
+enum SettingsRow { SET_SYNC, SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_DELETE = TAG_COUNT - 1; // after the five tags
 static const int MENU_CANCEL = TAG_COUNT;
 static const int MENU_ITEMS = TAG_COUNT + 1;
 
-static const char *TAG_LABELS[TAG_COUNT] = {"", "Human", "Nature", "Funny", "Art", "Other"};
 
 // UI state: written by loop(), read by the display task
 static volatile int screen = SCREEN_LIST;
@@ -85,6 +85,7 @@ static volatile int overlay = OVERLAY_NONE;
 static volatile int overlayChoice = 0;
 static uint32_t overlaySince = 0;
 static int menuMoment = 0; // number of the moment the menu is for
+static int transferRow = SET_WEB; // settings row the web page was started from
 static volatile bool sleepRequested = false;
 static volatile uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
@@ -205,6 +206,8 @@ struct ViewState {
     int cardEjected;
     int gainSetting;
     int gainNow;
+    uint32_t configVersion; // categories or schedule edited on the web page
+    int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
 
 static ViewState currentView() {
@@ -250,6 +253,10 @@ static ViewState currentView() {
     v.cardEjected = screen == SCREEN_CARD_READER && cardReaderEjected();
     v.gainSetting = audioMicGainSetting();
     v.gainNow = audioMicGain();
+    v.configVersion = configVersion();
+    Schedule next;
+    int nextIndex;
+    v.nextScheduleMinute = clockValid() && scheduleNext(time(nullptr), next, nextIndex) ? (int)(next.start / 60) : -1;
     return v;
 }
 
@@ -425,36 +432,69 @@ static void iconWifi(int cx, int cy) {
     canvas->fillCircle(cx, cy - 2, 5, INK);
 }
 
-// What a moment is about; r is about half the icon's size
-static void iconTag(int tag, int cx, int cy, int r, uint16_t c) {
-    switch (tag) {
-    case TAG_HUMAN: // head and shoulders
+// A category's icon (CategoryIcon); r is about half the icon's size
+static void iconCategory(int icon, int cx, int cy, int r, uint16_t c) {
+    uint16_t hole = c == INK ? PAPER : INK;
+    int thick = max(2, r / 6);
+    switch (icon) {
+    case ICON_PERSON: // head and shoulders
         canvas->fillCircle(cx, cy - r * 4 / 10, r * 4 / 10, c);
         canvas->fillRoundRect(cx - r * 8 / 10, cy + r / 10, r * 16 / 10, r * 9 / 10, r * 4 / 10, c);
         break;
-    case TAG_NATURE: // a tree
+    case ICON_TREE:
         canvas->fillTriangle(cx, cy - r, cx - r * 8 / 10, cy + r * 4 / 10, cx + r * 8 / 10, cy + r * 4 / 10, c);
         canvas->fillRect(cx - max(1, r / 6), cy + r * 4 / 10, max(2, r / 3), r * 6 / 10, c);
         break;
-    case TAG_FUNNY: // a smiley
-        drawArc(cx, cy, r, 0, 360, max(2, r / 6), c);
+    case ICON_SMILEY:
+        drawArc(cx, cy, r, 0, 360, thick, c);
         canvas->fillCircle(cx - r * 35 / 100, cy - r * 3 / 10, max(1, r / 7), c);
         canvas->fillCircle(cx + r * 35 / 100, cy - r * 3 / 10, max(1, r / 7), c);
         drawArc(cx, cy, r * 55 / 100, 25, 155, max(2, r / 7), c);
         break;
-    case TAG_ART: { // a palette
-        uint16_t hole = c == INK ? PAPER : INK;
+    case ICON_PALETTE:
         canvas->fillCircle(cx, cy, r, c);
         canvas->fillCircle(cx + r * 4 / 10, cy + r * 4 / 10, r * 25 / 100, hole);
         canvas->fillCircle(cx - r * 45 / 100, cy - r * 15 / 100, max(1, r / 6), hole);
         canvas->fillCircle(cx - r * 10 / 100, cy - r * 50 / 100, max(1, r / 6), hole);
         canvas->fillCircle(cx + r * 35 / 100, cy - r * 35 / 100, max(1, r / 6), hole);
         break;
-    }
-    case TAG_OTHER:
+    case ICON_WAVE: // two sine periods
+        for (int x = -r; x <= r; x++) {
+            int y = (int)roundf(sinf((float)x / r * 2 * (float)M_PI) * r * 0.45f);
+            canvas->fillRect(cx + x, cy + y - thick / 2, 1, thick, c);
+        }
+        break;
+    case ICON_NOTE: // an eighth note
+        canvas->fillCircle(cx - r * 3 / 10, cy + r * 55 / 100, r * 38 / 100, c);
+        canvas->fillRect(cx - r * 3 / 10 + r * 38 / 100 - thick, cy - r, thick, r * 16 / 10, c);
+        canvas->fillTriangle(cx + r * 8 / 100, cy - r, cx + r * 8 / 100, cy - r * 4 / 10, cx + r * 7 / 10, cy - r * 3 / 10, c);
+        break;
+    case ICON_HEART:
+        canvas->fillCircle(cx - r * 45 / 100, cy - r * 25 / 100, r * 48 / 100, c);
+        canvas->fillCircle(cx + r * 45 / 100, cy - r * 25 / 100, r * 48 / 100, c);
+        canvas->fillTriangle(cx - r * 92 / 100, cy - r * 10 / 100, cx + r * 92 / 100, cy - r * 10 / 100, cx, cy + r, c);
+        break;
+    case ICON_DROP:
+        canvas->fillCircle(cx, cy + r * 3 / 10, r * 6 / 10, c);
+        canvas->fillTriangle(cx, cy - r, cx - r * 57 / 100, cy + r * 15 / 100, cx + r * 57 / 100, cy + r * 15 / 100, c);
+        break;
+    case ICON_SUN:
+        canvas->fillCircle(cx, cy, r * 45 / 100, c);
+        for (int i = 0; i < 8; i++) {
+            float a = i * (float)M_PI / 4;
+            canvas->drawLine(cx + (int)(cosf(a) * r * 0.65f), cy + (int)(sinf(a) * r * 0.65f),
+                             cx + (int)(cosf(a) * r), cy + (int)(sinf(a) * r), c);
+        }
+        break;
+    default:
         iconStar(cx, cy, r, c);
         break;
     }
+}
+
+// The icon of the category a moment is tagged with
+static void iconTag(int tag, int cx, int cy, int r, uint16_t c) {
+    iconCategory(configCategory(tag).icon, cx, cy, r, c);
 }
 
 // Returns the battery's left edge
@@ -832,9 +872,25 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         if (v.gainSetting == GAIN_AUTO) snprintf(detail, len, "Auto, now %d dB", v.gainNow);
         else snprintf(detail, len, "%d dB", v.gainSetting);
         break;
-    case SET_TRANSFER:
-        title = "File transfer";
-        snprintf(detail, len, "Download moments in a browser");
+    case SET_SCHEDULE:
+        title = "Scheduled recordings";
+        if (v.nextScheduleMinute >= 0) {
+            char when[24];
+            formatLocal(when, sizeof(when), "%a %e %b %H:%M", (time_t)v.nextScheduleMinute * 60);
+            int n = scheduleCount();
+            snprintf(detail, len, "Next %s%s", when, n > 1 ? "  (+ more)" : "");
+        } else {
+            snprintf(detail, len, "None; set them up on the web page");
+        }
+        enabled = v.nextScheduleMinute >= 0;
+        break;
+    case SET_WEB:
+        title = "Web page";
+        snprintf(detail, len, "Moments, schedule, categories, on Wi-Fi");
+        break;
+    case SET_HOTSPOT:
+        title = "Web page on own hotspot";
+        snprintf(detail, len, "zvukopis makes its own Wi-Fi network");
         break;
     case SET_CARD_READER:
         title = "USB card reader";
@@ -860,7 +916,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
 
 static void drawSettings(const ViewState &v) {
     drawSubHeader(v, "Settings", nullptr);
-    const int rowH = 80;
+    const int rowH = 72;
     for (int r = 0; r < SET_ROWS; r++) {
         int y = LIST_TOP + r * rowH;
         bool isSelected = r == v.selected;
@@ -871,12 +927,12 @@ static void drawSettings(const ViewState &v) {
         char detail[48];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
-        drawText(MARGIN, y + 36, enabled ? &Bold22 : &Text22, title, fg);
-        drawText(MARGIN, y + 63, &Text17, detail, fg);
+        drawText(MARGIN, y + 33, enabled ? &Bold22 : &Text22, title, fg);
+        drawText(MARGIN, y + 58, &Text17, detail, fg);
     }
 
     // Card and memory
-    int y = LIST_TOP + SET_ROWS * rowH + 44;
+    int y = LIST_TOP + SET_ROWS * rowH + 40;
     char buf[64], total[16], free[16];
     if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
@@ -885,13 +941,12 @@ static void drawSettings(const ViewState &v) {
         snprintf(buf, sizeof(buf), "%s card, %s free", total, free);
         drawText(MARGIN + 30, y, &Text22, buf, INK);
     } else {
-        drawText(MARGIN, y, &Text22, "No SD card: moments are kept", INK);
-        drawText(MARGIN, y + 28, &Text22, "in memory and lost on restart", INK);
+        drawText(MARGIN, y, &Text17, "No SD card: moments stay in memory, lost on restart", INK);
     }
 }
 
 static void drawTransfer(const ViewState &v) {
-    drawSubHeader(v, "File transfer", "Wi-Fi is on", false);
+    drawSubHeader(v, "Web page", "Wi-Fi is on", false);
     TransferInfo info = transferInfo();
     int cx = SW / 2, y = 250;
     iconWifi(cx, y);
@@ -1072,7 +1127,7 @@ static void drawMenu(const ViewState &v) {
         if (i < MENU_DELETE) {
             int tag = TAG_HUMAN + i;
             iconTag(tag, x + 44, cy, 13, fg);
-            label = TAG_LABELS[tag];
+            label = configCategory(tag).name;
             if (moment.tag == tag) {
                 // Check mark: choosing it again removes the tag
                 canvas->drawLine(x + w - 56, cy, x + w - 48, cy + 8, fg);
@@ -1115,7 +1170,15 @@ static void drawSleepScreen(const ViewState &v) {
         snprintf(buf, sizeof(buf), "Asleep");
     }
     drawText(MARGIN, 84, &Text22, buf, INK);
-    snprintf(buf, sizeof(buf), "%d moment%s", v.momentCount, v.momentCount == 1 ? "" : "s");
+    if (v.nextScheduleMinute >= 0) {
+        char when[16];
+        time_t next = (time_t)v.nextScheduleMinute * 60;
+        bool today = v.clockMinute >= 0 && dayKey(next) == dayKey((time_t)v.clockMinute * 60);
+        formatLocal(when, sizeof(when), today ? "%H:%M" : "%e %b %H:%M", next);
+        snprintf(buf, sizeof(buf), "records at %s", when);
+    } else {
+        snprintf(buf, sizeof(buf), "%d moment%s", v.momentCount, v.momentCount == 1 ? "" : "s");
+    }
     drawTextRight(SW - MARGIN, 84, &Text22, buf, INK);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 
@@ -1172,7 +1235,7 @@ static void drawFooter(const ViewState &v) {
         hints[n++] = {HINT_UPDOWN, "Choose"};
         hints[n++] = {HINT_CLICK, "Confirm"};
     } else if (v.screen == SCREEN_TRANSFER) {
-        hints[n++] = {HINT_CLICK, "Stop file transfer"};
+        hints[n++] = {HINT_CLICK, "Stop the web page"};
     } else if (v.screen == SCREEN_CARD_READER) {
         hints[n++] = {HINT_CLICK, "Leave (restarts)"};
     } else if (v.screen == SCREEN_SETTINGS) {
@@ -1517,9 +1580,11 @@ static void handleSettings(ButtonEvent event) {
             openOverlay(OVERLAY_GAIN, current);
             break;
         }
-        case SET_TRANSFER:
+        case SET_WEB:
+        case SET_HOTSPOT:
             if (clockSyncing()) break; // it has Wi-Fi for now
-            transferStart();
+            transferRow = selected;
+            transferStart(selected == SET_HOTSPOT);
             showScreen(SCREEN_TRANSFER, 0);
             break;
         case SET_CARD_READER:
@@ -1557,7 +1622,7 @@ static void handleEvent(ButtonEvent event) {
     if (event == BTN_POWER) {
         if (screen == SCREEN_TRANSFER) {
             transferStop();
-            showScreen(SCREEN_SETTINGS, SET_TRANSFER);
+            showScreen(SCREEN_SETTINGS, transferRow);
         }
         overlay = OVERLAY_NONE;
         sleepRequested = true;
@@ -1591,7 +1656,7 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_TRANSFER:
         if (event == BTN_CLICK) {
             transferStop();
-            showScreen(SCREEN_SETTINGS, SET_TRANSFER);
+            showScreen(SCREEN_SETTINGS, transferRow);
         }
         break;
     }
@@ -1615,7 +1680,7 @@ void uiTick() {
         else if (findDay(index, calendarDay) < 0) calendarDay = index.days[index.count - 1].key;
     }
     if (screen == SCREEN_TRANSFER && transferInfo().state == TRANSFER_OFF) {
-        showScreen(SCREEN_SETTINGS, SET_TRANSFER); // stopped after 10 minutes unused
+        showScreen(SCREEN_SETTINGS, transferRow); // stopped after 10 minutes unused
     }
 
     if (overlay != OVERLAY_NONE) {
@@ -1675,6 +1740,8 @@ uint32_t uiMsUntilNextChange() {
     }
     return ms;
 }
+
+bool uiCanRecord() { return screen != SCREEN_CARD_READER; }
 
 bool uiTakeSleepRequest() {
     bool requested = sleepRequested;

@@ -2,6 +2,7 @@
 #include <esp_sleep.h>
 #include <mbedtls/base64.h>
 #include <soc/usb_serial_jtag_reg.h>
+#include <sys/time.h>
 
 #include "EPD_3in97.h"
 
@@ -9,6 +10,7 @@
 #include "board_power.h"
 #include "buttons.h"
 #include "clock.h"
+#include "config.h"
 #include "ui.h"
 
 // How often the chip checks the PWR key while "asleep" on USB power
@@ -45,6 +47,56 @@ static bool onUsbPower() {
     return usb;
 }
 
+// --- Scheduled recordings (set up on the web page) ---
+
+static const uint32_t SCHEDULE_LEAD_MS = 300; // wake this early, so recording starts on the second
+static int64_t scheduledStart = 0; // start of the entry being recorded, 0 if none
+static uint32_t scheduledAt = 0;   // millis() when its recording was requested
+
+// Until the next scheduled recording should start (minus the lead), or UINT32_MAX
+static uint32_t msUntilSchedule() {
+    if (!clockValid()) return UINT32_MAX;
+    timeval tv;
+    gettimeofday(&tv, nullptr);
+    Schedule s;
+    int index;
+    if (!scheduleNext(tv.tv_sec, s, index)) return UINT32_MAX;
+    int64_t ms = (s.start - tv.tv_sec) * 1000 - tv.tv_usec / 1000 - SCHEDULE_LEAD_MS;
+    return ms <= 0 ? 0 : (uint32_t)min(ms, (int64_t)UINT32_MAX - 1);
+}
+
+// Starts a due recording and marks it done once it has run; true while one runs
+static bool scheduleTick() {
+    if (!clockValid()) return false;
+    time_t now = time(nullptr);
+    if (scheduledStart) {
+        // Right after the request the audio task may not have started yet
+        AudioState a = audioState();
+        if (a == AUDIO_RECORDING || a == AUDIO_SAVING || millis() - scheduledAt < 1000) return true;
+        scheduleDone(scheduledStart, now);
+        scheduledStart = 0;
+        return false;
+    }
+    // Entries whose time passed unrecorded (the board was off, say) are dropped,
+    // or moved on a day when they repeat
+    Schedule s;
+    while (scheduleGet(0, s) && s.start + s.seconds <= now) {
+        Serial.println("[schedule] missed one");
+        scheduleDone(s.start, now);
+    }
+    int index;
+    if (!scheduleNext(now, s, index) || now < s.start || !uiCanRecord()) return false;
+    AudioState a = audioState();
+    if (a == AUDIO_RECORDING || a == AUDIO_SAVING || a == AUDIO_FORMATTING) return false; // tried again while its time lasts
+    if (a == AUDIO_PLAYING) audioStopPlayback();
+    uint32_t seconds = (uint32_t)(s.start + s.seconds - now);
+    Serial.printf("[schedule] recording for %lu s\n", seconds);
+    audioStartRecording(seconds);
+    scheduledStart = s.start;
+    scheduledAt = millis();
+    return true;
+}
+
 // Light sleep for up to `ms`, until a key, PWR or the timer wakes the chip
 static void nap(uint32_t ms) {
     buttonsWakeup(true);
@@ -70,7 +122,7 @@ static void nap(uint32_t ms) {
 static void napIfIdle() {
     if (!audioAsleep() || clockSyncing() || !buttonsIdle() || !uiReadyToNap(wokeAt)) return;
     if (onUsbPower()) return;
-    uint32_t ms = uiMsUntilNextChange();
+    uint32_t ms = min(uiMsUntilNextChange(), msUntilSchedule());
     if (ms < MIN_NAP_MS) return;
     nap(ms);
     if (usbPowered()) usbReconnect(); // plugged in while napping (that wakes it too)
@@ -85,41 +137,77 @@ static void printPowerStats() {
 
 // Light sleep keeps PSRAM powered, so moments held in memory survive it.
 // A PWR hold pulls the PMIC's IRQ line low, which wakes the chip; so does USB
-// being plugged in, and a timer once a minute in case that was missed.
+// being plugged in, a timer for a scheduled recording, and one once a minute
+// in case a USB event was missed.
 // On USB power the chip stays awake instead, so its serial port keeps working;
 // power isn't scarce then. A 'p' over serial also wakes it in that case.
-// Returns false when the power source changed, to be called again.
-static const uint64_t SLEEP_RECHECK_US = 60 * 1000 * 1000ULL;
+static const uint32_t SLEEP_RECHECK_MS = 60 * 1000;
 
-static bool sleepUntilPowerKey() {
+enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE };
+
+static Wake sleepUntilWake() {
     if (usbPowered()) {
         while (Serial.available()) Serial.read();
         for (;;) {
             delay(USB_POLL_MS);
-            if (powerKeyPressed()) return true;
+            if (powerKeyPressed()) return WAKE_KEY;
             while (Serial.available()) {
                 int c = Serial.read();
-                if (c == 'p') return true;
+                if (c == 'p') return WAKE_KEY;
                 if (c == 's') uiRequestScreenshot(); // of the sleep screen
             }
-            if (!usbPowered()) return false; // unplugged: continue in light sleep
+            if (msUntilSchedule() == 0) return WAKE_SCHEDULE;
+            if (!usbPowered()) return WAKE_POWER_SOURCE; // unplugged: continue in light sleep
         }
     }
     powerKeyWakeup(true);
-    esp_sleep_enable_timer_wakeup(SLEEP_RECHECK_US);
     uint32_t start = millis();
-    bool pressed;
-    do {
+    Wake wake;
+    for (;;) {
+        uint32_t ms = min(msUntilSchedule(), SLEEP_RECHECK_MS);
+        if (ms == 0) {
+            wake = WAKE_SCHEDULE;
+            break;
+        }
+        esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000);
         esp_light_sleep_start();
-        pressed = powerKeyPressed();
-    } while (!pressed && !usbPowered());
+        if (powerKeyPressed()) {
+            wake = WAKE_KEY;
+            break;
+        }
+        if (usbPowered()) {
+            wake = WAKE_POWER_SOURCE;
+            break;
+        }
+    }
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     powerKeyWakeup(false);
     sleepTotalMs += millis() - start;
     lastUpMs = millis();
     lastSleepMs = sleepTotalMs;
     if (usbPowered()) usbReconnect(); // plugged in while asleep
-    return pressed;
+    return wake;
+}
+
+// A scheduled recording while asleep. The screen is left as it is: a refresh
+// would add noise to the start. Returns true if PWR was held meanwhile, which
+// stops the recording and wakes zvukopis.
+static bool recordWhileAsleep() {
+    Serial.println("[sleep] scheduled recording");
+    bool started = false, woken = false;
+    for (;;) {
+        bool running = scheduleTick();
+        if (running) started = true;
+        else if (started || msUntilSchedule() > 0) break; // done, or nothing due after all
+        if (!woken && powerKeyPressed()) {
+            woken = true;
+            audioStopRecording();
+        }
+        delay(20);
+    }
+    uint32_t start = millis();
+    while (!audioAsleep() && millis() - start < 5000) delay(50); // light sleep needs the codec off
+    return woken;
 }
 
 static void goToSleep() {
@@ -132,8 +220,11 @@ static void goToSleep() {
     Serial.flush();
 
     powerKeyPressed(); // drop a press made while the sleep screen was drawn
-    while (!sleepUntilPowerKey()) {
-        Serial.printf("[sleep] now on %s\n", usbPowered() ? "USB" : "battery");
+    for (;;) {
+        Wake wake = sleepUntilWake();
+        if (wake == WAKE_KEY) break;
+        if (wake == WAKE_SCHEDULE && recordWhileAsleep()) break;
+        if (wake == WAKE_POWER_SOURCE) Serial.printf("[sleep] now on %s\n", usbPowered() ? "USB" : "battery");
     }
 
     Serial.println("[sleep] woke up");
@@ -182,6 +273,7 @@ void setup() {
     epdPowerOn();
     EPD_3IN97_Init();
     clockInit(); // before audio, so moments get start times
+    configInit();
 
     if (!audioInit()) Serial.println("Audio init failed");
     uiStart();
@@ -224,6 +316,7 @@ void loop() {
     ButtonEvent event;
     while (buttonsNextEvent(event)) uiHandleEvent(event);
     uiTick();
+    scheduleTick();
     if (uiTakeSleepRequest()) goToSleep();
     delay(10);
     napIfIdle();

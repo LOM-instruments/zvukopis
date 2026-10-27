@@ -2,11 +2,11 @@
 
 #include <stdint.h>
 
-// File transfer over Wi-Fi: a small web page listing the moments, with
-// downloads, deleting, and setting the clock from the browser's time.
+// The web page, over Wi-Fi: the moments (download, delete), scheduled
+// recordings, the categories, and setting the clock from the browser's time.
 // Only runs when started from Settings. It joins the network in
-// wifi_config.h, or, when that isn't in reach, opens its own hotspot
-// "zvukopis". Stops after 10 minutes without a request.
+// wifi_config.h, or opens its own hotspot "zvukopis" when asked to or when that
+// network isn't in reach. Stops after 10 minutes without a request.
 
 enum TransferState {
     TRANSFER_OFF,
@@ -23,6 +23,6 @@ struct TransferInfo {
     uint32_t requests;  // pages and files served so far
 };
 
-void transferStart();
+void transferStart(bool hotspot); // hotspot: its own network even if the usual one is near
 void transferStop(); // returns once Wi-Fi is off
 TransferInfo transferInfo();

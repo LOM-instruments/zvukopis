@@ -51,7 +51,7 @@ enum AudioState {
 bool audioInit();
 
 // Requests, carried out by the audio task within ~16 ms
-void audioStartRecording();
+void audioStartRecording(uint32_t seconds = MAX_MOMENT_SECONDS); // up to what fits in memory
 void audioStopRecording();
 void audioPlay(int index);
 void audioStopPlayback();
@@ -84,6 +84,7 @@ void audioSetMicGain(int db);
 int audioMicGainSetting();
 int audioMicGain(); // in use now (with auto gain, where it last settled)
 float audioSecondsLeft(); // recording time that still fits on the SD card, or in memory
+float audioLongestRecording(); // seconds one recording can last (it's buffered in memory)
 bool audioUsingSdCard();
 
 // Moments are ordered newest first. momentListVersion() changes whenever the list does.

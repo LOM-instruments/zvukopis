@@ -177,8 +177,15 @@ static uint64_t samplesLeft() {
     return ramSamples >= MAX_MOMENT_SAMPLES ? cardSamples : min(cardSamples, ramSamples);
 }
 
-static void startRecording() {
-    recordLimit = (size_t)min((uint64_t)MAX_MOMENT_SAMPLES, samplesLeft());
+// Room for one recording: it's buffered in PSRAM, and has to fit on the card too
+static size_t recordableSamples() {
+    size_t ramBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    size_t ram = ramBytes > PSRAM_RESERVE ? (ramBytes - PSRAM_RESERVE) / sizeof(int16_t) : 0;
+    return (size_t)min((uint64_t)ram, samplesLeft());
+}
+
+static void startRecording(uint32_t seconds) {
+    recordLimit = min((size_t)seconds * SAMPLE_RATE, recordableSamples());
     if (recordLimit < MIN_MOMENT_SAMPLES) {
         Serial.println("No room for another recording");
         return;
@@ -374,7 +381,7 @@ static void handleCommand(const Command &cmd) {
         if (state == AUDIO_PLAYING) stopPlayback();
         if (state == AUDIO_IDLE) {
             audioWake();
-            startRecording();
+            startRecording(cmd.arg > 0 ? cmd.arg : MAX_MOMENT_SECONDS);
         }
         break;
     case CMD_RECORD_STOP:
@@ -609,7 +616,7 @@ static void sendCommand(CommandType type, int arg = 0, int arg2 = 0) {
     xQueueSend(commandQueue, &cmd, 0);
 }
 
-void audioStartRecording() { sendCommand(CMD_RECORD_START); }
+void audioStartRecording(uint32_t seconds) { sendCommand(CMD_RECORD_START, seconds); }
 void audioStopRecording() { sendCommand(CMD_RECORD_STOP); }
 void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
 void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
@@ -663,6 +670,8 @@ float audioPlaybackSeconds() {
 float audioPlaybackSpeed() { return state == AUDIO_PLAYING ? speed : 1; }
 
 float audioSecondsLeft() { return (float)samplesLeft() / SAMPLE_RATE; }
+
+float audioLongestRecording() { return (float)recordableSamples() / SAMPLE_RATE; }
 
 bool audioUsingSdCard() { return storageAvailable(); }
 
