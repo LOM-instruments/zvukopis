@@ -11,6 +11,7 @@
 #include "buttons.h"
 #include "clock.h"
 #include "config.h"
+#include "networks.h"
 #include "ui.h"
 
 // How often the chip checks the PWR key while "asleep" on USB power
@@ -272,6 +273,7 @@ void setup() {
     boardPowerInit(); // also starts the I2C bus shared with the audio codec
     epdPowerOn();
     EPD_3IN97_Init();
+    wifiInit();  // before the clock, which may sync at startup
     clockInit(); // before audio, so moments get start times
     configInit();
 

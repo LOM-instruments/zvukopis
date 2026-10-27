@@ -3,6 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Arduino.h>
 #include <mbedtls/base64.h>
+#include <qrcode.h>
 #include <sys/time.h>
 
 #include "EPD_3in97.h"
@@ -12,6 +13,7 @@
 #include "clock.h"
 #include "config.h"
 #include "fonts.h"
+#include "networks.h"
 #include "quotes.h"
 #include "storage.h"
 #include "transfer.h"
@@ -917,7 +919,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         case CLOCK_SYNC_FAILED: snprintf(detail, len, "No answer from the time server"); break;
         default:
             if (clockSyncAvailable()) snprintf(detail, len, "Time from the internet, over Wi-Fi");
-            else snprintf(detail, len, "Wi-Fi isn't set up (wifi_config.h)");
+            else snprintf(detail, len, "Add a Wi-Fi network on the web page first");
             enabled = clockSyncAvailable();
             break;
         }
@@ -940,7 +942,8 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         break;
     case SET_WEB:
         title = "Web page";
-        snprintf(detail, len, "Moments, schedule, categories, on Wi-Fi");
+        snprintf(detail, len, "%s", wifiKnowsAny() ? "Moments, schedule, settings, on your Wi-Fi"
+                                                  : "Set up Wi-Fi: scan the code it shows");
         break;
     case SET_HOTSPOT:
         title = "Web page on own hotspot";
@@ -999,39 +1002,70 @@ static void drawSettings(const ViewState &v) {
     }
 }
 
+// A QR code, `size` pixels square at x, y (the screen around it is the quiet zone)
+static struct {
+    int x, y, size;
+} qrTarget;
+
+static void drawQrModules(esp_qrcode_handle_t qr) {
+    int modules = esp_qrcode_get_size(qr);
+    int scale = qrTarget.size / modules;
+    int offset = (qrTarget.size - modules * scale) / 2;
+    for (int my = 0; my < modules; my++) {
+        for (int mx = 0; mx < modules; mx++) {
+            if (esp_qrcode_get_module(qr, mx, my)) {
+                canvas->fillRect(qrTarget.x + offset + mx * scale, qrTarget.y + offset + my * scale, scale, scale, INK);
+            }
+        }
+    }
+}
+
+static void drawQr(const char *text, int x, int y, int size) {
+    qrTarget = {x, y, size};
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = drawQrModules;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+    esp_qrcode_generate(&cfg, text);
+}
+
+// On its own hotspot: a QR code that joins it (phone camera), then the page
+// opens by itself. On the usual network: a QR code with the page's address.
 static void drawTransfer(const ViewState &v) {
-    drawSubHeader(v, "Web page", "Wi-Fi is on", false);
     TransferInfo info = transferInfo();
+    drawSubHeader(v, "Web page", info.state == TRANSFER_READY && info.hotspot ? "zvukopis's own Wi-Fi is on" : "Wi-Fi is on", false);
     int cx = SW / 2, y = 250;
-    iconWifi(cx, y);
-    y += 70;
-    if (info.state == TRANSFER_CONNECTING) {
-        drawTextCentered(cx, y, &Bold32, "Connecting...", INK);
+    if (info.state != TRANSFER_READY) {
+        iconWifi(cx, y);
+        drawTextCentered(cx, y + 70, &Bold32, "Connecting...", INK);
         return;
     }
-    if (info.state != TRANSFER_READY) return;
-    char buf[64];
+    const int qrSize = 232, qrY = 132;
+    char buf[96];
     if (info.hotspot) {
-        drawTextCentered(cx, y, &Text22, "Join the Wi-Fi network", INK);
-        drawTextCentered(cx, y + 42, &Bold32, info.network, INK);
-        snprintf(buf, sizeof(buf), "password  %s", info.password);
-        drawTextCentered(cx, y + 76, &Text22, buf, INK);
-        y += 130;
+        snprintf(buf, sizeof(buf), "WIFI:T:WPA;S:%s;P:%s;;", info.network, info.password);
+        drawQr(buf, cx - qrSize / 2, qrY, qrSize);
+        y = qrY + qrSize + 40;
+        drawTextCentered(cx, y, &Bold22, "Scan with a phone camera to join", INK);
+        snprintf(buf, sizeof(buf), "or join  %s,  password  %s", info.network, info.password);
+        drawTextCentered(cx, y + 32, &Text22, buf, INK);
+        drawTextCentered(cx, y + 74, &Text22, "The page opens by itself, or go to", INK);
     } else {
-        snprintf(buf, sizeof(buf), "On the network %s,", info.network);
-        drawTextCentered(cx, y, &Text22, buf, INK);
-        y += 42;
+        snprintf(buf, sizeof(buf), "http://%s/", info.address);
+        drawQr(buf, cx - qrSize / 2, qrY, qrSize);
+        y = qrY + qrSize + 40;
+        drawTextCentered(cx, y, &Bold22, "Scan with a phone camera", INK);
+        snprintf(buf, sizeof(buf), "or on  %s,  go to", info.network);
+        drawTextCentered(cx, y + 32, &Text22, buf, INK);
+        drawTextCentered(cx, y + 116, &Text22, "or http://zvukopis.local", INK);
+        y -= 42;
     }
-    drawTextCentered(cx, y, &Text22, "open in a browser", INK);
     snprintf(buf, sizeof(buf), "http://%s", info.address);
-    drawTextCentered(cx, y + 44, &Bold32, buf, INK);
-    if (!info.hotspot) drawTextCentered(cx, y + 78, &Text22, "or http://zvukopis.local", INK);
-    y += 140;
-    if (v.transferRequests > 0) {
-        snprintf(buf, sizeof(buf), "%lu request%s served", v.transferRequests, v.transferRequests == 1 ? "" : "s");
-        drawTextCentered(cx, y, &Text22, buf, INK);
-    }
-    drawTextCentered(cx, y + 34, &Text17, "Stops by itself after 10 minutes without use", INK);
+    drawTextCentered(cx, y + 116, &Bold32, buf, INK);
+    y += 190;
+    if (v.transferRequests > 0) snprintf(buf, sizeof(buf), "%lu request%s served  -  ", v.transferRequests, v.transferRequests == 1 ? "" : "s");
+    else buf[0] = 0;
+    strlcat(buf, "stops after 10 min unused", sizeof(buf));
+    drawTextCentered(cx, min(y, FOOTER_LINE_Y - 16), &Text17, buf, INK);
 }
 
 // Every scheduled recording, soonest first

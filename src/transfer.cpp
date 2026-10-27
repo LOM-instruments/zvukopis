@@ -1,6 +1,7 @@
 #include "transfer.h"
 
 #include <Arduino.h>
+#include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <SD_MMC.h>
 #include <WebServer.h>
@@ -11,21 +12,14 @@
 #include "clock.h"
 #include "config.h"
 #include "storage.h"
+#include "networks.h"
 
-#if __has_include("wifi_config.h")
-#include "wifi_config.h"
-#endif
-#ifndef HOTSPOT_PASSWORD
-#define HOTSPOT_PASSWORD "zvukopis"
-#endif
-
-static const char *HOTSPOT_NAME = "zvukopis";
 static const char *HOST_NAME = "zvukopis"; // http://zvukopis.local/
-static const uint32_t JOIN_TIMEOUT_MS = 15000;
 static const uint32_t IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 static const size_t SEND_CHUNK = 4096;
 
 static WebServer server(80);
+static DNSServer dns; // on the hotspot every name leads here, so phones open the page by themselves
 static TransferInfo info = {};
 static volatile bool stopRequested = false;
 static TaskHandle_t task = nullptr;
@@ -37,7 +31,56 @@ static volatile bool hotspotOnly = false;
 static const char *const ICON_EMOJI[ICON_COUNT] = {"&#x1F464;", "&#x1F333;", "&#x1F642;", "&#x1F3A8;", "&#x2726;",
                                                    "&#x3030;",  "&#x1F3B5;", "&#x2665;",  "&#x1F4A7;", "&#x2600;"};
 
-// For text people typed (category names) going into the page
+// Common time zones as POSIX rules, with the IANA names browsers report
+struct Zone {
+    const char *label;
+    const char *posix;
+    const char *iana; // space separated
+};
+static const Zone ZONES[] = {
+    {"UTC", "UTC0", "UTC Etc/UTC"},
+    {"London, Dublin, Lisbon", "GMT0BST,M3.5.0/1,M10.5.0", "Europe/London Europe/Dublin Europe/Lisbon Atlantic/Canary"},
+    {"Central Europe (Berlin, Paris, Prague, Bratislava, Rome, Madrid)", "CET-1CEST,M3.5.0,M10.5.0/3",
+     "Europe/Berlin Europe/Paris Europe/Prague Europe/Bratislava Europe/Vienna Europe/Rome Europe/Madrid "
+     "Europe/Warsaw Europe/Amsterdam Europe/Brussels Europe/Budapest Europe/Copenhagen Europe/Oslo "
+     "Europe/Stockholm Europe/Zurich Europe/Belgrade Europe/Zagreb Europe/Ljubljana"},
+    {"Eastern Europe (Athens, Helsinki, Kyiv, Bucharest)", "EET-2EEST,M3.5.0/3,M10.5.0/4",
+     "Europe/Athens Europe/Helsinki Europe/Kiev Europe/Kyiv Europe/Bucharest Europe/Sofia Europe/Riga "
+     "Europe/Tallinn Europe/Vilnius"},
+    {"Istanbul", "<+03>-3", "Europe/Istanbul"},
+    {"Moscow", "MSK-3", "Europe/Moscow"},
+    {"Lagos", "WAT-1", "Africa/Lagos"},
+    {"Cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24", "Africa/Cairo"},
+    {"Johannesburg", "SAST-2", "Africa/Johannesburg"},
+    {"Nairobi", "EAT-3", "Africa/Nairobi"},
+    {"Tehran", "<+0330>-3:30", "Asia/Tehran"},
+    {"Dubai", "<+04>-4", "Asia/Dubai"},
+    {"Karachi", "PKT-5", "Asia/Karachi"},
+    {"India", "IST-5:30", "Asia/Kolkata Asia/Calcutta"},
+    {"Kathmandu", "<+0545>-5:45", "Asia/Kathmandu"},
+    {"Dhaka", "<+06>-6", "Asia/Dhaka"},
+    {"Bangkok, Jakarta, Hanoi", "<+07>-7", "Asia/Bangkok Asia/Jakarta Asia/Ho_Chi_Minh"},
+    {"China, Singapore, Perth", "CST-8",
+     "Asia/Shanghai Asia/Hong_Kong Asia/Singapore Asia/Taipei Asia/Kuala_Lumpur Asia/Manila Australia/Perth"},
+    {"Tokyo, Seoul", "JST-9", "Asia/Tokyo Asia/Seoul"},
+    {"Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", "Australia/Adelaide"},
+    {"Brisbane", "AEST-10", "Australia/Brisbane"},
+    {"Sydney, Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3", "Australia/Sydney Australia/Melbourne Australia/Hobart"},
+    {"Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3", "Pacific/Auckland"},
+    {"Honolulu", "HST10", "Pacific/Honolulu"},
+    {"Anchorage", "AKST9AKDT,M3.2.0,M11.1.0", "America/Anchorage"},
+    {"Los Angeles, Vancouver", "PST8PDT,M3.2.0,M11.1.0", "America/Los_Angeles America/Vancouver America/Tijuana"},
+    {"Denver", "MST7MDT,M3.2.0,M11.1.0", "America/Denver America/Edmonton"},
+    {"Phoenix", "MST7", "America/Phoenix"},
+    {"Chicago", "CST6CDT,M3.2.0,M11.1.0", "America/Chicago America/Winnipeg"},
+    {"Mexico City", "CST6", "America/Mexico_City"},
+    {"New York, Toronto", "EST5EDT,M3.2.0,M11.1.0", "America/New_York America/Toronto America/Detroit"},
+    {"Bogot\u00e1, Lima", "<-05>5", "America/Bogota America/Lima"},
+    {"Halifax", "AST4ADT,M3.2.0,M11.1.0", "America/Halifax"},
+    {"S\u00e3o Paulo, Buenos Aires", "<-03>3", "America/Sao_Paulo America/Argentina/Buenos_Aires America/Montevideo"},
+};
+
+// For text people typed (category names, network names) going into the page
 static void htmlEscape(const char *in, char *out, size_t len) {
     size_t n = 0;
     for (; *in && n + 7 < len; in++) {
@@ -50,6 +93,18 @@ static void htmlEscape(const char *in, char *out, size_t len) {
         }
     }
     out[n] = 0;
+}
+
+// For network names in the scan results
+static String jsonString(const String &in) {
+    String out = "\"";
+    for (unsigned i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if (c == '"' || c == '\\') out += '\\';
+        if ((uint8_t)c < 0x20) continue;
+        out += c;
+    }
+    return out + "\"";
 }
 
 static bool findMoment(int number, int &index, Moment &moment) {
@@ -100,20 +155,41 @@ button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}
 
 static const char PAGE_TAIL[] PROGMEM = R"(
 <script>
-async function post(u){const r=await fetch(u,{method:'POST'});if(!r.ok)alert(await r.text());location.reload()}
+const $=id=>document.getElementById(id);
+async function post(u,body){const r=await fetch(u,{method:'POST',body:body});if(!r.ok)alert(await r.text());location.reload()}
 function setClock(){post('/time?ms='+Date.now())}
 function del(n){if(confirm('Delete Moment '+n+'? This can\'t be undone.'))post('/delete?n='+n)}
 function addSchedule(){
- const w=document.getElementById('when').value;if(!w){alert('Choose a date and time');return}
- const s=Math.round(new Date(w).getTime()/1000);
- const d=(+document.getElementById('min').value||0)*60+(+document.getElementById('sec').value||0);
- if(d<1){alert('Choose how long to record');return}
- post('/schedule/add?start='+s+'&seconds='+d+'&daily='+(document.getElementById('daily').checked?1:0))}
+ const d=$('date').value,t=$('time').value.trim();
+ if(!d){alert('Choose a date');return}
+ if(!/^([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(t)){alert('Write the time as 24-hour HH:MM or HH:MM:SS, for example 06:30');return}
+ const s=(+$('min').value||0)*60+(+$('sec').value||0);
+ if(s<1){alert('Choose how long to record');return}
+ post('/schedule/add?date='+d+'&time='+t+'&seconds='+s+'&daily='+($('daily').checked?1:0))}
 function unschedule(s){post('/schedule/remove?start='+s)}
 function saveCategories(){
  const q=new URLSearchParams();
- for(let i=1;i<=5;i++){q.set('name'+i,document.getElementById('name'+i).value);q.set('icon'+i,document.getElementById('icon'+i).value)}
+ for(let i=1;i<=5;i++){q.set('name'+i,$('name'+i).value);q.set('icon'+i,$('icon'+i).value)}
  post('/categories?'+q)}
+function zoneChanged(){$('customtz').style.display=$('tz').value==='custom'?'':'none'}
+function useBrowserZone(){
+ const z=Intl.DateTimeFormat().resolvedOptions().timeZone;
+ for(const o of $('tz').options)if((o.dataset.iana||'').split(' ').includes(z)){$('tz').value=o.value;zoneChanged();return}
+ alert('zvukopis has no rule for '+z+'. Choose the nearest zone, or enter a POSIX rule under Custom.')}
+function saveZone(){const v=$('tz').value==='custom'?$('customtz').value.trim():$('tz').value;
+ if(!v){alert('Enter a POSIX time zone rule');return} post('/timezone',new URLSearchParams({tz:v}))}
+async function scan(){
+ $('ssid').innerHTML='<option>Looking for networks...</option>';
+ try{const nets=await(await fetch('/wifi/scan')).json();
+  $('ssid').innerHTML=nets.map(n=>'<option>'+n.ssid.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</option>').join('')+'<option value="">Other...</option>';
+ }catch(e){$('ssid').innerHTML='<option value="">Other...</option>'}
+ ssidChanged()}
+function ssidChanged(){$('otherssid').style.display=$('ssid').value===''?'':'none'}
+function saveWifi(){const s=$('ssid').value||$('otherssid').value.trim();
+ if(!s){alert('Choose or enter a network');return}
+ post('/wifi/save',new URLSearchParams({ssid:s,password:$('pass').value}))}
+function forget(i,n){if(confirm('Forget '+n+'?'))post('/wifi/forget?i='+i)}
+if($('ssid'))scan();
 </script></body></html>)";
 
 static void sendMoments(char *buf, size_t len) {
@@ -165,14 +241,24 @@ static void sendSchedule(char *buf, size_t len) {
     }
     if (scheduleCount() == 0) server.sendContent("<tr><td>None yet</td></tr>");
     int longest = (int)audioLongestRecording();
+    // The form starts at the next whole minute, in zvukopis's local time
+    char today[12] = "", nextMinute[10] = "";
+    if (clockValid()) {
+        time_t t = time(nullptr) + 60;
+        tm local;
+        localtime_r(&t, &local);
+        strftime(today, sizeof(today), "%Y-%m-%d", &local);
+        strftime(nextMinute, sizeof(nextMinute), "%H:%M:00", &local);
+    }
     snprintf(buf, len,
-             "</table><div class=row><input type=datetime-local id=when step=1>"
-             "<input type=number id=min min=0 value=1> min <input type=number id=sec min=0 max=59 value=0> s"
+             "</table><div class=row><input type=date id=date value=\"%s\">"
+             "<input id=time size=8 placeholder=HH:MM:SS value=\"%s\" inputmode=numeric> (24 h)</div>"
+             "<div class=row><input type=number id=min min=0 value=1> min <input type=number id=sec min=0 max=59 value=0> s"
              "<label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
-             "<p class=note>Times are in this browser's time zone. zvukopis wakes for them, also from sleep "
-             "(the screen stays as it is). A recording can last up to %d:%02d for now: it is held in memory before "
-             "being saved. Up to %d entries.</p>",
-             longest / 60, longest % 60, MAX_SCHEDULES);
+             "<p class=note>Times are zvukopis's local time (see Time zone below). It wakes for them, also from "
+             "sleep (the screen stays as it is). A recording can last up to %d:%02d for now: it is held in memory "
+             "before being saved. Up to %d entries.</p>",
+             today, nextMinute, longest / 60, longest % 60, MAX_SCHEDULES);
     server.sendContent(buf);
 }
 
@@ -196,6 +282,56 @@ static void sendCategories(char *buf, size_t len) {
     server.sendContent("<div class=row><button onclick=saveCategories()>Save categories</button></div>");
 }
 
+static void sendTimeZone(char *buf, size_t len) {
+    const char *current = clockTimeZone();
+    bool known = false;
+    server.sendContent("<h2>Time zone</h2><div class=row><select id=tz onchange=zoneChanged()>");
+    for (const Zone &z : ZONES) {
+        bool chosen = strcmp(z.posix, current) == 0 && !known;
+        known |= chosen;
+        snprintf(buf, len, "<option value=\"%s\" data-iana=\"%s\"%s>%s</option>", z.posix, z.iana,
+                 chosen ? " selected" : "", z.label);
+        server.sendContent(buf);
+    }
+    char escaped[160];
+    htmlEscape(current, escaped, sizeof(escaped));
+    snprintf(buf, len, "<option value=custom%s>Custom POSIX rule</option></select>"
+                       "<input id=customtz size=28 value=\"%s\" style=\"%s\"></div>"
+                       "<div class=row><button onclick=useBrowserZone()>Use this browser's zone</button>"
+                       "<button onclick=saveZone()>Save time zone</button></div>"
+                       "<p class=note>Used for the clock, file names, the calendar and scheduled recordings. "
+                       "Daylight saving time follows by itself.</p>",
+             known ? "" : " selected", escaped, known ? "display:none" : "");
+    server.sendContent(buf);
+}
+
+static void sendWifi(char *buf, size_t len) {
+    bool firstTime = info.hotspot && wifiNetworkCount() == 0;
+    server.sendContent(firstTime ? "<h2>Connect zvukopis to your Wi-Fi</h2>" : "<h2>Wi-Fi networks</h2>");
+    server.sendContent("<table>");
+    WifiNetwork n;
+    for (int i = 0; wifiNetworkGet(i, n); i++) {
+        char escaped[200];
+        htmlEscape(n.ssid, escaped, sizeof(escaped));
+        String js = jsonString(n.ssid);
+        js.replace("\"", "&quot;");
+        snprintf(buf, len, "<tr><td>%s</td><td class=r><button onclick=\"forget(%d,%s)\">Forget</button></td></tr>",
+                 escaped, i, js.c_str());
+        server.sendContent(buf);
+    }
+    if (wifiNetworkCount() == 0) server.sendContent("<tr><td>None saved yet</td></tr>");
+    snprintf(buf, len, "</table><div class=row><select id=ssid onchange=ssidChanged()></select>"
+                       "<input id=otherssid placeholder=\"Network name\" style=display:none>"
+                       "<button onclick=scan()>Look again</button></div>"
+                       "<div class=row><input id=pass type=password placeholder=Password autocomplete=off>"
+                       "<button onclick=saveWifi()>Save network</button></div>"
+                       "<p class=note>zvukopis joins the strongest saved network in reach when you open the web page "
+                       "or sync the clock (up to %d networks). Without one in reach it opens its own hotspot, "
+                       "<b>%s</b>, with the password shown on its screen.</p>",
+             MAX_NETWORKS, wifiHotspotName());
+    server.sendContent(buf);
+}
+
 static void handleIndex() {
     noteRequest();
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -217,9 +353,13 @@ static void handleIndex() {
                                "<div class=row><button onclick=setClock()>Set the device clock to this device's time</button></div>",
              clock, batteryText);
     server.sendContent(buf);
+    bool firstTime = info.hotspot && wifiNetworkCount() == 0;
+    if (firstTime) sendWifi(buf, sizeof(buf)); // what someone setting it up came for
     sendMoments(buf, sizeof(buf));
     sendSchedule(buf, sizeof(buf));
     sendCategories(buf, sizeof(buf));
+    sendTimeZone(buf, sizeof(buf));
+    if (!firstTime) sendWifi(buf, sizeof(buf));
     server.sendContent_P(PAGE_TAIL);
     server.sendContent("");
 }
@@ -227,7 +367,20 @@ static void handleIndex() {
 static void handleScheduleAdd() {
     noteRequest();
     Schedule s = {};
-    s.start = atoll(server.arg("start").c_str());
+    tm local = {};
+    int hour = 0, minute = 0, second = 0;
+    if (sscanf(server.arg("date").c_str(), "%d-%d-%d", &local.tm_year, &local.tm_mon, &local.tm_mday) != 3 ||
+        sscanf(server.arg("time").c_str(), "%d:%d:%d", &hour, &minute, &second) < 2) {
+        server.send(400, "text/plain", "Choose a date, and a time as HH:MM or HH:MM:SS");
+        return;
+    }
+    local.tm_year -= 1900;
+    local.tm_mon -= 1;
+    local.tm_hour = hour;
+    local.tm_min = minute;
+    local.tm_sec = second;
+    local.tm_isdst = -1; // the zone's rule decides
+    s.start = mktime(&local);
     s.seconds = server.arg("seconds").toInt();
     s.daily = server.arg("daily") == "1";
     if (s.seconds < 1 || s.seconds > 24 * 3600 || s.start < 1700000000) {
@@ -274,6 +427,90 @@ static void handleCategories() {
         configSetCategory(slot, c);
     }
     server.send(200, "text/plain", "ok");
+}
+
+static void handleTimeZone() {
+    noteRequest();
+    String tz = server.arg("tz");
+    tz.trim();
+    if (tz.length() == 0 || tz.length() > 60) {
+        server.send(400, "text/plain", "That doesn't look like a time zone rule");
+        return;
+    }
+    clockSetTimeZone(tz.c_str());
+    server.send(200, "text/plain", "ok");
+}
+
+static void handleWifiScan() {
+    noteRequest();
+    // In hotspot mode this scans from its second (station) interface
+    int found = WiFi.scanNetworks();
+    String json = "[";
+    for (int i = 0; i < found; i++) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0 || json.indexOf(jsonString(ssid)) >= 0) continue; // hidden, or seen on another channel
+        if (json.length() > 1) json += ",";
+        json += "{\"ssid\":" + jsonString(ssid) + ",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
+    }
+    WiFi.scanDelete();
+    server.send(200, "application/json", json + "]");
+}
+
+static void handleWifiSave() {
+    noteRequest();
+    WifiNetwork n = {};
+    String ssid = server.arg("ssid"), password = server.arg("password");
+    if (ssid.length() == 0 || ssid.length() >= sizeof(n.ssid) || password.length() >= sizeof(n.password) ||
+        (password.length() > 0 && password.length() < 8)) {
+        server.send(400, "text/plain", "Enter the network's name, and its password (8 characters or more; empty for an open network)");
+        return;
+    }
+    strlcpy(n.ssid, ssid.c_str(), sizeof(n.ssid));
+    strlcpy(n.password, password.c_str(), sizeof(n.password));
+    if (!wifiNetworkSave(n)) {
+        server.send(400, "text/plain", "Already 4 networks saved; forget one first");
+        return;
+    }
+    server.send(200, "text/plain", "ok");
+}
+
+static void handleWifiForget() {
+    noteRequest();
+    wifiNetworkForget(server.arg("i").toInt());
+    server.send(200, "text/plain", "ok");
+}
+
+// Phones and laptops check for a captive portal by fetching a known page;
+// sending them here makes them open the zvukopis page by themselves
+static void redirectToPage() {
+    server.sendHeader("Location", String("http://") + info.address + "/");
+    server.send(302, "text/plain", "");
+}
+
+static void handleMoment();
+static void handleTime();
+static void handleDelete();
+
+static void addRoutes() {
+    server.on("/", HTTP_GET, handleIndex);
+    server.on("/moment", HTTP_GET, handleMoment);
+    server.on("/time", HTTP_POST, handleTime);
+    server.on("/delete", HTTP_POST, handleDelete);
+    server.on("/schedule/add", HTTP_POST, handleScheduleAdd);
+    server.on("/schedule/remove", HTTP_POST, handleScheduleRemove);
+    server.on("/categories", HTTP_POST, handleCategories);
+    server.on("/timezone", HTTP_POST, handleTimeZone);
+    server.on("/wifi/scan", HTTP_GET, handleWifiScan);
+    server.on("/wifi/save", HTTP_POST, handleWifiSave);
+    server.on("/wifi/forget", HTTP_POST, handleWifiForget);
+    for (const char *probe : {"/generate_204", "/gen_204", "/hotspot-detect.html", "/library/test/success.html",
+                              "/connecttest.txt", "/ncsi.txt", "/success.txt", "/canonical.html"}) {
+        server.on(probe, redirectToPage);
+    }
+    server.onNotFound([] {
+        if (info.hotspot) redirectToPage();
+        else server.send(404, "text/plain", "Not found");
+    });
 }
 
 static void handleMoment() {
@@ -343,41 +580,30 @@ static void handleDelete() {
     server.send(200, "text/plain", "ok");
 }
 
+static bool stopping() { return stopRequested; }
+
 static bool joinNetwork() {
-#ifdef WIFI_SSID
-    Serial.printf("[transfer] joining %s\n", WIFI_SSID);
-    WiFi.mode(WIFI_STA);
-    WiFi.setHostname(HOST_NAME);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED) {
-        if (stopRequested || millis() - start > JOIN_TIMEOUT_MS) {
-            Serial.printf("[transfer] couldn't join (status %d)\n", WiFi.status());
-            WiFi.disconnect(true);
-            return false;
-        }
-        delay(100);
-    }
-    strlcpy(info.network, WIFI_SSID, sizeof(info.network));
+    char ssid[33];
+    if (wifiJoin(ssid, sizeof(ssid), stopping) != WIFI_JOINED) return false;
+    strlcpy(info.network, ssid, sizeof(info.network));
     info.password[0] = 0;
     strlcpy(info.address, WiFi.localIP().toString().c_str(), sizeof(info.address));
     info.hotspot = false;
     return true;
-#else
-    return false;
-#endif
 }
 
 static void openHotspot() {
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(HOTSPOT_NAME, HOTSPOT_PASSWORD);
-    strlcpy(info.network, HOTSPOT_NAME, sizeof(info.network));
-    strlcpy(info.password, HOTSPOT_PASSWORD, sizeof(info.password));
+    WiFi.mode(WIFI_AP_STA); // the station side scans for networks to set up
+    WiFi.softAP(wifiHotspotName(), wifiHotspotPassword());
+    strlcpy(info.network, wifiHotspotName(), sizeof(info.network));
+    strlcpy(info.password, wifiHotspotPassword(), sizeof(info.password));
     strlcpy(info.address, WiFi.softAPIP().toString().c_str(), sizeof(info.address));
     info.hotspot = true;
+    dns.start(53, "*", WiFi.softAPIP());
 }
 
 static void transferTask(void *) {
+    static bool routesAdded = false;
     bool joined = !hotspotOnly && joinNetwork();
     if (!stopRequested) {
         if (joined) clockNtp(); // already online, so the clock gets corrected too
@@ -386,23 +612,19 @@ static void transferTask(void *) {
 
         MDNS.begin(HOST_NAME);
         MDNS.addService("http", "tcp", 80);
-        server.on("/", HTTP_GET, handleIndex);
-        server.on("/moment", HTTP_GET, handleMoment);
-        server.on("/time", HTTP_POST, handleTime);
-        server.on("/delete", HTTP_POST, handleDelete);
-        server.on("/schedule/add", HTTP_POST, handleScheduleAdd);
-        server.on("/schedule/remove", HTTP_POST, handleScheduleRemove);
-        server.on("/categories", HTTP_POST, handleCategories);
-        server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
+        if (!routesAdded) addRoutes();
+        routesAdded = true;
         server.begin();
         lastRequestAt = millis();
         info.state = TRANSFER_READY;
 
         while (!stopRequested && millis() - lastRequestAt < IDLE_TIMEOUT_MS) {
+            if (info.hotspot) dns.processNextRequest();
             server.handleClient();
             delay(2);
         }
         server.stop();
+        if (info.hotspot) dns.stop();
         MDNS.end();
     }
     WiFi.softAPdisconnect(true);

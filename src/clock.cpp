@@ -1,12 +1,14 @@
 #include "clock.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include <sys/time.h>
 
 #include "audio.h"
+#include "networks.h"
 
 #if __has_include("wifi_config.h")
 #include "wifi_config.h"
@@ -19,7 +21,6 @@ static const uint8_t RTC_ADDRESS = 0x51;
 static const uint8_t RTC_SECONDS_REG = 0x04; // then minutes, hours, days, weekdays, months, years
 static const int MIN_VALID_YEAR = 2025;
 
-static const uint32_t CONNECT_TIMEOUT_MS = 20000;
 static const uint32_t NTP_REPLY_MS = 1500; // per request; three per server
 static const uint32_t NTP_UNIX_OFFSET = 2208988800UL; // 1900 to 1970
 static const char *NTP_SERVERS[] = {"pool.ntp.org", "time.google.com"};
@@ -91,35 +92,20 @@ static bool shouldAbort() {
     return syncPaused || audioState() == AUDIO_RECORDING;
 }
 
-#ifdef WIFI_SSID
-static bool waitFor(bool (*done)(), uint32_t timeoutMs) {
-    uint32_t start = millis();
-    while (!done()) {
-        if (shouldAbort() || millis() - start > timeoutMs) return false;
-        delay(100);
-    }
-    return true;
-}
-
 static ClockSync syncOnce() {
     uint32_t start = millis();
-    Serial.printf("[clock] connecting to %s for NTP\n", WIFI_SSID);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    bool connected = waitFor([] { return WiFi.status() == WL_CONNECTED; }, CONNECT_TIMEOUT_MS);
-    bool ok = connected && clockNtp();
-    int status = WiFi.status(); // 1 = network not found, 4 = connect failed (password?), 6 = no answer
+    char ssid[33];
+    WifiJoin join = wifiJoin(ssid, sizeof(ssid), shouldAbort);
+    bool ok = join == WIFI_JOINED && clockNtp();
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
     if (!ok) {
-        Serial.printf("[clock] sync %s after %lu ms (Wi-Fi status %d)\n",
-                      shouldAbort() ? "interrupted" : "failed", millis() - start, status);
-        return connected ? CLOCK_SYNC_FAILED : CLOCK_SYNC_NO_WIFI;
+        Serial.printf("[clock] sync %s after %lu ms\n", shouldAbort() ? "interrupted" : "failed", millis() - start);
+        return join == WIFI_JOINED ? CLOCK_SYNC_FAILED : CLOCK_SYNC_NO_WIFI;
     }
     return CLOCK_SYNC_DONE;
 }
-#endif
 
 // One NTP exchange with `server`: the time, corrected for half the round trip
 static bool ntpQuery(const char *server, timeval &out) {
@@ -181,8 +167,6 @@ bool clockNtp() {
     return true;
 }
 
-#ifdef WIFI_SSID
-
 // Waits for clockSyncNow()
 static void syncTask(void *) {
     for (;;) {
@@ -198,10 +182,15 @@ static void syncTask(void *) {
         syncing = false;
     }
 }
-#endif
+
+static char timeZone[64] = TIME_ZONE;
 
 void clockInit() {
-    setenv("TZ", TIME_ZONE, 1);
+    Preferences prefs;
+    prefs.begin("zvukopis", true);
+    if (prefs.isKey("tz")) prefs.getString("tz", timeZone, sizeof(timeZone));
+    prefs.end();
+    setenv("TZ", timeZone, 1);
     tzset();
     time_t now;
     if (rtcRead(now)) {
@@ -215,12 +204,21 @@ void clockInit() {
     } else {
         Serial.println("[clock] RTC has no valid time");
     }
-#ifdef WIFI_SSID
     xTaskCreatePinnedToCore(syncTask, "clock", 4096, NULL, 1, &syncTaskHandle, 0);
-    if (!valid) clockSyncNow();
-#else
-    Serial.println("[clock] no src/wifi_config.h, so no NTP sync");
-#endif
+    if (!valid && wifiKnowsAny()) clockSyncNow();
+}
+
+const char *clockTimeZone() { return timeZone; }
+
+void clockSetTimeZone(const char *posixTz) {
+    strlcpy(timeZone, posixTz, sizeof(timeZone));
+    setenv("TZ", timeZone, 1);
+    tzset();
+    Preferences prefs;
+    prefs.begin("zvukopis", false);
+    prefs.putString("tz", timeZone);
+    prefs.end();
+    Serial.printf("[clock] time zone %s\n", timeZone);
 }
 
 bool clockValid() { return valid; }
@@ -236,10 +234,10 @@ void clockSet(time_t utc) {
     Serial.printf("[clock] set to %s\n", buf);
 }
 
-bool clockSyncAvailable() { return syncTaskHandle != nullptr; }
+bool clockSyncAvailable() { return wifiKnowsAny(); }
 
 void clockSyncNow() {
-    if (!syncTaskHandle || syncing) return;
+    if (!syncTaskHandle || syncing || !wifiKnowsAny()) return;
     syncing = true; // shown right away; cleared by the sync task
     syncState = CLOCK_SYNCING;
     syncStateSince = millis();

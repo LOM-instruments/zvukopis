@@ -26,7 +26,9 @@ static void saveCategories() {
 static void saveSchedules() {
     Preferences prefs;
     prefs.begin("zvukopis", false);
-    prefs.putBytes("schedules", schedules, scheduleTotal * sizeof(Schedule));
+    // Preferences ignores a zero-length write, which would bring removed entries back
+    if (scheduleTotal > 0) prefs.putBytes("schedules", schedules, scheduleTotal * sizeof(Schedule));
+    else prefs.remove("schedules");
     prefs.end();
 }
 
@@ -42,8 +44,10 @@ void configInit() {
     memcpy(categories, DEFAULT_CATEGORIES, sizeof(categories));
     Preferences prefs;
     prefs.begin("zvukopis", true);
-    if (prefs.getBytesLength("categories") == sizeof(categories)) prefs.getBytes("categories", categories, sizeof(categories));
-    size_t len = prefs.getBytesLength("schedules");
+    if (prefs.isKey("categories") && prefs.getBytesLength("categories") == sizeof(categories)) {
+        prefs.getBytes("categories", categories, sizeof(categories));
+    }
+    size_t len = prefs.isKey("schedules") ? prefs.getBytesLength("schedules") : 0;
     if (len % sizeof(Schedule) == 0 && len <= sizeof(schedules)) {
         scheduleTotal = prefs.getBytes("schedules", schedules, len) / sizeof(Schedule);
     }
