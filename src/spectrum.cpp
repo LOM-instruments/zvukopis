@@ -8,22 +8,22 @@
 #include "storage.h"
 
 static const int FFT_SIZE = 2048; // 23 Hz bins at 48 kHz
+static const float PEAK_MIN_HZ = 40; // the loudest point is looked for above this: below is DC offset and rumble
 
 static Spectrogram result;
 static uint8_t *cells = nullptr;
+static float *averageDb = nullptr; // FFT_SIZE / 2
 static volatile int readyNumber = -1;   // moment whose spectrogram is in `result`
 static volatile int wantedNumber = -1;  // moment being worked out next
 static int wantedWidth = 0, wantedHeight = 0;
 static TaskHandle_t task = nullptr;
 
 float spectrumRowHz(int row, int height) {
-    float t = (row + 0.5f) / height; // 0 at the top
-    return SPECTRUM_HIGH_HZ * powf(SPECTRUM_LOW_HZ / SPECTRUM_HIGH_HZ, t);
+    return SPECTRUM_HIGH_HZ * (1 - (row + 0.5f) / height); // row 0 at the top
 }
 
 int spectrumHzRow(float hz, int height) {
-    float t = logf(hz / SPECTRUM_HIGH_HZ) / logf(SPECTRUM_LOW_HZ / SPECTRUM_HIGH_HZ);
-    return constrain((int)(t * height), 0, height - 1);
+    return constrain((int)((1 - hz / SPECTRUM_HIGH_HZ) * height), 0, height - 1);
 }
 
 // Reads `count` samples from `start` (zeros past the end)
@@ -69,19 +69,22 @@ static bool compute(int number, int width, int height) {
     int16_t *frame = (int16_t *)malloc(FFT_SIZE * sizeof(int16_t));
     float *window = (float *)malloc(FFT_SIZE * sizeof(float));
     double *rowEnergy = (double *)calloc(height, sizeof(double));
-    // Bin range of each row: between the geometric midpoints to its neighbours
+    double *binPower = (double *)ps_calloc(FFT_SIZE / 2, sizeof(double));
+    // Bin range of each row: the bins inside its slice of the linear scale
     int *binLow = (int *)malloc(height * sizeof(int)), *binHigh = (int *)malloc(height * sizeof(int));
-    bool ok = db && fft && frame && window && rowEnergy && binLow && binHigh;
+    bool ok = db && fft && frame && window && rowEnergy && binPower && binLow && binHigh;
     if (ok && !cells) cells = (uint8_t *)ps_malloc(width * height);
-    ok = ok && cells && width * height <= wantedWidth * wantedHeight;
+    if (ok && !averageDb) averageDb = (float *)ps_malloc(FFT_SIZE / 2 * sizeof(float));
+    ok = ok && cells && averageDb && width * height <= wantedWidth * wantedHeight;
     if (ok) {
         const float binHz = (float)SAMPLE_RATE / FFT_SIZE;
         for (int r = 0; r < height; r++) {
-            float upper = spectrumRowHz(r, height) * powf(SPECTRUM_HIGH_HZ / SPECTRUM_LOW_HZ, 0.5f / height);
-            float lower = spectrumRowHz(r, height) / powf(SPECTRUM_HIGH_HZ / SPECTRUM_LOW_HZ, 0.5f / height);
-            binLow[r] = max(1, (int)roundf(lower / binHz));
-            binHigh[r] = max(binLow[r], (int)roundf(upper / binHz)); // low rows share one bin
+            float upper = SPECTRUM_HIGH_HZ * (1 - (float)r / height);
+            float lower = SPECTRUM_HIGH_HZ * (1 - (float)(r + 1) / height);
+            binLow[r] = max(1, (int)ceilf(lower / binHz)); // bin 0 is DC
+            binHigh[r] = max(binLow[r], (int)floorf(upper / binHz));
         }
+        // Hann window
         for (int i = 0; i < FFT_SIZE; i++) window[i] = 0.5f - 0.5f * cosf(2 * (float)M_PI * i / (FFT_SIZE - 1));
         dsps_fft2r_init_fc32(NULL, FFT_SIZE);
 
@@ -96,6 +99,7 @@ static bool compute(int number, int width, int height) {
             }
             dsps_fft2r_fc32(fft, FFT_SIZE);
             dsps_bit_rev_fc32(fft, FFT_SIZE);
+            for (int b = 0; b < FFT_SIZE / 2; b++) binPower[b] += fft[2 * b] * fft[2 * b] + fft[2 * b + 1] * fft[2 * b + 1];
             for (int r = 0; r < height; r++) {
                 float power = 0;
                 for (int b = binLow[r]; b <= binHigh[r] && b < FFT_SIZE / 2; b++) {
@@ -104,7 +108,7 @@ static bool compute(int number, int width, int height) {
                 rowEnergy[r] += power;
                 float value = 10 * log10f(power + 1e-12f);
                 db[r * width + c] = value;
-                if (value > loudest) {
+                if (value > loudest && spectrumRowHz(r, height) >= PEAK_MIN_HZ) {
                     loudest = value;
                     result.peakColumn = c;
                     result.peakRow = r;
@@ -121,7 +125,7 @@ static bool compute(int number, int width, int height) {
             // Where the energy lies: rows from the bottom (low) up, by share of the total
             double total = 0, below = 0;
             for (int r = 0; r < height; r++) total += rowEnergy[r];
-            result.bandLowHz = SPECTRUM_LOW_HZ;
+            result.bandLowHz = 0;
             result.bandHighHz = SPECTRUM_HIGH_HZ;
             bool lowFound = false;
             for (int r = height - 1; r >= 0; r--) {
@@ -142,6 +146,15 @@ static bool compute(int number, int width, int height) {
             result.peakHz = spectrumRowHz(result.peakRow, height);
             result.seconds = (float)moment.length / SAMPLE_RATE;
             result.peakSeconds = (result.peakColumn + 0.5f) / width * result.seconds;
+            int firstBin = (int)ceilf(PEAK_MIN_HZ / binHz), peakBin = firstBin;
+            for (int b = 0; b < FFT_SIZE / 2; b++) {
+                averageDb[b] = 10 * log10f(binPower[b] / width + 1e-12f);
+                if (b >= firstBin && b * binHz <= SPECTRUM_HIGH_HZ && binPower[b] > binPower[peakBin]) peakBin = b;
+            }
+            result.averageDb = averageDb;
+            result.bins = FFT_SIZE / 2;
+            result.binHz = binHz;
+            result.averagePeakHz = peakBin * binHz;
             Serial.printf("[spectrum] Moment %d in %lu ms: peak %.0f Hz at %.2f s, 80%% of the energy %.0f-%.0f Hz\n",
                           number, millis() - start, result.peakHz, result.peakSeconds, result.bandLowHz,
                           result.bandHighHz);
@@ -152,6 +165,7 @@ static bool compute(int number, int width, int height) {
     free(frame);
     free(window);
     free(rowEnergy);
+    free(binPower);
     free(binLow);
     free(binHigh);
     return ok;

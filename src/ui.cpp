@@ -101,6 +101,8 @@ static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen g
 static Screen menuFrom = SCREEN_LIST;     // where closing the menu (Settings) returns to
 static int menuFromSelected = 0;
 static volatile int spectrumMoment = 0; // number of the moment being analysed
+enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
+static volatile int spectrumView = VIEW_SPECTROGRAM;
 static Screen spectrumFrom = SCREEN_LIST;
 static int spectrumFromSelected = 0;
 static volatile bool sleepRequested = false;
@@ -232,6 +234,8 @@ struct ViewState {
     int scheduleCount;
     int spectrumMoment;
     int spectrumReady;
+    int spectrumView;
+    int playQuarters; // playback position on the analysis screen, for its playhead
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
 
@@ -285,6 +289,8 @@ static ViewState currentView() {
     v.scheduleCount = scheduleCount();
     v.spectrumMoment = spectrumMoment;
     v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
+    v.spectrumView = spectrumView;
+    if (screen == SCREEN_SPECTRUM && v.audio == AUDIO_PLAYING) v.playQuarters = (int)(audioPlaybackSeconds() * 4);
     return v;
 }
 
@@ -1181,21 +1187,14 @@ static void formatSeconds(char *buf, size_t len, float seconds) {
     snprintf(buf, len, "%d:%04.1f", (int)seconds / 60, fmodf(seconds, 60));
 }
 
-// Spectrogram: time across, frequency up (log), loudness as dithered ink.
-// Marked with the frequency scale, the time, and a ring on the loudest point.
-static void drawSpectrum(const ViewState &v) {
-    Moment moment;
-    if (!momentGet(momentIndexByNumber(v.spectrumMoment), moment)) return;
-    char title[24];
-    snprintf(title, sizeof(title), "Moment %d", moment.number);
-    drawSubHeader(v, title, "Frequency analysis");
-    const Spectrogram *sp = spectrumResult(v.spectrumMoment);
-    if (!sp) {
-        iconBars(SW / 2, 300, 30, INK);
-        drawTextCentered(SW / 2, 380, &Bold22, "Analysing...", INK);
-        return;
-    }
+// Frequency scale of both views: 0 to 20 kHz in 5 kHz steps
+static const int FREQ_STEPS = 4;
+static const char *const FREQ_LABELS[FREQ_STEPS + 1] = {"0", "5k", "10k", "15k", "20k"};
 
+// Spectrogram: time across, frequency up (linear), loudness as dithered ink.
+// Marked with the frequency scale, the time, a ring on the loudest point, and
+// the playhead while it plays.
+static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
     // Loudness as a 4x4 ordered dither: 17 shades from paper to ink
     static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     for (int y = 0; y < sp->height && y < PLOT_H; y++) {
@@ -1206,23 +1205,18 @@ static void drawSpectrum(const ViewState &v) {
     }
     canvas->drawRect(PLOT_X - 1, PLOT_Y - 1, PLOT_W + 2, PLOT_H + 2, INK);
 
-    // Frequency scale: decades with labels, the octaves between as ticks
-    char buf[48];
-    for (float hz = 50; hz <= SPECTRUM_HIGH_HZ; hz *= 2) {
-        int y = PLOT_Y + spectrumHzRow(hz, PLOT_H);
-        canvas->drawFastHLine(PLOT_X - 5, y, 4, INK);
+    for (int i = 0; i <= FREQ_STEPS; i++) {
+        int y = PLOT_Y + PLOT_H - 1 - i * (PLOT_H - 1) / FREQ_STEPS;
+        canvas->drawFastHLine(PLOT_X - 7, y, 6, INK);
+        if (i > 0 && i < FREQ_STEPS) {
+            for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += 6) canvas->drawPixel(x, y, INK);
+        }
+        drawTextRight(PLOT_X - 11, constrain(y + 6, PLOT_Y + 12, PLOT_Y + PLOT_H), &Text17, FREQ_LABELS[i], INK);
     }
-    const float decades[] = {100, 1000, 10000};
-    const char *labels[] = {"100", "1k", "10k"};
-    for (int i = 0; i < 3; i++) {
-        int y = PLOT_Y + spectrumHzRow(decades[i], PLOT_H);
-        canvas->drawFastHLine(PLOT_X - 9, y, 8, INK);
-        for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += 6) canvas->drawPixel(x, y, INK);
-        drawTextRight(PLOT_X - 12, y + 6, &Text17, labels[i], INK);
-    }
-    drawTextRight(PLOT_X - 12, PLOT_Y + 12, &Text17, "Hz", INK);
+    drawTextRight(PLOT_X - 11, PLOT_Y - 8, &Text17, "Hz", INK);
 
     // Time: start, middle, end
+    char buf[48];
     for (int i = 0; i <= 2; i++) {
         int x = PLOT_X + i * (PLOT_W - 1) / 2;
         canvas->drawFastVLine(x, PLOT_Y + PLOT_H + 1, 6, INK);
@@ -1238,6 +1232,14 @@ static void drawSpectrum(const ViewState &v) {
     drawArc(px, py, 10, 0, 360, 3, INK);
     drawArc(px, py, 7, 0, 360, 2, PAPER);
 
+    // Playhead: an ink line with paper edges, and a marker above the plot
+    if (v.audio == AUDIO_PLAYING && sp->seconds > 0) {
+        int x = PLOT_X + constrain((int)(v.playQuarters / 4.0f / sp->seconds * PLOT_W), 0, PLOT_W - 1);
+        canvas->fillRect(x - 2, PLOT_Y, 5, PLOT_H, PAPER);
+        canvas->fillRect(x - 1, PLOT_Y, 3, PLOT_H, INK);
+        canvas->fillTriangle(x - 7, PLOT_Y - 10, x + 7, PLOT_Y - 10, x, PLOT_Y - 2, INK);
+    }
+
     char hz[16], at[16], low[16], high[16];
     formatHz(hz, sizeof(hz), sp->peakHz);
     formatSeconds(at, sizeof(at), sp->peakSeconds);
@@ -1249,6 +1251,90 @@ static void drawSpectrum(const ViewState &v) {
     formatHz(high, sizeof(high), sp->bandHighHz);
     snprintf(buf, sizeof(buf), "80%% of the sound: %s to %s", low, high);
     drawText(MARGIN, y + 30, &Text22, buf, INK);
+}
+
+// FFT graph: the moment's average spectrum, loudness (dB below its loudest
+// frequency) up against frequency (linear) across, filled lightly below
+static void drawFftGraph(const ViewState &v, const Spectrogram *sp) {
+    const float rangeDb = 80;
+    int lastBin = min(sp->bins - 1, (int)(SPECTRUM_HIGH_HZ / sp->binHz));
+    float loudest = -1000;
+    for (int b = 1; b <= lastBin; b++) loudest = max(loudest, sp->averageDb[b]);
+
+    int prevY = -1;
+    for (int x = 0; x < PLOT_W; x++) {
+        // The loudest bin under this pixel
+        int b0 = max(1, (int)(x * SPECTRUM_HIGH_HZ / PLOT_W / sp->binHz));
+        int b1 = max(b0, min(lastBin, (int)((x + 1) * SPECTRUM_HIGH_HZ / PLOT_W / sp->binHz)));
+        float value = -1000;
+        for (int b = b0; b <= b1; b++) value = max(value, sp->averageDb[b]);
+        int y = PLOT_Y + constrain((int)((loudest - value) / rangeDb * PLOT_H), 0, PLOT_H - 1);
+        for (int yy = y + 2; yy < PLOT_Y + PLOT_H; yy++) {
+            if (((x + yy) & 3) == 0) canvas->drawPixel(PLOT_X + x, yy, INK); // light fill
+        }
+        if (prevY >= 0) canvas->drawLine(PLOT_X + x - 1, prevY, PLOT_X + x, y, INK);
+        canvas->drawLine(PLOT_X + x, y + 1, PLOT_X + x, prevY >= 0 ? max(prevY, y) + 1 : y + 1, INK); // 2 px thick
+        prevY = y;
+    }
+    canvas->drawRect(PLOT_X - 1, PLOT_Y - 1, PLOT_W + 2, PLOT_H + 2, INK);
+
+    // dB scale on the left, every 20 dB
+    char buf[48];
+    for (int db = 0; db <= (int)rangeDb; db += 20) {
+        int y = PLOT_Y + (int)(db / rangeDb * (PLOT_H - 1));
+        canvas->drawFastHLine(PLOT_X - 7, y, 6, INK);
+        if (db > 0 && db < rangeDb) {
+            for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += 6) canvas->drawPixel(x, y, INK);
+        }
+        snprintf(buf, sizeof(buf), db == 0 ? "0" : "-%d", db);
+        drawTextRight(PLOT_X - 11, constrain(y + 6, PLOT_Y + 12, PLOT_Y + PLOT_H), &Text17, buf, INK);
+    }
+    drawTextRight(PLOT_X - 11, PLOT_Y - 8, &Text17, "dB", INK);
+
+    // Frequency across the bottom
+    for (int i = 0; i <= FREQ_STEPS; i++) {
+        int x = PLOT_X + i * (PLOT_W - 1) / FREQ_STEPS;
+        canvas->drawFastVLine(x, PLOT_Y + PLOT_H + 1, 6, INK);
+        if (i > 0 && i < FREQ_STEPS) {
+            for (int y = PLOT_Y; y < PLOT_Y + PLOT_H; y += 6) canvas->drawPixel(x, y, INK);
+        }
+        const char *label = FREQ_LABELS[i];
+        if (i == 0) drawText(x, PLOT_Y + PLOT_H + 26, &Text17, label, INK);
+        else if (i == FREQ_STEPS) drawTextRight(x, PLOT_Y + PLOT_H + 26, &Text17, "20k Hz", INK);
+        else drawTextCentered(x, PLOT_Y + PLOT_H + 26, &Text17, label, INK);
+    }
+
+    // The loudest frequency on average: a ring on the curve
+    int px = PLOT_X + constrain((int)(sp->averagePeakHz / SPECTRUM_HIGH_HZ * PLOT_W), 0, PLOT_W - 1);
+    drawArc(px, PLOT_Y + 1, 13, 0, 360, 3, PAPER);
+    drawArc(px, PLOT_Y + 1, 10, 0, 360, 3, INK);
+
+    char hz[16], low[16], high[16];
+    formatHz(hz, sizeof(hz), sp->averagePeakHz);
+    int y = PLOT_Y + PLOT_H + 64;
+    drawArc(MARGIN + 9, y - 8, 9, 0, 360, 3, INK);
+    snprintf(buf, sizeof(buf), "Loudest on average: %s", hz);
+    drawText(MARGIN + 28, y, &Text22, buf, INK);
+    formatHz(low, sizeof(low), sp->bandLowHz);
+    formatHz(high, sizeof(high), sp->bandHighHz);
+    snprintf(buf, sizeof(buf), "80%% of the sound: %s to %s", low, high);
+    drawText(MARGIN, y + 30, &Text22, buf, INK);
+}
+
+static void drawSpectrum(const ViewState &v) {
+    Moment moment;
+    if (!momentGet(momentIndexByNumber(v.spectrumMoment), moment)) return;
+    char title[24];
+    snprintf(title, sizeof(title), "Moment %d", moment.number);
+    drawSubHeader(v, title, v.spectrumView == VIEW_FFT ? "Spectrum (FFT)" : "Spectrogram");
+    const Spectrogram *sp = spectrumResult(v.spectrumMoment);
+    if (!sp) {
+        iconBars(SW / 2, 300, 30, INK);
+        drawTextCentered(SW / 2, 380, &Bold22, "Analysing...", INK);
+        return;
+    }
+    if (v.spectrumView == VIEW_FFT) drawFftGraph(v, sp);
+    else drawSpectrogram(v, sp);
 }
 
 static void drawCardReader(const ViewState &v) {
@@ -1524,7 +1610,10 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
     } else if (v.screen == SCREEN_SPECTRUM) {
-        rocker[nr++] = {HINT_CLICK, "Back"};
+        if (playing) rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
+        else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram" : "FFT"};
+        rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
     } else if (v.screen == SCREEN_SCHEDULE) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Back"};
@@ -1749,6 +1838,7 @@ static void handleOverlay(ButtonEvent event) {
                 spectrumFrom = (Screen)(int)screen;
                 spectrumFromSelected = selected;
                 spectrumMoment = menuMoment;
+                spectrumView = VIEW_SPECTROGRAM;
                 spectrumRequest(menuMoment, PLOT_W, PLOT_H);
                 overlay = OVERLAY_NONE;
                 showScreen(SCREEN_SPECTRUM, 0);
@@ -1998,7 +2088,7 @@ static void handleEvent(ButtonEvent event) {
     }
     // Up and down are the tape transport while a moment plays
     if (audio == AUDIO_PLAYING && (event == BTN_UP || event == BTN_DOWN) &&
-        (screen == SCREEN_LIST || screen == SCREEN_DAY)) {
+        (screen == SCREEN_LIST || screen == SCREEN_DAY || screen == SCREEN_SPECTRUM)) {
         audioSpeedHold(event == BTN_UP ? 1 : -1);
         return;
     }
@@ -2010,7 +2100,15 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_SETTINGS: handleSettings(event); break;
     case SCREEN_SCHEDULE: handleSchedule(event); break;
     case SCREEN_SPECTRUM:
-        if (event == BTN_CLICK || event == BTN_LONG_CLICK) showScreen(spectrumFrom, spectrumFromSelected);
+        if (event == BTN_UP || event == BTN_DOWN) {
+            spectrumView = spectrumView == VIEW_FFT ? VIEW_SPECTROGRAM : VIEW_FFT;
+        } else if (event == BTN_CLICK) {
+            int index = momentIndexByNumber(spectrumMoment);
+            if (index >= 0) togglePlay(index);
+        } else if (event == BTN_LONG_CLICK) {
+            if (audio == AUDIO_PLAYING) audioStopPlayback();
+            showScreen(spectrumFrom, spectrumFromSelected);
+        }
         break;
     case SCREEN_TRANSFER:
         if (event == BTN_CLICK) {
