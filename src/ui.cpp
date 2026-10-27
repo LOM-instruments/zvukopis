@@ -299,9 +299,11 @@ static void formatTime(char *buf, size_t len, int seconds) {
     snprintf(buf, len, "%d:%02d", seconds / 60, seconds % 60);
 }
 
+// "1h 23m", "1m 15s", "40s": units spelt out, so it can't be read as a clock time
 static void formatTimeLeft(char *buf, size_t len, int seconds) {
     if (seconds >= 3600) snprintf(buf, len, "%dh %02dm", seconds / 3600, seconds / 60 % 60);
-    else formatTime(buf, len, seconds);
+    else if (seconds >= 60) snprintf(buf, len, "%dm %02ds", seconds / 60, seconds % 60);
+    else snprintf(buf, len, "%ds", seconds);
 }
 
 // strftime of a UTC time in local time, without the leading space of %e
@@ -406,10 +408,9 @@ static void iconUpDown(int cx, int cy, uint16_t c) {
     canvas->fillTriangle(cx - 6, cy + 3, cx + 6, cy + 3, cx, cy + 10, c);
 }
 
-static void iconClick(int cx, int cy, bool hold) {
-    canvas->fillCircle(cx, cy, 6, INK);
-    if (hold) canvas->drawCircle(cx, cy, 10, INK);
-}
+// The rocker pressed in: a dot for a short press, a pill for holding it
+static void iconPress(int cx, int cy) { canvas->fillCircle(cx, cy, 6, INK); }
+static void iconHold(int x, int cy) { canvas->fillRoundRect(x, cy - 6, 26, 13, 6, INK); }
 
 static void iconBolt(int cx, int cy) {
     canvas->fillTriangle(cx + 2, cy - 10, cx - 5, cy + 1, cx + 1, cy + 1, INK);
@@ -577,12 +578,12 @@ static int drawHint(int x, int cy, HintIcon icon, const char *label) {
         x += 20;
         break;
     case HINT_CLICK:
-        iconClick(x + 10, cy, false);
+        iconPress(x + 10, cy);
         x += 26;
         break;
     case HINT_HOLD_CLICK:
-        iconClick(x + 10, cy, true);
-        x += 28;
+        iconHold(x + 4, cy);
+        x += 40;
         break;
     case HINT_PWR:
         x += drawKeycap(x, cy, "PWR") + 8;
@@ -670,10 +671,13 @@ static void drawMainHeader(const ViewState &v) {
     } else {
         char left[16];
         formatTimeLeft(left, sizeof(left), v.secondsLeft);
-        snprintf(buf, sizeof(buf), "%s left", left);
+        snprintf(buf, sizeof(buf), "%s to record", left);
     }
     drawText(x + 14, SECOND_BASELINE, &Text22, buf, INK);
-    drawHeaderButton(SW - MARGIN - HEADER_BUTTON, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
+    // The calendar has nothing to show until there are moments
+    if (v.momentCount > 0 || v.selected == ROW_CALENDAR) {
+        drawHeaderButton(SW - MARGIN - HEADER_BUTTON, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
+    }
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -701,10 +705,7 @@ static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewS
     int cy = y + ROW_H / 2;
     iconRecord(MARGIN + 14, cy, fg);
     drawText(MARGIN + 44, cy + 8, &Bold22, "New recording", fg);
-    if (isSelected) {
-        const char *hint = v.secondsLeft < 1 ? (v.sdCard ? "card full" : "memory full") : "click to record";
-        drawTextRight(SW - MARGIN, cy + 8, &Text22, hint, fg);
-    }
+    if (isSelected && v.secondsLeft < 1) drawTextRight(SW - MARGIN, cy + 8, &Text22, v.sdCard ? "card full" : "memory full", fg);
 }
 
 // When the next scheduled recording is, and how long it lasts
@@ -733,8 +734,8 @@ static void drawNextScheduledRow(int y, uint16_t fg, const ViewState &v) {
     }
 }
 
-// Two lines: name, date, tag and duration, then a waveform. While playing,
-// the part not yet played is drawn hollow.
+// Two lines: name, date and tag, duration; then a waveform. While playing,
+// the part not yet played is drawn as hairlines, with a playhead.
 static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, bool showDate) {
     Moment moment;
     if (!momentGet(index, moment)) return;
@@ -747,11 +748,13 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     char buf[32];
     snprintf(buf, sizeof(buf), "Moment %d", moment.number);
     drawText(MARGIN + 44, lineY, &Bold22, buf, fg);
+    int x = MARGIN + 44 + textWidth(&Bold22, buf) + 12;
     if (moment.recordedAt && !playing) { // while playing, the speed takes its place
-        int x = MARGIN + 44 + textWidth(&Bold22, buf) + 12;
         formatLocal(buf, sizeof(buf), showDate ? "%e %b %H:%M" : "%H:%M:%S", moment.recordedAt);
         drawText(x, lineY, &Text22, buf, fg);
+        x += textWidth(&Text22, buf) + 14;
     }
+    if (moment.tag != TAG_NONE) iconTag(moment.tag, x + 11, lineY - 8, 11, fg); // reads as part of the description
 
     char total[12];
     formatTime(total, sizeof(total), momentSeconds(moment));
@@ -766,19 +769,22 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     } else {
         snprintf(buf, sizeof(buf), "%s", total);
     }
-    drawTextRight(SW - MARGIN, lineY, &Mono20, buf, fg);
-    if (moment.tag != TAG_NONE) {
-        iconTag(moment.tag, SW - MARGIN - textWidth(&Mono20, buf) - 20, lineY - 8, 10, fg);
-    }
+    drawTextRight(SW - MARGIN, lineY, &Mono22, buf, fg);
 
     int waveY = y + 68;
     int progressBin = WAVEFORM_BINS;
-    if (playing) progressBin = (int)((float)v.playSeconds * SAMPLE_RATE / moment.length * WAVEFORM_BINS);
+    if (playing && moment.length > 0) {
+        progressBin = constrain((int)((float)v.playSeconds * SAMPLE_RATE / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
+    }
     for (int b = 0; b < WAVEFORM_BINS; b++) {
-        int x = WAVE_X + b * WAVE_PITCH;
+        int bx = WAVE_X + b * WAVE_PITCH;
         int h = 1 + moment.waveform[b] * WAVE_HALF_H / 255;
-        if (b < progressBin) canvas->fillRect(x, waveY - h, 3, 2 * h + 1, fg);
-        else canvas->drawRect(x, waveY - h, 3, 2 * h + 1, fg);
+        if (b < progressBin) canvas->fillRect(bx, waveY - h, 3, 2 * h + 1, fg); // played: full bar
+        else canvas->fillRect(bx + 1, waveY - h, 1, 2 * h + 1, fg);             // still to come: hairline
+    }
+    if (playing) { // playhead, like the one on the analysis screen
+        int px = WAVE_X + progressBin * WAVE_PITCH - 1;
+        canvas->fillRect(px, waveY - WAVE_HALF_H - 4, 3, 2 * WAVE_HALF_H + 9, fg);
     }
 }
 
@@ -825,8 +831,13 @@ static void drawList(const ViewState &v) {
     if (v.momentCount == 0) {
         int cx = SW / 2, y = LIST_TOP + first * ROW_H + 110;
         drawTextCentered(cx, y, &Bold22, "No moments yet", INK);
-        drawTextCentered(cx, y + 38, &Text22, "Click New recording to capture", INK);
-        drawTextCentered(cx, y + 66, &Text22, "the sound of this moment", INK);
+        drawTextCentered(cx, y + 38, &Text22, "Press in the switch on the side", INK);
+        drawTextCentered(cx, y + 70, &Text22, "to capture the sound of this moment", INK);
+        // What the switch does, with the footer's own glyphs
+        int lx = cx - 114;
+        drawHint(lx, y + 128, HINT_UPDOWN, "Up or down: select");
+        drawHint(lx, y + 164, HINT_CLICK, "Press in: record, play");
+        drawHint(lx, y + 200, HINT_HOLD_CLICK, "Hold in: more options");
     }
 }
 
@@ -1142,7 +1153,7 @@ static void drawScheduleScreen(const ViewState &v) {
         formatLocal(when, sizeof(when), s.daily ? "Every day, %H:%M:%S" : "%a %e %b, %H:%M:%S", (time_t)s.start);
         formatTime(length, sizeof(length), s.seconds);
         drawText(MARGIN, y + 33, &Bold22, when, fg);
-        drawTextRight(SW - MARGIN, y + 33, &Mono20, length, fg);
+        drawTextRight(SW - MARGIN, y + 33, &Mono22, length, fg);
         char in[24];
         formatIn(in, sizeof(in), v.clockMinute >= 0 ? s.start - (int64_t)v.clockMinute * 60 : 0);
         if (s.daily) {
@@ -1161,6 +1172,7 @@ static void drawScheduleScreen(const ViewState &v) {
 }
 
 static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, const char *detail, const char *action);
+static const int CONFIRM_Y = 268; // top of the confirm dialogs
 
 static void drawUnscheduleDialog(const ViewState &v) {
     char detail[48] = "";
@@ -1172,7 +1184,7 @@ static void drawUnscheduleDialog(const ViewState &v) {
         formatTime(length, sizeof(length), s.seconds);
         snprintf(detail, sizeof(detail), "%s  -  %s", when, length);
     }
-    drawConfirm(v, [] { iconClock(SW / 2, 268 + 52, 30, INK); }, "Remove recording?", detail, "Remove");
+    drawConfirm(v, [] { iconClock(SW / 2, CONFIRM_Y + 52, 30, INK); }, "Remove recording?", detail, "Remove");
 }
 
 // "2.4 kHz", "180 Hz"
@@ -1364,8 +1376,8 @@ static void drawRecordingView(const ViewState &v) {
     else canvas->fillCircle(cx, 270, 26, INK);
     drawTextCentered(cx, 368, &Bold44, saving ? "Saving" : "Recording", INK);
 
-    char limit[12], started[12], buf[48];
-    formatTime(limit, sizeof(limit), max(1, (int)audioRecordingLimitSeconds()));
+    char limit[16], started[12], buf[48];
+    formatTimeLeft(limit, sizeof(limit), max(1, (int)audioRecordingLimitSeconds()));
     if (v.clockMinute >= 0) {
         formatLocal(started, sizeof(started), "%H:%M", (time_t)v.clockMinute * 60);
         snprintf(buf, sizeof(buf), "started %s  -  up to %s", started, limit);
@@ -1397,7 +1409,7 @@ static void dialogBox(int y, int h) {
 static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, const char *detail, const char *action) {
     shadeBehindDialog();
     const int w = SW - 2 * MARGIN - 16, h = 250;
-    const int x = (SW - w) / 2, y = 268, cx = SW / 2;
+    const int x = (SW - w) / 2, y = CONFIRM_Y, cx = SW / 2;
     dialogBox(y, h);
     icon();
     drawTextCentered(cx, y + 134, &Bold32, title, INK);
@@ -1426,7 +1438,7 @@ static void drawDeleteDialog(const ViewState &v) {
     snprintf(title, sizeof(title), "Delete Moment %d?", moment.number);
     formatTime(duration, sizeof(duration), momentSeconds(moment));
     snprintf(detail, sizeof(detail), "%s  -  can't be undone", duration);
-    drawConfirm(v, [] { iconTrash(SW / 2, 268 + 58); }, title, detail, "Delete");
+    drawConfirm(v, [] { iconTrash(SW / 2, CONFIRM_Y + 58); }, title, detail, "Delete");
 }
 
 static void drawFormatDialog(const ViewState &v) {
@@ -1437,7 +1449,7 @@ static void drawFormatDialog(const ViewState &v) {
         if (!moment.samples) onCard++;
     }
     snprintf(detail, sizeof(detail), "Erases %d moment%s and all else", onCard, onCard == 1 ? "" : "s");
-    drawConfirm(v, [] { iconSdCard(SW / 2 + 24, 268 + 62, 3); }, "Format SD card?", detail, "Format");
+    drawConfirm(v, [] { iconSdCard(SW / 2 + 24, CONFIRM_Y + 62, 3); }, "Format SD card?", detail, "Format");
 }
 
 // Auto, or a fixed gain
@@ -1472,7 +1484,6 @@ static void drawMenu(const ViewState &v) {
     char title[32];
     snprintf(title, sizeof(title), "Moment %d", moment.number);
     drawText(x + 24, y + 46, &Bold32, title, INK);
-    drawTextRight(x + w - 24, y + 46, &Text22, "is about", INK);
 
     for (int i = 0; i < MENU_ITEMS; i++) {
         int iy = y + 70 + i * itemH;
@@ -1596,9 +1607,28 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Stop recording"};
         menuKeys = false;
     } else if (v.overlay != OVERLAY_NONE) {
-        rocker[nr++] = {HINT_UPDOWN, "Choose"};
-        rocker[nr++] = {HINT_CLICK, "Confirm"};
-        menuKeys = false;
+        // The press label says what will happen to the highlighted item
+        const char *press = "Choose";
+        if (v.overlay == OVERLAY_MENU) {
+            Moment moment;
+            if (v.overlayChoice < MENU_ANALYSIS) {
+                bool tagged = momentGet(momentIndexByNumber(v.menuMoment), moment) && moment.tag == TAG_HUMAN + v.overlayChoice;
+                press = tagged ? "Remove tag" : "Tag";
+            } else if (v.overlayChoice == MENU_ANALYSIS) {
+                press = "Open";
+            } else {
+                press = v.overlayChoice == MENU_DELETE ? "Delete..." : "Cancel";
+            }
+        } else if (v.overlay == OVERLAY_GAIN) {
+            press = "Use";
+        } else if (v.overlayChoice == 0) {
+            press = "Cancel";
+        } else {
+            press = v.overlay == OVERLAY_CONFIRM_DELETE ? "Delete" : v.overlay == OVERLAY_CONFIRM_FORMAT ? "Format" : "Remove";
+        }
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, press};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: cancel"};
     } else if (v.screen == SCREEN_TRANSFER) {
         rocker[nr++] = {HINT_CLICK, "Stop the web page"};
         menuKeys = false;
@@ -1606,29 +1636,29 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
+        static const char *const presses[SET_ROWS] = {"Sync now", "Change", "Open", "Start", "Start", "Start", "Format..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
-        rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
+        rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_SPECTRUM) {
         if (playing) rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
         else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram" : "FFT"};
         rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_SCHEDULE) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Back"};
-        if (v.selected >= 0) rocker[nr++] = {HINT_HOLD_CLICK, "Remove"};
+        if (v.selected >= 0) rocker[nr++] = {HINT_HOLD_CLICK, "Hold: remove"};
     } else if (v.screen == SCREEN_CALENDAR) {
         rocker[nr++] = {HINT_UPDOWN, "Day"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (playing && (v.screen == SCREEN_LIST || v.screen == SCREEN_DAY)) {
         rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
-        rocker[nr++] = {HINT_CLICK, "Stop"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Tag, delete"};
+        rocker[nr++] = {HINT_CLICK, "Stop"}; // the hold hint is back once stopped (its row would overflow)
     } else if (v.selected < 0) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
-        rocker[nr++] = {HINT_CLICK, v.screen == SCREEN_DAY ? "Back" : "Calendar"};
+        rocker[nr++] = {HINT_CLICK, v.screen == SCREEN_DAY ? "Back" : "Open calendar"};
     } else if (v.screen == SCREEN_LIST && v.selected == ROW_NEXT_SCHEDULED && v.scheduleCount > 0) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "All scheduled"};
@@ -1638,11 +1668,11 @@ static void drawFooter(const ViewState &v) {
     } else {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Play"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Tag, delete"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: tag, delete"};
     }
     if (menuKeys) {
-        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS ? "Close menu" : "Menu"};
-        keys[nk++] = {HINT_PWR, "Hold: sleep"};
+        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS || v.overlay != OVERLAY_NONE ? "Close" : "Settings"};
+        keys[nk++] = {HINT_PWR, "Hold 2 s to sleep"};
     }
 
     canvas->drawFastHLine(MARGIN, FOOTER_LINE_Y, SW - 2 * MARGIN, INK);
@@ -1873,6 +1903,10 @@ static void handleOverlay(ButtonEvent event) {
         }
         break;
     }
+    case BTN_LONG_CLICK:
+    case BTN_MENU:
+        overlay = OVERLAY_NONE; // same as the Cancel row
+        break;
     default:
         break;
     }
@@ -1896,7 +1930,7 @@ static void handleList(ButtonEvent event) {
     int first = firstMomentRow(scheduled);
     switch (event) {
     case BTN_UP:
-        if (selected > ROW_CALENDAR) selected = selected - 1;
+        if (selected > (momentCount() > 0 ? ROW_CALENDAR : 0)) selected = selected - 1;
         break;
     case BTN_DOWN:
         if (selected < first + momentCount() - 1) selected = selected + 1;

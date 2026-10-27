@@ -25,8 +25,7 @@ FONTS = [
     ("Italic27", "Next", "RegularItalic", 27),
     ("Italic33", "Next", "RegularItalic", 33),
     ("Italic40", "Next", "RegularItalic", 40),
-    ("Mono20", "Mono", "Regular", 20),
-    ("MonoBold20", "Mono", "Bold", 20),
+    ("Mono22", "Mono", "Regular", 22),
 ]
 FIRST, LAST = 0x20, 0x7E
 THRESHOLD = 110  # of 255; a little below half keeps thin strokes whole
@@ -49,7 +48,11 @@ def render(path, px, name):
         while len(bits) % 8:
             bits.append(0)  # each glyph starts on a byte
         advance = (g.advance.x + 32) >> 6
-        glyphs.append((offset, w, h, advance, g.bitmap_left, -g.bitmap_top, code))
+        left = g.bitmap_left
+        if name == "Mono22" and code == 0x3A:
+            # A colon in a full mono cell makes "0:05" read as "0 : 05"; digits stay tabular
+            advance, left = 8, 2
+        glyphs.append((offset, w, h, advance, left, -g.bitmap_top, code))
     data = bytes(int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
     line_height = (face.size.height + 32) >> 6
     out = [f"// {os.path.basename(path)} at {px} px\n"]
