@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <Wire.h>
-#include <esp_sntp.h>
 #include <sys/time.h>
 
 #include "audio.h"
@@ -20,7 +20,9 @@ static const uint8_t RTC_SECONDS_REG = 0x04; // then minutes, hours, days, weekd
 static const int MIN_VALID_YEAR = 2025;
 
 static const uint32_t CONNECT_TIMEOUT_MS = 20000;
-static const uint32_t NTP_TIMEOUT_MS = 10000;
+static const uint32_t NTP_REPLY_MS = 1500; // per request; three per server
+static const uint32_t NTP_UNIX_OFFSET = 2208988800UL; // 1900 to 1970
+static const char *NTP_SERVERS[] = {"pool.ntp.org", "time.google.com"};
 
 static volatile bool valid = false;
 static volatile bool syncPaused = false;
@@ -105,13 +107,7 @@ static ClockSync syncOnce() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     bool connected = waitFor([] { return WiFi.status() == WL_CONNECTED; }, CONNECT_TIMEOUT_MS);
-    bool ok = connected;
-    if (connected) {
-        sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
-        configTzTime(TIME_ZONE, "pool.ntp.org", "time.google.com");
-        ok = waitFor([] { return sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED; }, NTP_TIMEOUT_MS);
-        sntp_stop();
-    }
+    bool ok = connected && clockNtp();
     int status = WiFi.status(); // 1 = network not found, 4 = connect failed (password?), 6 = no answer
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
@@ -121,18 +117,71 @@ static ClockSync syncOnce() {
                       shouldAbort() ? "interrupted" : "failed", millis() - start, status);
         return connected ? CLOCK_SYNC_FAILED : CLOCK_SYNC_NO_WIFI;
     }
-    time_t now = time(nullptr), rtc;
+    return CLOCK_SYNC_DONE;
+}
+#endif
+
+// One NTP exchange with `server`: the time, corrected for half the round trip
+static bool ntpQuery(const char *server, timeval &out) {
+    IPAddress ip;
+    if (!WiFi.hostByName(server, ip)) {
+        Serial.printf("[clock] can't look up %s\n", server);
+        return false;
+    }
+    WiFiUDP udp;
+    udp.begin(0);
+    for (int attempt = 0; attempt < 3 && !syncPaused; attempt++) {
+        uint8_t packet[48] = {0x1B}; // version 3, client
+        udp.beginPacket(ip, 123);
+        udp.write(packet, sizeof(packet));
+        udp.endPacket();
+        int64_t sentUs = esp_timer_get_time();
+        while (esp_timer_get_time() - sentUs < NTP_REPLY_MS * 1000LL) {
+            if (udp.parsePacket() >= 48 && udp.read(packet, sizeof(packet)) == 48) {
+                int64_t roundTripUs = esp_timer_get_time() - sentUs;
+                uint32_t seconds = (uint32_t)packet[40] << 24 | packet[41] << 16 | packet[42] << 8 | packet[43];
+                uint32_t fraction = (uint32_t)packet[44] << 24 | packet[45] << 16 | packet[46] << 8 | packet[47];
+                int64_t us = (int64_t)(seconds - NTP_UNIX_OFFSET) * 1000000 + ((uint64_t)fraction * 1000000 >> 32) +
+                             roundTripUs / 2;
+                out.tv_sec = us / 1000000;
+                out.tv_usec = us % 1000000;
+                udp.stop();
+                Serial.printf("[clock] %s (%s) answered in %lld ms\n", server, ip.toString().c_str(), roundTripUs / 1000);
+                return seconds > NTP_UNIX_OFFSET;
+            }
+            delay(10);
+        }
+    }
+    udp.stop();
+    Serial.printf("[clock] no answer from %s (%s)\n", server, ip.toString().c_str());
+    return false;
+}
+
+bool clockNtp() {
+    uint32_t start = millis();
+    timeval tv;
+    bool ok = false;
+    for (const char *server : NTP_SERVERS) {
+        if ((ok = ntpQuery(server, tv)) || syncPaused) break;
+    }
+    if (!ok) return false;
+    time_t rtc;
     bool hadRtc = rtcRead(rtc);
+    settimeofday(&tv, nullptr);
+
+    time_t now = tv.tv_sec;
     rtcWrite(now);
     valid = true;
     char buf[32];
     tm local;
     localtime_r(&now, &local);
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
-    if (hadRtc) Serial.printf("[clock] synced in %lu ms: %s (RTC was off by %ld s)\n", millis() - start, buf, (long)(rtc - now));
-    else Serial.printf("[clock] synced in %lu ms: %s\n", millis() - start, buf);
-    return CLOCK_SYNC_DONE;
+    if (hadRtc) Serial.printf("[clock] NTP time in %lu ms: %s (RTC was off by %ld s)\n", millis() - start, buf, (long)(rtc - now));
+    else Serial.printf("[clock] NTP time in %lu ms: %s\n", millis() - start, buf);
+    return true;
 }
+
+#ifdef WIFI_SSID
 
 // Waits for clockSyncNow()
 static void syncTask(void *) {

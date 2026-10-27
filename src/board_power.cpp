@@ -42,11 +42,17 @@ bool boardPowerInit() {
 
     // The PWR key belongs to the PMIC, which flags presses in its IRQ status
     // registers and pulls its IRQ line (GPIO38, 10k pull-up) low until they're
-    // cleared. Only the short press is enabled, so a low line means PWR.
+    // cleared. Holding PWR 2 s raises the long-press IRQ (sleep / wake); 10 s
+    // restarts the whole board in hardware. USB plugged in or out also raises
+    // an IRQ, so it wakes the chip too.
     pinMode(PWR_IRQ_PIN, INPUT_PULLUP);
+    pmu.setIrqLevelTime(XPOWERS_AXP2101_IRQ_TIME_2S);
+    pmu.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
+    pmu.setLongPressRestart();
+    pmu.enableLongPressShutdown();
     pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     pmu.clearIrqStatus();
-    pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+    pmu.enableIRQ(XPOWERS_AXP2101_PKEY_LONG_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ);
 
     // Per the schematic only DCDC1 (VCC3V3) and ALDO1-3 (codec, audio, e-paper)
     // are connected; switch off the rest in case the PMIC's defaults enable them
@@ -101,7 +107,7 @@ bool powerKeyPressed() {
     if (!pmuReady) return false;
     if (digitalRead(PWR_IRQ_PIN) == HIGH) return false; // saves an I2C read
     if (pmu.getIrqStatus() == 0) return false;
-    bool pressed = pmu.isPekeyShortPressIrq();
+    bool pressed = pmu.isPekeyLongPressIrq();
     pmu.clearIrqStatus();
     return pressed;
 }
@@ -123,8 +129,11 @@ int batteryPercent() {
     return pmu.getBatteryPercent();
 }
 
+// VBUS good, not XPowersLib's isVbusIn(), which also needs the charger's
+// input limit to be inactive: a weak USB port under load (Wi-Fi, a refresh)
+// then looks like no USB at all
 bool usbPowered() {
-    return pmuReady && pmu.isVbusIn();
+    return pmuReady && pmu.isVbusGood();
 }
 
 void epdPowerOn() {

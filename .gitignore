@@ -1,3 +1,5 @@
 .pio/
 .vscode/
 src/wifi_config.h
+.DS_Store
+__pycache__/

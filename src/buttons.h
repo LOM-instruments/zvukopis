@@ -2,14 +2,14 @@
 
 #include <stdint.h>
 
-// Side rocker (up / click / down) and the BOOT button, polled by a task every 10 ms,
-// plus the PWR key, read from the PMIC every 100 ms.
-// Holding BOOT records directly (start/stop timing doesn't wait for the UI);
-// a short BOOT tap acts like a click.
+// Side rocker (up / click / down), polled by a task every 10 ms, plus the PWR
+// key, read from the PMIC every 100 ms. BOOT isn't used.
 
 enum ButtonEvent {
-    BTN_UP,
+    BTN_UP, // on press
     BTN_DOWN,
+    BTN_UP_RELEASE,
+    BTN_DOWN_RELEASE,
     BTN_CLICK,
     BTN_LONG_CLICK, // fires once while the click button is held
     BTN_POWER,      // short press of PWR

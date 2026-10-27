@@ -2,7 +2,7 @@
 
 #include "buttons.h"
 
-// Voice memo screen. A display task on core 1 redraws the whole screen into an
+// Voice moment screen. A display task on core 1 redraws the whole screen into an
 // off-screen canvas whenever what it shows changes, and pushes it to the panel
 // with a partial refresh (full refresh at start and now and then to clear ghosting).
 

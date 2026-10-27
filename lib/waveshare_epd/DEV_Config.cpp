@@ -29,6 +29,12 @@
 ******************************************************************************/
 #include "DEV_Config.h"
 
+#include <SPI.h>
+
+// Hardware SPI instead of the original bit-banging, which took about half a
+// second per screen at 80 MHz. The panel takes up to 20 MHz.
+static const SPISettings EPD_SPI(10000000, MSBFIRST, SPI_MODE0);
+
 void GPIO_Config(void)
 {
 #if D_9PIN
@@ -69,11 +75,8 @@ UBYTE DEV_Module_Init(void)
 	//serial printf
 	Serial.begin(115200);
 
-	// spi
-	// SPI.setDataMode(SPI_MODE0);
-	// SPI.setBitOrder(MSBFIRST);
-	// SPI.setClockDivider(SPI_CLOCK_DIV4);
-	// SPI.begin();
+	// spi (chip select stays a plain GPIO, driven by the callers)
+	SPI.begin(EPD_SCK_PIN, -1, EPD_MOSI_PIN, -1);
 
 	return 0;
 }
@@ -84,22 +87,11 @@ function:
 ******************************************************************************/
 void DEV_SPI_WriteByte(UBYTE data)
 {
-    //SPI.beginTransaction(spi_settings);
     digitalWrite(EPD_CS_PIN, GPIO_PIN_RESET);
-
-    for (int i = 0; i < 8; i++)
-    {
-        if ((data & 0x80) == 0) digitalWrite(EPD_MOSI_PIN, GPIO_PIN_RESET); 
-        else                    digitalWrite(EPD_MOSI_PIN, GPIO_PIN_SET);
-
-        data <<= 1;
-        digitalWrite(EPD_SCK_PIN, GPIO_PIN_SET);     
-        digitalWrite(EPD_SCK_PIN, GPIO_PIN_RESET);
-    }
-
-    //SPI.transfer(data);
+    SPI.beginTransaction(EPD_SPI);
+    SPI.transfer(data);
+    SPI.endTransaction();
     digitalWrite(EPD_CS_PIN, GPIO_PIN_SET);
-    //SPI.endTransaction();	
 }
 
 UBYTE DEV_SPI_ReadByte()
@@ -121,10 +113,13 @@ UBYTE DEV_SPI_ReadByte()
     return j;
 }
 
-void DEV_SPI_Write_nByte(UBYTE *pData, UDOUBLE len)
+void DEV_SPI_Write_nByte(const UBYTE *pData, UDOUBLE len)
 {
-    for (int i = 0; i < len; i++)
-        DEV_SPI_WriteByte(pData[i]);
+    digitalWrite(EPD_CS_PIN, GPIO_PIN_RESET);
+    SPI.beginTransaction(EPD_SPI);
+    SPI.writeBytes(pData, len);
+    SPI.endTransaction();
+    digitalWrite(EPD_CS_PIN, GPIO_PIN_SET);
 }
 
 

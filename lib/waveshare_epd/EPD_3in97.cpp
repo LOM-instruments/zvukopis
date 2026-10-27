@@ -71,6 +71,13 @@ static void EPD_3IN97_SendData(UBYTE Data)
     DEV_Digital_Write(EPD_CS_PIN, 1);
 }
 
+// Image data in one SPI transfer
+static void EPD_3IN97_SendDataBlock(const UBYTE *Data, UDOUBLE Len)
+{
+    DEV_Digital_Write(EPD_DC_PIN, 1);
+    DEV_SPI_Write_nByte(Data, Len);
+}
+
 /******************************************************************************
 function :	Wait until the busy_pin goes LOW
 parameter:
@@ -78,7 +85,7 @@ parameter:
 static void EPD_3IN97_ReadBusy(void)
 {
     Debug("e-Paper busy\r\n");
-    DEV_Delay_ms(100);
+    DEV_Delay_ms(10); // BUSY rises within microseconds of the command
     uint32_t start = millis();
     while(DEV_Digital_Read(EPD_BUSY_PIN) == 1) {      //LOW: idle, HIGH: busy
         DEV_Delay_ms(10);
@@ -353,12 +360,7 @@ void EPD_3IN97_Display(const UBYTE *Image)
     Height = EPD_3IN97_HEIGHT;
 
     EPD_3IN97_SendCommand(0x24);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
     EPD_3IN97_TurnOnDisplay();
 }
 
@@ -369,20 +371,10 @@ void EPD_3IN97_Display_Base(const UBYTE *Image)
     Height = EPD_3IN97_HEIGHT;
 
     EPD_3IN97_SendCommand(0x24);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
 
     EPD_3IN97_SendCommand(0x26);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
     EPD_3IN97_TurnOnDisplay();
 }
 
@@ -393,12 +385,7 @@ void EPD_3IN97_Display_Fast(const UBYTE *Image)
     Height = EPD_3IN97_HEIGHT;
 
     EPD_3IN97_SendCommand(0x24);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
     EPD_3IN97_TurnOnDisplay_Fast();
 }
 
@@ -409,20 +396,10 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
     Height = EPD_3IN97_HEIGHT;
 
     EPD_3IN97_SendCommand(0x24);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
 
     EPD_3IN97_SendCommand(0x26);
-    for (UWORD j = 0; j < Height; j++) {
-        for (UWORD i = 0; i < Width; i++) {
-            EPD_3IN97_SendData(Image[i + j * Width]);
-        }
-        DEV_Delay_ms(1);
-    }
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)Width * Height);
     EPD_3IN97_TurnOnDisplay_Fast();
 }
 
@@ -540,9 +517,7 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
     EPD_3IN97_SendData((Ystart >> 8) & 0xFF);
 
 	EPD_3IN97_SendCommand(0x24);   //Write Black and White image to RAM
-    for (i = 0; i < IMAGE_COUNTER; i++) {
-	    EPD_3IN97_SendData(Image[i]);
-	}
+    EPD_3IN97_SendDataBlock(Image, IMAGE_COUNTER);
 
 	EPD_3IN97_TurnOnDisplay_Part();
 }

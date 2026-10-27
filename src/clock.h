@@ -29,6 +29,7 @@ void clockSyncNow();       // starts a sync in the background
 // State of the last sync, and when it started or finished (millis)
 ClockSync clockSyncState(uint32_t &since);
 bool clockSyncing();
+bool clockNtp(); // with Wi-Fi already connected: NTP time into the clock and RTC
 
 // Sleep: stops a sync in progress (switching Wi-Fi off) and holds off new ones
 void clockPauseSync(bool paused);

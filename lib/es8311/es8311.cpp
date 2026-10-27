@@ -451,6 +451,18 @@ esp_err_t es8311_microphone_gain_set(es8311_handle_t dev, es8311_mic_gain_t gain
     return es8311_write_reg(dev, ES8311_ADC_REG16, gain_db); // ADC gain scale up
 }
 
+esp_err_t es8311_microphone_pga_set(es8311_handle_t dev, int steps)
+{
+    if (steps < 0) steps = 0;
+    if (steps > 10) steps = 10;
+    return es8311_write_reg(dev, ES8311_SYSTEM_REG14, 0x10 | steps); // analog mic (MIC1P/N) + PGA gain
+}
+
+esp_err_t es8311_adc_volume_set(es8311_handle_t dev, uint8_t reg17)
+{
+    return es8311_write_reg(dev, ES8311_ADC_REG17, reg17);
+}
+
 esp_err_t es8311_voice_fade(es8311_handle_t dev, const es8311_fade_t fade)
 {
     uint8_t reg37;

@@ -169,6 +169,17 @@ esp_err_t es8311_power_down(es8311_handle_t dev);
 esp_err_t es8311_microphone_gain_set(es8311_handle_t dev, es8311_mic_gain_t gain_db);
 
 /**
+ * @brief Set the analog mic preamp (PGA) gain, in 3 dB steps: 0 (0 dB) to 10 (30 dB).
+ *        es8311_microphone_gain_set() is the digital scaling after the ADC.
+ */
+esp_err_t es8311_microphone_pga_set(es8311_handle_t dev, int steps);
+
+/**
+ * @brief Set the ADC digital volume register (0xBF = 0 dB, 0.5 dB steps)
+ */
+esp_err_t es8311_adc_volume_set(es8311_handle_t dev, uint8_t reg17);
+
+/**
  * @brief Configure microphone
  *
  * @param dev ES8311 handle

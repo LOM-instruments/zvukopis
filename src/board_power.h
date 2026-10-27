@@ -13,10 +13,12 @@ void epdPowerOff();
 int batteryPercent(); // 0-100, or -1 without a battery
 bool usbPowered();
 
-// True once for each short press of PWR since the last call. A long hold
-// (about 6 s) still powers the board off in hardware.
+// True once for each 2 s hold of PWR since the last call (it fires while
+// still held). Holding on to 10 s restarts the board in hardware.
+// Also clears the PMIC's other events (USB plugged in or out).
 bool powerKeyPressed();
 
-// Lets a PWR press wake the chip from light sleep (the PMIC's IRQ line, GPIO38)
+// Lets a PWR hold, or USB being plugged in or out, wake the chip from light
+// sleep (the PMIC's IRQ line, GPIO38)
 void powerKeyWakeup(bool enable);
-bool powerKeyPending(); // IRQ line low: a press not yet read by powerKeyPressed()
+bool powerKeyPending(); // IRQ line low: an event not yet read by powerKeyPressed()

@@ -7,6 +7,10 @@
 #define WIFI_SSID "your network"
 #define WIFI_PASSWORD "your password"
 
+// File transfer opens its own hotspot "zvukopis" when the network above isn't
+// in reach. At least 8 characters.
+#define HOTSPOT_PASSWORD "zvukopis"
+
 // POSIX TZ string for local time on screen and in file names.
 // Central Europe: "CET-1CEST,M3.5.0,M10.5.0/3", UK: "GMT0BST,M3.5.0/1,M10.5.0",
 // US Eastern: "EST5EDT,M3.2.0,M11.1.0"

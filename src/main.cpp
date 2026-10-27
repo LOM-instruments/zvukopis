@@ -21,7 +21,8 @@ static uint32_t napTotalMs = 0, napCount = 0, wokeAt = 0;
 // These survive resets (not power-offs), so a session on battery can be
 // checked after plugging in, which resets the board when the port is opened
 RTC_NOINIT_ATTR static uint32_t bootCount;
-RTC_NOINIT_ATTR static uint32_t lastUpMs, lastNapMs, lastNaps;
+RTC_NOINIT_ATTR static uint32_t lastUpMs, lastNapMs, lastNaps, lastSleepMs;
+static uint32_t sleepTotalMs = 0; // in sleep mode, on battery
 
 // Light sleep stops the USB clock and the host gives up on the port. Pulling
 // D+ low for a moment looks like an unplug and replug, so the host enumerates
@@ -63,7 +64,7 @@ static void nap(uint32_t ms) {
 }
 
 // Between button presses the chip light-sleeps (about 1 mA instead of tens):
-// the e-paper keeps showing the screen, PSRAM keeps the memos, and a key press
+// the e-paper keeps showing the screen, PSRAM keeps the moments, and a key press
 // wakes it within a few ms. A timer wakes it for the clock's next minute.
 // Not on USB power, where it would cut off the serial port.
 static void napIfIdle() {
@@ -72,21 +73,24 @@ static void napIfIdle() {
     uint32_t ms = uiMsUntilNextChange();
     if (ms < MIN_NAP_MS) return;
     nap(ms);
-    if (onUsbPower()) usbReconnect(); // plugged in while napping
+    if (usbPowered()) usbReconnect(); // plugged in while napping (that wakes it too)
 }
 
 static void printPowerStats() {
     uint32_t up = millis();
-    Serial.printf("[power] up %lu s, light-slept %lu s (%.1f%%) in %lu naps, CPU %lu MHz, %s, battery %d%%\n",
-                  up / 1000, napTotalMs / 1000, 100.0f * napTotalMs / max(up, (uint32_t)1), napCount,
+    Serial.printf("[power] up %lu s, sleep mode %lu s, light-slept %lu s in %lu naps, CPU %lu MHz, %s, battery %d%%\n",
+                  up / 1000, sleepTotalMs / 1000, napTotalMs / 1000, napCount,
                   getCpuFrequencyMhz(), usbPowered() ? "on USB" : "on battery", batteryPercent());
 }
 
-// Light sleep keeps PSRAM powered, so memos held in memory survive it.
-// A PWR press pulls the PMIC's IRQ line low, which wakes the chip.
-// On USB power the chip stays awake instead: light sleep shuts down its USB
-// port, which doesn't come back afterwards, and power isn't scarce then.
-// A 'p' over serial also wakes it in that case.
+// Light sleep keeps PSRAM powered, so moments held in memory survive it.
+// A PWR hold pulls the PMIC's IRQ line low, which wakes the chip; so does USB
+// being plugged in, and a timer once a minute in case that was missed.
+// On USB power the chip stays awake instead, so its serial port keeps working;
+// power isn't scarce then. A 'p' over serial also wakes it in that case.
+// Returns false when the power source changed, to be called again.
+static const uint64_t SLEEP_RECHECK_US = 60 * 1000 * 1000ULL;
+
 static bool sleepUntilPowerKey() {
     if (usbPowered()) {
         while (Serial.available()) Serial.read();
@@ -94,18 +98,28 @@ static bool sleepUntilPowerKey() {
             delay(USB_POLL_MS);
             if (powerKeyPressed()) return true;
             while (Serial.available()) {
-                if (Serial.read() == 'p') return true;
+                int c = Serial.read();
+                if (c == 'p') return true;
+                if (c == 's') uiRequestScreenshot(); // of the sleep screen
             }
             if (!usbPowered()) return false; // unplugged: continue in light sleep
         }
     }
     powerKeyWakeup(true);
+    esp_sleep_enable_timer_wakeup(SLEEP_RECHECK_US);
+    uint32_t start = millis();
+    bool pressed;
     do {
         esp_light_sleep_start();
-    } while (!powerKeyPressed());
+        pressed = powerKeyPressed();
+    } while (!pressed && !usbPowered());
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     powerKeyWakeup(false);
+    sleepTotalMs += millis() - start;
+    lastUpMs = millis();
+    lastSleepMs = sleepTotalMs;
     if (usbPowered()) usbReconnect(); // plugged in while asleep
-    return true;
+    return pressed;
 }
 
 static void goToSleep() {
@@ -119,7 +133,7 @@ static void goToSleep() {
 
     powerKeyPressed(); // drop a press made while the sleep screen was drawn
     while (!sleepUntilPowerKey()) {
-        Serial.println("[sleep] USB unplugged, switching to light sleep");
+        Serial.printf("[sleep] now on %s\n", usbPowered() ? "USB" : "battery");
     }
 
     Serial.println("[sleep] woke up");
@@ -128,16 +142,16 @@ static void goToSleep() {
     clockPauseSync(false);
 }
 
-// Debug: newest memo's raw samples as base64, for analysis on a computer
-static void dumpNewestMemo() {
-    Memo memo;
-    if (!memoGet(0, memo) || !memo.samples) {
-        Serial.println("No memo in memory to dump");
+// Debug: newest moment's raw samples as base64, for analysis on a computer
+static void dumpNewestMoment() {
+    Moment moment;
+    if (!momentGet(0, moment) || !moment.samples) {
+        Serial.println("No moment in memory to dump");
         return;
     }
-    Serial.printf("AUDIO-BEGIN memo=%d samples=%u\n", memo.number, memo.length);
-    const uint8_t *bytes = (const uint8_t *)memo.samples;
-    size_t total = memo.length * sizeof(int16_t);
+    Serial.printf("AUDIO-BEGIN moment=%d samples=%u\n", moment.number, moment.length);
+    const uint8_t *bytes = (const uint8_t *)moment.samples;
+    size_t total = moment.length * sizeof(int16_t);
     unsigned char line[80];
     for (size_t i = 0; i < total; i += 57) {
         size_t outLen = 0;
@@ -154,25 +168,26 @@ void setup() {
     DEV_Module_Init(); // e-paper GPIO setup + Serial.begin(115200)
     // Wait (up to 3 s) for a USB serial monitor so the first lines aren't lost
     while (!Serial && millis() < 3000) delay(10);
-    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = lastUpMs = lastNapMs = lastNaps = 0;
+    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = lastUpMs = lastNapMs = lastNaps = lastSleepMs = 0;
     Serial.printf("zvukopis starting (boot %lu, reset reason %d)\n", ++bootCount, esp_reset_reason());
-    if (lastNaps > 0 && lastNapMs <= lastUpMs) {
-        Serial.printf("[power] previous boot: light-slept %lu of %lu s (%.1f%%) in %lu naps\n",
-                      lastNapMs / 1000, lastUpMs / 1000, 100.0f * lastNapMs / lastUpMs, lastNaps);
+    if (lastUpMs > 0 && lastNapMs + lastSleepMs <= lastUpMs) {
+        Serial.printf("[power] previous boot: up %lu s, of which %lu s in sleep mode and %lu s light-sleeping "
+                      "between presses (%lu naps)\n",
+                      lastUpMs / 1000, lastSleepMs / 1000, lastNapMs / 1000, lastNaps);
     }
-    lastUpMs = lastNapMs = lastNaps = 0;
+    lastUpMs = lastNapMs = lastNaps = lastSleepMs = 0;
     setCpuFrequencyMhz(CPU_MHZ);
 
     boardPowerInit(); // also starts the I2C bus shared with the audio codec
     epdPowerOn();
     EPD_3IN97_Init();
-    clockInit(); // before audio, so memos get start times
+    clockInit(); // before audio, so moments get start times
 
     if (!audioInit()) Serial.println("Audio init failed");
     uiStart();
     buttonsInit();
-    Serial.println("Serial commands: u/d = up/down, c = click, l = long click, "
-                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest memo, "
+    Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, "
+                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, "
                    "P = power stats, z = 3 s light sleep test (drops USB)");
 }
 
@@ -181,6 +196,8 @@ void loop() {
         switch (Serial.read()) {
         case 'u': buttonsInject(BTN_UP); break;
         case 'd': buttonsInject(BTN_DOWN); break;
+        case 'U': buttonsInject(BTN_UP_RELEASE); break;
+        case 'D': buttonsInject(BTN_DOWN_RELEASE); break;
         case 'c': buttonsInject(BTN_CLICK); break;
         case 'l': buttonsInject(BTN_LONG_CLICK); break;
         case 'r':
@@ -190,7 +207,7 @@ void loop() {
         case 't': audioSelfTest(); break;
         case 's': uiRequestScreenshot(); break;
         case 'p': buttonsInject(BTN_POWER); break;
-        case 'a': dumpNewestMemo(); break;
+        case 'a': dumpNewestMoment(); break;
         case 'T': clockSet((time_t)Serial.parseInt()); break;
         case 'P': printPowerStats(); break;
         case 'z':
