@@ -1637,7 +1637,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_SPECTRUM) {
-        if (playing) rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
+        if (playing) rocker[nr++] = {HINT_UPDOWN, "Up or down: speed"};
         else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram" : "FFT"};
         rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -1650,7 +1650,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (playing && (v.screen == SCREEN_LIST || v.screen == SCREEN_DAY)) {
-        rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
+        rocker[nr++] = {HINT_UPDOWN, "Up or down: speed"};
         rocker[nr++] = {HINT_CLICK, "Stop"}; // the hold hint is back once stopped (its row would overflow)
     } else if (v.selected < 0) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
@@ -1713,40 +1713,13 @@ static void render(const ViewState &v) {
 
 // --- Panel output ---
 
-// Partial refresh of only the band of the screen that changed since the last
-// push (the panel's update takes the same ~0.5 s whatever the size, but the
-// transfer shrinks from 48 KB to the band, and the rest of the screen isn't
-// re-driven). The panel is landscape: a band of portrait rows is a range of
-// panel columns, so the window is found by comparing byte columns.
-static uint8_t *shownBuffer = nullptr; // what the panel shows, for the comparison
-static uint8_t *bandBuffer = nullptr;
-
 static void pushPartial(const ViewState &v) {
     uint32_t start = millis();
-    const int rowBytes = EPD_3IN97_WIDTH / 8, rows = EPD_3IN97_HEIGHT;
-    const uint8_t *now = canvas->getBuffer();
-    int first = rowBytes, last = -1;
-    if (shownBuffer) {
-        for (int r = 0; r < rows; r++) {
-            const uint8_t *a = now + r * rowBytes, *b = shownBuffer + r * rowBytes;
-            for (int c = 0; c < rowBytes; c++) {
-                if (a[c] != b[c]) {
-                    if (c < first) first = c;
-                    if (c > last) last = c;
-                }
-            }
-        }
-    } else {
-        first = 0;
-        last = rowBytes - 1;
-    }
-    if (last < 0) return; // nothing differs
-    int width = last - first + 1;
-    for (int r = 0; r < rows; r++) memcpy(bandBuffer + r * width, now + r * rowBytes + first, width);
-    memcpy(shownBuffer, now, rowBytes * rows);
-    Serial.printf("[display] %lu ms: refresh (screen %d, selected %d, moments %d, audio %d, overlay %d), %d of %d columns\n",
-                  start, v.screen, v.selected, v.momentCount, v.audio, v.overlay, width, rowBytes);
-    EPD_3IN97_Display_Partial(bandBuffer, first * 8, 0, (last + 1) * 8, EPD_3IN97_HEIGHT);
+    Serial.printf("[display] %lu ms: refresh (screen %d, selected %d, moments %d, audio %d, overlay %d)\n",
+                  start, v.screen, v.selected, v.momentCount, v.audio, v.overlay);
+    // The whole buffer every time: a sub-window made the panel show the band in
+    // the wrong place, and the transfer is only ~40 ms of the ~0.5 s update
+    EPD_3IN97_Display_Partial(canvas->getBuffer(), 0, 0, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
     Serial.printf("[display] partial refresh took %lu ms\n", millis() - start);
 }
 
@@ -1754,7 +1727,6 @@ static void pushFull() {
     uint32_t start = millis();
     EPD_3IN97_Init();
     EPD_3IN97_Display_Base(canvas->getBuffer()); // writes both panel buffers, which partial refreshes build on
-    if (shownBuffer) memcpy(shownBuffer, canvas->getBuffer(), EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
     Serial.printf("[display] %lu ms: full refresh took %lu ms\n", start, millis() - start);
 }
 
@@ -1822,8 +1794,6 @@ static void displayTask(void *) {
 void uiStart() {
     canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
     canvas->setRotation(SCREEN_ROTATION);
-    shownBuffer = (uint8_t *)ps_malloc(EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
-    bandBuffer = (uint8_t *)ps_malloc(EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
     loopDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     displayDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     render(currentView());
