@@ -85,10 +85,10 @@ parameter:
 static void EPD_3IN97_ReadBusy(void)
 {
     Debug("e-Paper busy\r\n");
-    DEV_Delay_ms(10); // BUSY rises within microseconds of the command
+    DEV_Delay_ms(1); // BUSY rises within microseconds of the command
     uint32_t start = millis();
     while(DEV_Digital_Read(EPD_BUSY_PIN) == 1) {      //LOW: idle, HIGH: busy
-        DEV_Delay_ms(10);
+        DEV_Delay_ms(2);
         // Don't hang forever if the panel never reports ready
         if (millis() - start > 10000) {
             Serial.println("[epd] BUSY still high after 10 s, giving up");
@@ -485,7 +485,8 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
     Xend -= 1;
 	Yend -= 1;	
 
-    EPD_3IN97_Reset();
+    // No hardware reset here: the controller keeps its settings between
+    // updates (the full refresh re-initialises it), and the reset cost 42 ms
 
     EPD_3IN97_SendCommand(0x18);
     EPD_3IN97_SendData(0x80);

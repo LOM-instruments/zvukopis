@@ -234,7 +234,7 @@ struct ViewState {
     int spectrumMoment;
     int spectrumReady;
     int spectrumView;
-    int playQuarters; // playback position on the analysis screen, for its playhead
+    int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
 
@@ -289,7 +289,7 @@ static ViewState currentView() {
     v.spectrumMoment = spectrumMoment;
     v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
     v.spectrumView = spectrumView;
-    if (screen == SCREEN_SPECTRUM && v.audio == AUDIO_PLAYING) v.playQuarters = (int)(audioPlaybackSeconds() * 4);
+    if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
     return v;
 }
 
@@ -774,7 +774,7 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     int waveY = y + 68;
     int progressBin = WAVEFORM_BINS;
     if (playing && moment.length > 0) {
-        progressBin = constrain((int)((float)v.playSeconds * SAMPLE_RATE / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
+        progressBin = constrain((int)(v.playTicks / 8.0f * SAMPLE_RATE / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
     }
     for (int b = 0; b < WAVEFORM_BINS; b++) {
         int bx = WAVE_X + b * WAVE_PITCH;
@@ -1246,7 +1246,7 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
 
     // Playhead: an ink line with paper edges, and a marker above the plot
     if (v.audio == AUDIO_PLAYING && sp->seconds > 0) {
-        int x = PLOT_X + constrain((int)(v.playQuarters / 4.0f / sp->seconds * PLOT_W), 0, PLOT_W - 1);
+        int x = PLOT_X + constrain((int)(v.playTicks / 8.0f / sp->seconds * PLOT_W), 0, PLOT_W - 1);
         canvas->fillRect(x - 2, PLOT_Y, 5, PLOT_H, PAPER);
         canvas->fillRect(x - 1, PLOT_Y, 3, PLOT_H, INK);
         canvas->fillTriangle(x - 7, PLOT_Y - 10, x + 7, PLOT_Y - 10, x, PLOT_Y - 2, INK);
@@ -1385,10 +1385,6 @@ static void drawRecordingView(const ViewState &v) {
         snprintf(buf, sizeof(buf), "up to %s", limit);
     }
     drawTextCentered(cx, 412, &Text22, buf, INK);
-    if (!saving) {
-        drawTextCentered(cx, 500, &Text17, "The screen stays still while recording,", INK);
-        drawTextCentered(cx, 522, &Text17, "so it doesn't add noise to the audio.", INK);
-    }
 }
 
 // Shades everything below the header so a dialog stands out; returns nothing
@@ -1668,7 +1664,7 @@ static void drawFooter(const ViewState &v) {
     } else {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Play"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: tag, delete"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: actions"};
     }
     if (menuKeys) {
         keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS || v.overlay != OVERLAY_NONE ? "Close" : "Settings"};
@@ -1717,11 +1713,40 @@ static void render(const ViewState &v) {
 
 // --- Panel output ---
 
+// Partial refresh of only the band of the screen that changed since the last
+// push (the panel's update takes the same ~0.5 s whatever the size, but the
+// transfer shrinks from 48 KB to the band, and the rest of the screen isn't
+// re-driven). The panel is landscape: a band of portrait rows is a range of
+// panel columns, so the window is found by comparing byte columns.
+static uint8_t *shownBuffer = nullptr; // what the panel shows, for the comparison
+static uint8_t *bandBuffer = nullptr;
+
 static void pushPartial(const ViewState &v) {
     uint32_t start = millis();
-    Serial.printf("[display] %lu ms: refresh (screen %d, selected %d, moments %d, audio %d, overlay %d)\n",
-                  start, v.screen, v.selected, v.momentCount, v.audio, v.overlay);
-    EPD_3IN97_Display_Partial(canvas->getBuffer(), 0, 0, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
+    const int rowBytes = EPD_3IN97_WIDTH / 8, rows = EPD_3IN97_HEIGHT;
+    const uint8_t *now = canvas->getBuffer();
+    int first = rowBytes, last = -1;
+    if (shownBuffer) {
+        for (int r = 0; r < rows; r++) {
+            const uint8_t *a = now + r * rowBytes, *b = shownBuffer + r * rowBytes;
+            for (int c = 0; c < rowBytes; c++) {
+                if (a[c] != b[c]) {
+                    if (c < first) first = c;
+                    if (c > last) last = c;
+                }
+            }
+        }
+    } else {
+        first = 0;
+        last = rowBytes - 1;
+    }
+    if (last < 0) return; // nothing differs
+    int width = last - first + 1;
+    for (int r = 0; r < rows; r++) memcpy(bandBuffer + r * width, now + r * rowBytes + first, width);
+    memcpy(shownBuffer, now, rowBytes * rows);
+    Serial.printf("[display] %lu ms: refresh (screen %d, selected %d, moments %d, audio %d, overlay %d), %d of %d columns\n",
+                  start, v.screen, v.selected, v.momentCount, v.audio, v.overlay, width, rowBytes);
+    EPD_3IN97_Display_Partial(bandBuffer, first * 8, 0, (last + 1) * 8, EPD_3IN97_HEIGHT);
     Serial.printf("[display] partial refresh took %lu ms\n", millis() - start);
 }
 
@@ -1729,6 +1754,7 @@ static void pushFull() {
     uint32_t start = millis();
     EPD_3IN97_Init();
     EPD_3IN97_Display_Base(canvas->getBuffer()); // writes both panel buffers, which partial refreshes build on
+    if (shownBuffer) memcpy(shownBuffer, canvas->getBuffer(), EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
     Serial.printf("[display] %lu ms: full refresh took %lu ms\n", start, millis() - start);
 }
 
@@ -1796,6 +1822,8 @@ static void displayTask(void *) {
 void uiStart() {
     canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
     canvas->setRotation(SCREEN_ROTATION);
+    shownBuffer = (uint8_t *)ps_malloc(EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
+    bandBuffer = (uint8_t *)ps_malloc(EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT);
     loopDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     displayDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     render(currentView());
