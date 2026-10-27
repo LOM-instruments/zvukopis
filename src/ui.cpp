@@ -38,6 +38,7 @@ static const int FULL_REFRESH_EVERY = 30; // partial refreshes, before a full on
 static const uint32_t CONFIRM_TIMEOUT_MS = 10000;
 static const uint32_t SLEEP_SCREEN_TIMEOUT_MS = 15000;
 static const uint32_t BATTERY_READ_MS = 30000;
+static const uint32_t AUTO_SLEEP_MS = 5 * 60 * 1000; // idle time before sleeping on its own
 
 // UI state: written by loop(), read by the display task
 static volatile int selected = 0; // row 0 = "New recording", row n = memo n-1
@@ -45,6 +46,7 @@ static volatile bool confirmDelete = false;
 static volatile int confirmChoice = 0; // 0 = Cancel, 1 = Delete
 static uint32_t confirmSince = 0;
 static volatile bool sleepRequested = false;
+static uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
 static volatile bool panelAsleep = false; // what the display task has done
 static int lastMemoCount = 0;
@@ -627,6 +629,7 @@ void uiHandleEvent(ButtonEvent event) {
     AudioState audio = audioState();
     Serial.printf("[ui] %lu ms: %s (selected %d, audio %d, confirm %d)\n",
                   millis(), eventName(event), (int)selected, (int)audio, (int)confirmDelete);
+    lastActivity = millis();
 
     if (event == BTN_POWER) {
         confirmDelete = false;
@@ -685,6 +688,13 @@ void uiTick() {
     lastMemoCount = count;
     if (selected > count) selected = count;
     if (confirmDelete && millis() - confirmSince > CONFIRM_TIMEOUT_MS) confirmDelete = false;
+
+    if (audioState() != AUDIO_IDLE) lastActivity = millis();
+    if (millis() - lastActivity > AUTO_SLEEP_MS) {
+        Serial.printf("[ui] idle for %lu s, going to sleep\n", AUTO_SLEEP_MS / 1000);
+        lastActivity = millis();
+        sleepRequested = true;
+    }
 }
 
 void uiRequestScreenshot() { screenshotRequested = true; }
@@ -697,7 +707,10 @@ bool uiTakeSleepRequest() {
 
 void uiShowSleepScreen(bool on) {
     sleeping = on;
-    if (!on) return; // waking happens in the background
+    if (!on) {
+        lastActivity = millis(); // a full idle period again after waking
+        return; // waking happens in the background
+    }
     uint32_t start = millis();
     while (!panelAsleep && millis() - start < SLEEP_SCREEN_TIMEOUT_MS) delay(20);
 }
