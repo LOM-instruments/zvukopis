@@ -30,15 +30,14 @@ static const int SW = EPD_3IN97_HEIGHT; // 480
 static const int SH = EPD_3IN97_WIDTH;  // 800
 
 static const int MARGIN = 24;
-static const int HEADER_LINE_Y = 100;
-static const int LIST_TOP = 116;
+static const int HEADER_LINE_Y = 90;
+static const int LIST_TOP = 106;
 static const int ROW_H = 96;
 static const int VISIBLE_ROWS = 6;
 static const int FOOTER_LINE_Y = 708;
 static const int WAVE_X = MARGIN + 44;
 static const int WAVE_PITCH = 5; // bar width 3 + gap 2
 static const int WAVE_HALF_H = 15;
-static const int ICON_BOX = 40; // header buttons
 
 static const int FULL_REFRESH_EVERY = 30; // partial refreshes, before a full one clears ghosting
 static const uint32_t FULL_REFRESH_IDLE_MS = 20000; // ...done once the buttons have been left alone this long
@@ -83,7 +82,7 @@ static const int MENU_CANCEL = TAG_COUNT + 1;
 static const int MENU_ITEMS = TAG_COUNT + 2;
 
 // Frequency analysis plot; labels go left of and below it
-static const int PLOT_X = MARGIN + 46, PLOT_Y = 124;
+static const int PLOT_X = MARGIN + 46, PLOT_Y = 116;
 static const int PLOT_W = SW - MARGIN - PLOT_X, PLOT_H = 436;
 
 
@@ -611,7 +610,9 @@ static void drawHeaderButton(int x, int cy, int size, bool isSelected, void (*ic
 // Header status text: one size and weight, on the title's baseline, with the
 // icons centred on its lowercase letters
 static const GFXfont *const STATUS_FONT = &Text22;
-static const int TITLE_BASELINE = 50;
+static const int TITLE_BASELINE = 40; // first header line; the second is SECOND_BASELINE
+static const int SECOND_BASELINE = 74;
+static const int HEADER_BUTTON = 34;  // calendar and Back buttons
 
 static int drawStatus(int right, int baseline, const ViewState &v) {
     int x = right, cy = baseline - 8;
@@ -644,26 +645,26 @@ static void formatDateTime(char *buf, size_t len, const ViewState &v) {
 static void drawDateTime(const ViewState &v) {
     char buf[24];
     formatDateTime(buf, sizeof(buf), v);
-    drawTextRight(SW - MARGIN, 84, STATUS_FONT, buf, INK);
+    drawTextRight(SW - MARGIN, SECOND_BASELINE, STATUS_FONT, buf, INK);
 }
 
 // First line: name, date and time, battery. Second: moments, time left, and
 // the calendar button.
 static void drawMainHeader(const ViewState &v) {
-    drawText(MARGIN, TITLE_BASELINE, &Bold32, "zvukopis", INK);
+    drawText(MARGIN, TITLE_BASELINE, &Bold22, "zvukopis", INK);
     int statusLeft = drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     char when[24];
     formatDateTime(when, sizeof(when), v);
-    int titleRight = MARGIN + textWidth(&Bold32, "zvukopis");
+    int titleRight = MARGIN + textWidth(&Bold22, "zvukopis");
     drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
     // "2 moments  •  3:04 left"
     char buf[32];
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
     else snprintf(buf, sizeof(buf), "%d moments", v.momentCount);
-    drawText(MARGIN, 86, &Text22, buf, INK);
+    drawText(MARGIN, SECOND_BASELINE, &Text22, buf, INK);
     int x = MARGIN + textWidth(&Text22, buf) + 14;
-    canvas->fillCircle(x, 80, 2, INK);
+    canvas->fillCircle(x, SECOND_BASELINE - 6, 2, INK);
     if (v.secondsLeft < 1) {
         snprintf(buf, sizeof(buf), v.sdCard ? "card full" : "memory full");
     } else {
@@ -671,9 +672,8 @@ static void drawMainHeader(const ViewState &v) {
         formatTimeLeft(left, sizeof(left), v.secondsLeft);
         snprintf(buf, sizeof(buf), "%s left", left);
     }
-    drawText(x + 14, 86, &Text22, buf, INK);
-    const int buttonSize = 34;
-    drawHeaderButton(SW - MARGIN - buttonSize, 79, buttonSize, v.selected == ROW_CALENDAR, iconCalendar);
+    drawText(x + 14, SECOND_BASELINE, &Text22, buf, INK);
+    drawHeaderButton(SW - MARGIN - HEADER_BUTTON, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -682,17 +682,17 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
     int x = MARGIN;
     if (canGoBack) {
         bool isSelected = v.selected == ROW_BACK;
-        const int w = 92, y = 18;
+        const int w = 86, y = TITLE_BASELINE - 8 - HEADER_BUTTON / 2;
         uint16_t fg = isSelected ? PAPER : INK;
-        if (isSelected) canvas->fillRoundRect(x, y, w, ICON_BOX, 9, INK);
-        else canvas->drawRoundRect(x, y, w, ICON_BOX, 9, INK);
-        canvas->fillTriangle(x + 12, y + 20, x + 22, y + 11, x + 22, y + 29, fg);
-        drawText(x + 30, y + 28, &Text22, "Back", fg);
-        x += w + 14;
+        if (isSelected) canvas->fillRoundRect(x, y, w, HEADER_BUTTON, 8, INK);
+        else canvas->drawRoundRect(x, y, w, HEADER_BUTTON, 8, INK);
+        canvas->fillTriangle(x + 11, y + 17, x + 20, y + 9, x + 20, y + 25, fg);
+        drawText(x + 27, TITLE_BASELINE, &Text22, "Back", fg);
+        x += w + 12;
     }
-    drawText(x, 50, &Bold32, title, INK);
+    drawText(x, TITLE_BASELINE, &Bold22, title, INK);
     drawStatus(SW - MARGIN, TITLE_BASELINE, v);
-    if (subtitle) drawText(MARGIN, 84, &Text22, subtitle, INK);
+    if (subtitle) drawText(MARGIN, SECOND_BASELINE, &Text22, subtitle, INK);
     drawDateTime(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
@@ -1520,7 +1520,7 @@ static int drawQuoteMark(int x, int y) {
 // centred between the header (asleep since when, what it holds) and the
 // footer (how to wake)
 static void drawSleepScreen(const ViewState &v) {
-    drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
+    drawText(MARGIN, TITLE_BASELINE, &Bold22, "zvukopis", INK);
     drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     char buf[48];
     if (v.clockMinute >= 0) {
@@ -1530,7 +1530,7 @@ static void drawSleepScreen(const ViewState &v) {
     } else {
         snprintf(buf, sizeof(buf), "Asleep");
     }
-    drawText(MARGIN, 84, &Text22, buf, INK);
+    drawText(MARGIN, SECOND_BASELINE, &Text22, buf, INK);
     if (v.nextScheduleMinute >= 0) {
         char when[16];
         time_t next = (time_t)v.nextScheduleMinute * 60;
@@ -1540,7 +1540,7 @@ static void drawSleepScreen(const ViewState &v) {
     } else {
         snprintf(buf, sizeof(buf), "%d moment%s", v.momentCount, v.momentCount == 1 ? "" : "s");
     }
-    drawTextRight(SW - MARGIN, 84, &Text22, buf, INK);
+    drawTextRight(SW - MARGIN, SECOND_BASELINE, &Text22, buf, INK);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 
     // "Pauline Oliveros, Deep Listening" -> author, then the work below
