@@ -2,14 +2,6 @@
 
 #include <Adafruit_GFX.h>
 #include <Arduino.h>
-#include <Fonts/FreeSans12pt7b.h>
-#include <Fonts/FreeSans9pt7b.h>
-#include <Fonts/FreeSansBold12pt7b.h>
-#include <Fonts/FreeSansBold18pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
-#include <Fonts/FreeSerifItalic12pt7b.h>
-#include <Fonts/FreeSerifItalic18pt7b.h>
-#include <Fonts/FreeSerifItalic9pt7b.h>
 #include <mbedtls/base64.h>
 #include <sys/time.h>
 
@@ -18,6 +10,7 @@
 #include "board_power.h"
 #include "cardreader.h"
 #include "clock.h"
+#include "fonts.h"
 #include "quotes.h"
 #include "storage.h"
 #include "transfer.h"
@@ -308,10 +301,10 @@ static void drawTextCentered(int cx, int y, const GFXfont *font, const char *tex
     drawText(cx - textWidth(font, text) / 2, y, font, text, color);
 }
 
-// Word-wrapped and centred; returns the baseline after the last line.
-// With draw false it only measures.
-static int drawWrapped(int cx, int y, int maxWidth, int lineHeight, const GFXfont *font, const char *text,
-                       bool draw = true) {
+// Word-wrapped, centred on x or (centred false) starting at it; returns the
+// baseline after the last line. With draw false it only measures.
+static int drawWrapped(int x, int y, int maxWidth, int lineHeight, const GFXfont *font, const char *text,
+                       bool draw = true, bool centred = true) {
     char line[96];
     const char *p = text;
     while (*p) {
@@ -330,7 +323,8 @@ static int drawWrapped(int cx, int y, int maxWidth, int lineHeight, const GFXfon
         if (fit == 0) fit = len = strlen(p) < sizeof(line) ? strlen(p) : sizeof(line) - 1;
         memcpy(line, p, fit);
         line[fit] = 0;
-        if (draw) drawTextCentered(cx, y, font, line, INK);
+        if (draw && centred) drawTextCentered(x, y, font, line, INK);
+        else if (draw) drawText(x, y, font, line, INK);
         y += lineHeight;
         p += len;
     }
@@ -480,9 +474,9 @@ enum HintIcon { HINT_UPDOWN, HINT_CLICK, HINT_HOLD_CLICK, HINT_PWR };
 
 // A key name in a rounded box, like a keycap. Returns its width.
 static int drawKeycap(int x, int cy, const char *name) {
-    int w = textWidth(&FreeSans9pt7b, name) + 12;
+    int w = textWidth(&Text17, name) + 12;
     canvas->drawRoundRect(x, cy - 12, w, 24, 5, INK);
-    drawText(x + 6, cy + 6, &FreeSans9pt7b, name, INK);
+    drawText(x + 6, cy + 6, &Text17, name, INK);
     return w;
 }
 
@@ -504,7 +498,7 @@ static void drawHint(int x, int cy, HintIcon icon, const char *label) {
         x += drawKeycap(x, cy, "PWR") + 8;
         break;
     }
-    drawText(x, cy + 7, &FreeSans12pt7b, label, INK);
+    drawText(x, cy + 7, &Text22, label, INK);
 }
 
 // A header button: icon in a rounded box, filled when selected
@@ -525,8 +519,8 @@ static int drawStatus(int right, int cy, const ViewState &v) {
     if (v.battery >= 0) {
         x = iconBattery(x, cy, v.battery) - 8;
         snprintf(buf, sizeof(buf), "%d%%", v.battery);
-        drawTextRight(x, cy + 8, &FreeSans12pt7b, buf, INK);
-        x -= textWidth(&FreeSans12pt7b, buf) + 6;
+        drawTextRight(x, cy + 8, &Text22, buf, INK);
+        x -= textWidth(&Text22, buf) + 6;
     }
     if (v.usb) {
         iconBolt(x - 6, cy - 1);
@@ -542,13 +536,13 @@ static void drawDateTime(const ViewState &v) {
     time_t now = (time_t)v.clockMinute * 60;
     formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
     formatLocal(date, sizeof(date), "%e %b", now);
-    drawTextRight(SW - MARGIN, 84, &FreeSansBold12pt7b, hhmm, INK);
-    drawTextRight(SW - MARGIN - textWidth(&FreeSansBold12pt7b, hhmm) - 10, 84, &FreeSans12pt7b, date, INK);
+    drawTextRight(SW - MARGIN, 84, &MonoBold20, hhmm, INK);
+    drawTextRight(SW - MARGIN - textWidth(&MonoBold20, hhmm) - 10, 84, &Text22, date, INK);
 }
 
 // "zvukopis", status, calendar and settings buttons; moment count and clock below
 static void drawMainHeader(const ViewState &v) {
-    drawText(MARGIN, 50, &FreeSansBold18pt7b, "zvukopis", INK);
+    drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
     int settingsX = SW - MARGIN - ICON_BOX, calendarX = settingsX - ICON_BOX - 8;
     drawHeaderButton(settingsX, 38, v.selected == ROW_SETTINGS, iconGear);
     drawHeaderButton(calendarX, 38, v.selected == ROW_CALENDAR, iconCalendar);
@@ -558,8 +552,8 @@ static void drawMainHeader(const ViewState &v) {
     char buf[32];
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
     else snprintf(buf, sizeof(buf), "%d moments", v.momentCount);
-    drawText(MARGIN, 84, &FreeSans12pt7b, buf, INK);
-    int x = MARGIN + textWidth(&FreeSans12pt7b, buf) + 14;
+    drawText(MARGIN, 84, &Text22, buf, INK);
+    int x = MARGIN + textWidth(&Text22, buf) + 14;
     canvas->fillCircle(x, 78, 2, INK);
     if (v.secondsLeft < 1) {
         snprintf(buf, sizeof(buf), v.sdCard ? "card full" : "memory full");
@@ -568,7 +562,7 @@ static void drawMainHeader(const ViewState &v) {
         formatTimeLeft(left, sizeof(left), v.secondsLeft);
         snprintf(buf, sizeof(buf), "%s left", left);
     }
-    drawText(x + 14, 84, &FreeSans12pt7b, buf, INK);
+    drawText(x + 14, 84, &Text22, buf, INK);
     drawDateTime(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
@@ -583,12 +577,12 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
         if (isSelected) canvas->fillRoundRect(x, y, w, ICON_BOX, 9, INK);
         else canvas->drawRoundRect(x, y, w, ICON_BOX, 9, INK);
         canvas->fillTriangle(x + 12, y + 20, x + 22, y + 11, x + 22, y + 29, fg);
-        drawText(x + 30, y + 28, &FreeSans12pt7b, "Back", fg);
+        drawText(x + 30, y + 28, &Text22, "Back", fg);
         x += w + 14;
     }
-    drawText(x, 50, &FreeSansBold18pt7b, title, INK);
+    drawText(x, 50, &Bold32, title, INK);
     drawStatus(SW - MARGIN, 38, v);
-    if (subtitle) drawText(MARGIN, 84, &FreeSans12pt7b, subtitle, INK);
+    if (subtitle) drawText(MARGIN, 84, &Text22, subtitle, INK);
     drawDateTime(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
@@ -596,10 +590,10 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
 static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewState &v) {
     int cy = y + ROW_H / 2;
     iconRecord(MARGIN + 14, cy, fg);
-    drawText(MARGIN + 44, cy + 8, &FreeSansBold12pt7b, "New recording", fg);
+    drawText(MARGIN + 44, cy + 8, &Bold22, "New recording", fg);
     if (isSelected) {
         const char *hint = v.secondsLeft < 1 ? (v.sdCard ? "card full" : "memory full") : "click to record";
-        drawTextRight(SW - MARGIN, cy + 8, &FreeSans12pt7b, hint, fg);
+        drawTextRight(SW - MARGIN, cy + 8, &Text22, hint, fg);
     }
 }
 
@@ -616,11 +610,11 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
 
     char buf[32];
     snprintf(buf, sizeof(buf), "Moment %d", moment.number);
-    drawText(MARGIN + 44, lineY, &FreeSansBold12pt7b, buf, fg);
+    drawText(MARGIN + 44, lineY, &Bold22, buf, fg);
     if (moment.recordedAt && !playing) { // while playing, the speed takes its place
-        int x = MARGIN + 44 + textWidth(&FreeSansBold12pt7b, buf) + 12;
+        int x = MARGIN + 44 + textWidth(&Bold22, buf) + 12;
         formatLocal(buf, sizeof(buf), showDate ? "%e %b %H:%M" : "%H:%M:%S", moment.recordedAt);
-        drawText(x, lineY, &FreeSans12pt7b, buf, fg);
+        drawText(x, lineY, &Text22, buf, fg);
     }
 
     char total[12];
@@ -636,9 +630,9 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     } else {
         snprintf(buf, sizeof(buf), "%s", total);
     }
-    drawTextRight(SW - MARGIN, lineY, &FreeSans12pt7b, buf, fg);
+    drawTextRight(SW - MARGIN, lineY, &Mono20, buf, fg);
     if (moment.tag != TAG_NONE) {
-        iconTag(moment.tag, SW - MARGIN - textWidth(&FreeSans12pt7b, buf) - 20, lineY - 8, 10, fg);
+        iconTag(moment.tag, SW - MARGIN - textWidth(&Mono20, buf) - 20, lineY - 8, 10, fg);
     }
 
     int waveY = y + 68;
@@ -691,9 +685,9 @@ static void drawList(const ViewState &v) {
     drawRows(v, 1 + v.momentCount, true, nullptr);
     if (v.momentCount == 0) {
         int cx = SW / 2, y = LIST_TOP + ROW_H + 110;
-        drawTextCentered(cx, y, &FreeSansBold12pt7b, "No moments yet", INK);
-        drawTextCentered(cx, y + 38, &FreeSans12pt7b, "Click New recording to capture", INK);
-        drawTextCentered(cx, y + 66, &FreeSans12pt7b, "the sound of this moment", INK);
+        drawTextCentered(cx, y, &Bold22, "No moments yet", INK);
+        drawTextCentered(cx, y + 38, &Text22, "Click New recording to capture", INK);
+        drawTextCentered(cx, y + 66, &Text22, "the sound of this moment", INK);
     }
 }
 
@@ -732,9 +726,9 @@ static void drawCalendar(const ViewState &v) {
 
     int cx = SW / 2;
     if (index.count == 0) {
-        drawTextCentered(cx, 300, &FreeSansBold12pt7b, "No dated moments yet", INK);
-        drawTextCentered(cx, 338, &FreeSans12pt7b, "Moments get a date once", INK);
-        drawTextCentered(cx, 366, &FreeSans12pt7b, "the clock is set", INK);
+        drawTextCentered(cx, 300, &Bold22, "No dated moments yet", INK);
+        drawTextCentered(cx, 338, &Text22, "Moments get a date once", INK);
+        drawTextCentered(cx, 366, &Text22, "the clock is set", INK);
         return;
     }
     int key = v.calendarDay;
@@ -747,7 +741,7 @@ static void drawCalendar(const ViewState &v) {
     mktime(&first);
     char buf[48];
     strftime(buf, sizeof(buf), "%B %Y", &first);
-    drawTextCentered(cx, 150, &FreeSansBold18pt7b, buf, INK);
+    drawTextCentered(cx, 150, &Bold32, buf, INK);
     // Other months with moments, either side
     if (index.days[0].key / 100 < key / 100) canvas->fillTriangle(MARGIN, 140, MARGIN + 12, 130, MARGIN + 12, 150, INK);
     if (index.days[index.count - 1].key / 100 > key / 100) {
@@ -757,7 +751,7 @@ static void drawCalendar(const ViewState &v) {
     const int cellW = (SW - 2 * MARGIN) / 7, cellH = 62, gridTop = 196;
     const char *weekdays[7] = {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"};
     for (int c = 0; c < 7; c++) {
-        drawTextCentered(MARGIN + c * cellW + cellW / 2, 184, &FreeSans9pt7b, weekdays[c], INK);
+        drawTextCentered(MARGIN + c * cellW + cellW / 2, 184, &Text17, weekdays[c], INK);
     }
     int offset = (first.tm_wday + 6) % 7; // Monday first
     int daysInMonth = 31;
@@ -784,7 +778,7 @@ static void drawCalendar(const ViewState &v) {
             canvas->drawRoundRect(x + 3, y + 2, cellW - 6, cellH - 4, 10, INK);
         }
         snprintf(buf, sizeof(buf), "%d", d);
-        drawTextCentered(dayCx, y + 32, found >= 0 ? &FreeSansBold12pt7b : &FreeSans12pt7b, buf, fg);
+        drawTextCentered(dayCx, y + 32, found >= 0 ? &Bold22 : &Text22, buf, fg);
         if (found >= 0) {
             // A dot per moment, up to four
             int dots = min(4, index.days[found].count);
@@ -801,11 +795,11 @@ static void drawCalendar(const ViewState &v) {
     mktime(&chosenDay);
     strftime(buf, sizeof(buf), "%A %e %B", &chosenDay);
     int y = gridTop + 6 * cellH + 34;
-    drawText(MARGIN, y, &FreeSansBold12pt7b, buf, INK);
+    drawText(MARGIN, y, &Bold22, buf, INK);
     char total2[12];
     formatTime(total2, sizeof(total2), day.seconds);
     snprintf(buf, sizeof(buf), "%d moment%s, %s", day.count, day.count == 1 ? "" : "s", total2);
-    drawText(MARGIN, y + 30, &FreeSans12pt7b, buf, INK);
+    drawText(MARGIN, y + 30, &Text22, buf, INK);
     int x = SW - MARGIN - 12;
     for (int t = TAG_COUNT - 1; t > TAG_NONE; t--) {
         if (day.tags & (1 << t)) {
@@ -877,8 +871,8 @@ static void drawSettings(const ViewState &v) {
         char detail[48];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
-        drawText(MARGIN, y + 36, enabled ? &FreeSansBold12pt7b : &FreeSans12pt7b, title, fg);
-        drawText(MARGIN, y + 63, &FreeSans9pt7b, detail, fg);
+        drawText(MARGIN, y + 36, enabled ? &Bold22 : &Text22, title, fg);
+        drawText(MARGIN, y + 63, &Text17, detail, fg);
     }
 
     // Card and memory
@@ -889,10 +883,10 @@ static void drawSettings(const ViewState &v) {
         formatBytes(free, sizeof(free), storageFreeBytes());
         iconSdCard(MARGIN + 16, y - 6);
         snprintf(buf, sizeof(buf), "%s card, %s free", total, free);
-        drawText(MARGIN + 30, y, &FreeSans12pt7b, buf, INK);
+        drawText(MARGIN + 30, y, &Text22, buf, INK);
     } else {
-        drawText(MARGIN, y, &FreeSans12pt7b, "No SD card: moments are kept", INK);
-        drawText(MARGIN, y + 28, &FreeSans12pt7b, "in memory and lost on restart", INK);
+        drawText(MARGIN, y, &Text22, "No SD card: moments are kept", INK);
+        drawText(MARGIN, y + 28, &Text22, "in memory and lost on restart", INK);
     }
 }
 
@@ -903,32 +897,32 @@ static void drawTransfer(const ViewState &v) {
     iconWifi(cx, y);
     y += 70;
     if (info.state == TRANSFER_CONNECTING) {
-        drawTextCentered(cx, y, &FreeSansBold18pt7b, "Connecting...", INK);
+        drawTextCentered(cx, y, &Bold32, "Connecting...", INK);
         return;
     }
     if (info.state != TRANSFER_READY) return;
     char buf[64];
     if (info.hotspot) {
-        drawTextCentered(cx, y, &FreeSans12pt7b, "Join the Wi-Fi network", INK);
-        drawTextCentered(cx, y + 42, &FreeSansBold18pt7b, info.network, INK);
+        drawTextCentered(cx, y, &Text22, "Join the Wi-Fi network", INK);
+        drawTextCentered(cx, y + 42, &Bold32, info.network, INK);
         snprintf(buf, sizeof(buf), "password  %s", info.password);
-        drawTextCentered(cx, y + 76, &FreeSans12pt7b, buf, INK);
+        drawTextCentered(cx, y + 76, &Text22, buf, INK);
         y += 130;
     } else {
         snprintf(buf, sizeof(buf), "On the network %s,", info.network);
-        drawTextCentered(cx, y, &FreeSans12pt7b, buf, INK);
+        drawTextCentered(cx, y, &Text22, buf, INK);
         y += 42;
     }
-    drawTextCentered(cx, y, &FreeSans12pt7b, "open in a browser", INK);
+    drawTextCentered(cx, y, &Text22, "open in a browser", INK);
     snprintf(buf, sizeof(buf), "http://%s", info.address);
-    drawTextCentered(cx, y + 44, &FreeSansBold18pt7b, buf, INK);
-    if (!info.hotspot) drawTextCentered(cx, y + 78, &FreeSans12pt7b, "or http://zvukopis.local", INK);
+    drawTextCentered(cx, y + 44, &Bold32, buf, INK);
+    if (!info.hotspot) drawTextCentered(cx, y + 78, &Text22, "or http://zvukopis.local", INK);
     y += 140;
     if (v.transferRequests > 0) {
         snprintf(buf, sizeof(buf), "%lu request%s served", v.transferRequests, v.transferRequests == 1 ? "" : "s");
-        drawTextCentered(cx, y, &FreeSans12pt7b, buf, INK);
+        drawTextCentered(cx, y, &Text22, buf, INK);
     }
-    drawTextCentered(cx, y + 34, &FreeSans9pt7b, "Stops by itself after 10 minutes without use", INK);
+    drawTextCentered(cx, y + 34, &Text17, "Stops by itself after 10 minutes without use", INK);
 }
 
 static void drawCardReader(const ViewState &v) {
@@ -936,15 +930,15 @@ static void drawCardReader(const ViewState &v) {
     int cx = SW / 2;
     iconSdCard(cx + 24, 260, 3);
     if (v.cardEjected) {
-        drawTextCentered(cx, 380, &FreeSansBold18pt7b, "Ejected", INK);
-        drawTextCentered(cx, 418, &FreeSans12pt7b, "Safe to leave", INK);
+        drawTextCentered(cx, 380, &Bold32, "Ejected", INK);
+        drawTextCentered(cx, 418, &Text22, "Safe to leave", INK);
     } else {
-        drawTextCentered(cx, 380, &FreeSansBold18pt7b, "Connected", INK);
-        drawTextCentered(cx, 418, &FreeSans12pt7b, "Eject the drive on the computer", INK);
-        drawTextCentered(cx, 446, &FreeSans12pt7b, "before leaving", INK);
+        drawTextCentered(cx, 380, &Bold32, "Connected", INK);
+        drawTextCentered(cx, 418, &Text22, "Eject the drive on the computer", INK);
+        drawTextCentered(cx, 446, &Text22, "before leaving", INK);
     }
-    drawTextCentered(cx, 520, &FreeSans9pt7b, "Leaving restarts zvukopis, which reads", INK);
-    drawTextCentered(cx, 542, &FreeSans9pt7b, "the card's moments again", INK);
+    drawTextCentered(cx, 520, &Text17, "Leaving restarts zvukopis, which reads", INK);
+    drawTextCentered(cx, 542, &Text17, "the card's moments again", INK);
 }
 
 // Drawn once when recording starts and left alone until it stops: the panel's
@@ -956,7 +950,7 @@ static void drawRecordingView(const ViewState &v) {
     bool saving = v.audio == AUDIO_SAVING;
     if (saving) canvas->drawCircle(cx, 270, 26, INK);
     else canvas->fillCircle(cx, 270, 26, INK);
-    drawTextCentered(cx, 368, &FreeSansBold24pt7b, saving ? "Saving" : "Recording", INK);
+    drawTextCentered(cx, 368, &Bold44, saving ? "Saving" : "Recording", INK);
 
     char limit[12], started[12], buf[48];
     formatTime(limit, sizeof(limit), max(1, (int)audioRecordingLimitSeconds()));
@@ -966,10 +960,10 @@ static void drawRecordingView(const ViewState &v) {
     } else {
         snprintf(buf, sizeof(buf), "up to %s", limit);
     }
-    drawTextCentered(cx, 412, &FreeSans12pt7b, buf, INK);
+    drawTextCentered(cx, 412, &Text22, buf, INK);
     if (!saving) {
-        drawTextCentered(cx, 500, &FreeSans9pt7b, "The screen stays still while recording,", INK);
-        drawTextCentered(cx, 522, &FreeSans9pt7b, "so it doesn't add noise to the audio.", INK);
+        drawTextCentered(cx, 500, &Text17, "The screen stays still while recording,", INK);
+        drawTextCentered(cx, 522, &Text17, "so it doesn't add noise to the audio.", INK);
     }
 }
 
@@ -994,8 +988,8 @@ static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, c
     const int x = (SW - w) / 2, y = 268, cx = SW / 2;
     dialogBox(y, h);
     icon();
-    drawTextCentered(cx, y + 134, &FreeSansBold18pt7b, title, INK);
-    drawTextCentered(cx, y + 166, &FreeSans12pt7b, detail, INK);
+    drawTextCentered(cx, y + 134, &Bold32, title, INK);
+    drawTextCentered(cx, y + 166, &Text22, detail, INK);
 
     const char *labels[2] = {"Cancel", action};
     const int gap = 20, bw = (w - 3 * gap) / 2, bh = 48, by = y + h - bh - 18;
@@ -1008,7 +1002,7 @@ static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, c
             canvas->drawRoundRect(bx, by, bw, bh, 10, INK);
             canvas->drawRoundRect(bx + 1, by + 1, bw - 2, bh - 2, 9, INK);
         }
-        drawTextCentered(bx + bw / 2, by + 32, &FreeSansBold12pt7b, labels[i], chosen ? PAPER : INK);
+        drawTextCentered(bx + bw / 2, by + 32, &Bold22, labels[i], chosen ? PAPER : INK);
     }
 }
 
@@ -1040,7 +1034,7 @@ static void drawGainPicker(const ViewState &v) {
     const int itemH = 40, y = 126, h = 70 + GAIN_CHOICE_COUNT * itemH + 12;
     const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
     dialogBox(y, h);
-    drawText(x + 24, y + 44, &FreeSansBold18pt7b, "Mic gain", INK);
+    drawText(x + 24, y + 44, &Bold32, "Mic gain", INK);
     for (int i = 0; i < GAIN_CHOICE_COUNT; i++) {
         int iy = y + 62 + i * itemH;
         bool chosen = i == v.overlayChoice;
@@ -1049,7 +1043,7 @@ static void drawGainPicker(const ViewState &v) {
         char label[48];
         if (GAIN_CHOICES[i] == GAIN_AUTO) snprintf(label, sizeof(label), "Auto  (adjusts while recording)");
         else snprintf(label, sizeof(label), "%d dB%s", GAIN_CHOICES[i], GAIN_CHOICES[i] == 54 ? "  (quiet places)" : GAIN_CHOICES[i] == 0 ? "  (very loud)" : "");
-        drawText(x + 56, iy + 26, &FreeSans12pt7b, label, fg);
+        drawText(x + 56, iy + 26, &Text22, label, fg);
         if (GAIN_CHOICES[i] == v.gainSetting) canvas->fillCircle(x + 34, iy + 18, 5, fg);
     }
 }
@@ -1065,8 +1059,8 @@ static void drawMenu(const ViewState &v) {
     dialogBox(y, h);
     char title[32];
     snprintf(title, sizeof(title), "Moment %d", moment.number);
-    drawText(x + 24, y + 46, &FreeSansBold18pt7b, title, INK);
-    drawTextRight(x + w - 24, y + 46, &FreeSans12pt7b, "is about", INK);
+    drawText(x + 24, y + 46, &Bold32, title, INK);
+    drawTextRight(x + w - 24, y + 46, &Text22, "is about", INK);
 
     for (int i = 0; i < MENU_ITEMS; i++) {
         int iy = y + 70 + i * itemH;
@@ -1091,41 +1085,28 @@ static void drawMenu(const ViewState &v) {
         } else {
             label = "Cancel";
         }
-        drawText(x + 76, cy + 8, i < MENU_DELETE ? &FreeSansBold12pt7b : &FreeSans12pt7b, label, fg);
+        drawText(x + 76, cy + 8, i < MENU_DELETE ? &Bold22 : &Text22, label, fg);
     }
 }
 
-// A quote about listening fills the screen, as large as it fits; below it,
-// that zvukopis is asleep, since when, and what it holds
-static void drawSleepScreen(const ViewState &v) {
-    const int cx = SW / 2, top = 50, bottom = 600, width = SW - 2 * MARGIN - 8;
-    const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
-    struct Size {
-        const GFXfont *font;
-        int lineHeight;
-        const GFXfont *sourceFont;
-        int sourceLineHeight;
-    };
-    static const Size sizes[] = {
-        {&FreeSerifItalic18pt7b, 44, &FreeSans12pt7b, 30},
-        {&FreeSerifItalic12pt7b, 31, &FreeSans9pt7b, 24},
-        {&FreeSerifItalic9pt7b, 24, &FreeSans9pt7b, 22},
-    };
-    const Size *size = &sizes[0];
-    int height = 0;
-    for (const Size &s : sizes) {
-        size = &s;
-        height = drawWrapped(cx, 0, width, s.lineHeight, s.font, quote.text, false) + 16 +
-                 drawWrapped(cx, 0, width, s.sourceLineHeight, s.sourceFont, quote.source, false);
-        if (height <= bottom - top) break;
+// Opening quotation mark, two "6" shapes; x, y is its top left. Returns its height.
+static int drawQuoteMark(int x, int y) {
+    for (int i = 0; i < 2; i++) {
+        int cx = x + 10 + i * 26, cy = y + 24;
+        canvas->fillCircle(cx, cy, 9, INK);
+        canvas->fillTriangle(cx - 9, cy - 1, cx - 2, cy - 1, cx + 8, cy - 24, INK); // the tail
+        canvas->fillTriangle(cx - 9, cy - 1, cx + 8, cy - 24, cx + 11, cy - 21, INK);
     }
-    int y = top + max(0, (bottom - top - height) / 2) + size->lineHeight - 10;
-    y = drawWrapped(cx, y, width, size->lineHeight, size->font, quote.text);
-    drawWrapped(cx, y + 16 - size->lineHeight + size->sourceLineHeight, width, size->sourceLineHeight,
-                size->sourceFont, quote.source);
+    return 34;
+}
 
-    canvas->fillRect(cx - 30, 622, 60, 2, INK);
-    char buf[64];
+// The quote is the page: left-aligned like a book, as large as it fits,
+// centred between the header (asleep since when, what it holds) and the
+// footer (how to wake)
+static void drawSleepScreen(const ViewState &v) {
+    drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
+    drawStatus(SW - MARGIN, 38, v);
+    char buf[48];
     if (v.clockMinute >= 0) {
         char since[12];
         formatLocal(since, sizeof(since), "%H:%M", (time_t)v.clockMinute * 60);
@@ -1133,11 +1114,44 @@ static void drawSleepScreen(const ViewState &v) {
     } else {
         snprintf(buf, sizeof(buf), "Asleep");
     }
-    drawTextCentered(cx, 656, &FreeSansBold12pt7b, buf, INK);
-    const char *where = v.sdCard ? "on SD card" : "in memory";
-    int n = snprintf(buf, sizeof(buf), "%d moment%s %s", v.momentCount, v.momentCount == 1 ? "" : "s", where);
-    if (v.battery >= 0) snprintf(buf + n, sizeof(buf) - n, "  -  battery %d%%", v.battery);
-    drawTextCentered(cx, 686, &FreeSans12pt7b, buf, INK);
+    drawText(MARGIN, 84, &Text22, buf, INK);
+    snprintf(buf, sizeof(buf), "%d moment%s", v.momentCount, v.momentCount == 1 ? "" : "s");
+    drawTextRight(SW - MARGIN, 84, &Text22, buf, INK);
+    canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
+
+    // "Pauline Oliveros, Deep Listening" -> author, then the work below
+    const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
+    char author[64];
+    strlcpy(author, quote.source, sizeof(author));
+    char *comma = strchr(author, ',');
+    const char *work = nullptr;
+    if (comma) {
+        *comma = 0;
+        work = quote.source + (comma - author) + 1;
+        while (*work == ' ') work++;
+    }
+
+    const int top = HEADER_LINE_Y + 24, bottom = FOOTER_LINE_Y - 24, width = SW - 2 * MARGIN;
+    struct Size {
+        const GFXfont *font;
+        int lineHeight;
+    };
+    static const Size sizes[] = {{&Italic40, 52}, {&Italic33, 44}, {&Italic27, 36}, {&Italic22, 30}};
+    const int markH = 34 + 14, byline = 22 + 34 + (work ? 26 : 0);
+    const Size *size = &sizes[0];
+    int textH = 0;
+    for (const Size &s : sizes) {
+        size = &s;
+        textH = drawWrapped(MARGIN, 0, width, s.lineHeight, s.font, quote.text, false, false);
+        if (markH + textH + byline <= bottom - top) break;
+    }
+    int y = top + max(0, (bottom - top - markH - textH - byline) / 2);
+    y += drawQuoteMark(MARGIN, y) + 14;
+    y = drawWrapped(MARGIN, y + size->lineHeight - 12, width, size->lineHeight, size->font, quote.text, true, false);
+    y += 22 - size->lineHeight + 12;
+    canvas->fillRect(MARGIN, y, 40, 2, INK);
+    drawText(MARGIN, y + 30, &Bold22, author, INK);
+    if (work) drawText(MARGIN, y + 56, &Text17, work, INK);
 }
 
 // Context hints in a 2x2 grid
