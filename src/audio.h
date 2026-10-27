@@ -9,7 +9,7 @@
 // With an SD card in at startup, memos are saved to it and played back from it;
 // otherwise they live in PSRAM and are lost on reset.
 
-static const int SAMPLE_RATE = 16000;
+static const int SAMPLE_RATE = 48000;
 static const int MAX_MEMO_SECONDS = 60;
 static const int MAX_MEMOS = 500;
 static const int WAVEFORM_BINS = 77;
@@ -43,10 +43,12 @@ void audioPlay(int index);
 void audioStopPlayback();
 void audioDelete(int index);
 void audioSelfTest(); // speaker -> mic loopback check, results on serial
+// The codec powers down by itself after 2 s idle and back up on the next
+// record or play request.
 // For sleep: suspend finishes any recording, stops playback, powers the codec
-// down and stops I2S, and returns once that's done. Resume undoes it.
+// down and returns once that's done.
 void audioSuspend();
-void audioResume();
+bool audioAsleep(); // codec off, I2S stopped, no requests pending
 
 AudioState audioState();
 float audioRecordingSeconds();

@@ -5,7 +5,8 @@
 // every refresh and the PMIC keeps that state while a battery is attached,
 // so the rail must be enabled before talking to the display.
 
-bool boardPowerInit();
+bool boardPowerInit(); // also switches off unused rails and puts the sensors to sleep
+void sensorsSleep();
 void epdPowerOn();
 void epdPowerOff();
 
@@ -18,3 +19,4 @@ bool powerKeyPressed();
 
 // Lets a PWR press wake the chip from light sleep (the PMIC's IRQ line, GPIO38)
 void powerKeyWakeup(bool enable);
+bool powerKeyPending(); // IRQ line low: a press not yet read by powerKeyPressed()

@@ -1,6 +1,8 @@
 #include "buttons.h"
 
 #include <Arduino.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 
 #include "audio.h"
 #include "board_power.h"
@@ -10,6 +12,7 @@ static const int BOOT_PIN = 0;
 static const int UP_PIN = 4;
 static const int CLICK_PIN = 5;
 static const int DOWN_PIN = 6;
+static const int KEY_PINS[] = {BOOT_PIN, UP_PIN, CLICK_PIN, DOWN_PIN};
 
 static const uint32_t POLL_MS = 10;
 static const uint32_t LONG_PRESS_MS = 800;
@@ -18,6 +21,7 @@ static const int POWER_KEY_POLL_EVERY = 10; // polls, so every 100 ms
 
 static QueueHandle_t eventQueue;
 static volatile bool paused = false;
+static volatile bool keysDown = false; // as the task sees them, after debouncing
 
 struct Key {
     int pin;
@@ -76,6 +80,7 @@ static void buttonTask(void *) {
         }
 
         if (++polls % POWER_KEY_POLL_EVERY == 0 && powerKeyPressed()) buttonsInject(BTN_POWER);
+        keysDown = boot.down || up.down || click.down || down.down;
 
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
@@ -83,7 +88,7 @@ static void buttonTask(void *) {
 
 void buttonsInit() {
     eventQueue = xQueueCreate(16, sizeof(ButtonEvent));
-    for (int pin : {BOOT_PIN, UP_PIN, CLICK_PIN, DOWN_PIN}) pinMode(pin, INPUT_PULLUP);
+    for (int pin : KEY_PINS) pinMode(pin, INPUT_PULLUP);
     xTaskCreatePinnedToCore(buttonTask, "buttons", 3072, NULL, 3, NULL, 1);
 }
 
@@ -93,6 +98,22 @@ bool buttonsNextEvent(ButtonEvent &event) {
 
 void buttonsInject(ButtonEvent event) {
     xQueueSend(eventQueue, &event, 0);
+}
+
+bool buttonsIdle() {
+    if (keysDown || powerKeyPending()) return false;
+    for (int pin : KEY_PINS) {
+        if (digitalRead(pin) == LOW) return false;
+    }
+    return uxQueueMessagesWaiting(eventQueue) == 0;
+}
+
+void buttonsWakeup(bool enable) {
+    for (int pin : KEY_PINS) {
+        if (enable) gpio_wakeup_enable((gpio_num_t)pin, GPIO_INTR_LOW_LEVEL);
+        else gpio_wakeup_disable((gpio_num_t)pin);
+    }
+    if (enable) esp_sleep_enable_gpio_wakeup();
 }
 
 void buttonsPause(bool pause) {

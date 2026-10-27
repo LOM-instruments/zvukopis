@@ -19,14 +19,15 @@ static const uint8_t RTC_ADDRESS = 0x51;
 static const uint8_t RTC_SECONDS_REG = 0x04; // then minutes, hours, days, weekdays, months, years
 static const int MIN_VALID_YEAR = 2025;
 
-static const uint32_t SYNC_EVERY_S = 24 * 3600;
-static const uint32_t RETRY_AFTER_S = 3600;
 static const uint32_t CONNECT_TIMEOUT_MS = 20000;
 static const uint32_t NTP_TIMEOUT_MS = 10000;
 
 static volatile bool valid = false;
 static volatile bool syncPaused = false;
 static volatile bool syncing = false;
+static volatile ClockSync syncState = CLOCK_SYNC_NONE;
+static volatile uint32_t syncStateSince = 0;
+static TaskHandle_t syncTaskHandle = nullptr;
 
 static uint8_t fromBcd(uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); }
 static uint8_t toBcd(int v) { return ((v / 10) << 4) | (v % 10); }
@@ -98,25 +99,27 @@ static bool waitFor(bool (*done)(), uint32_t timeoutMs) {
     return true;
 }
 
-static bool syncOnce() {
+static ClockSync syncOnce() {
     uint32_t start = millis();
     Serial.printf("[clock] connecting to %s for NTP\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    bool ok = waitFor([] { return WiFi.status() == WL_CONNECTED; }, CONNECT_TIMEOUT_MS);
-    if (ok) {
+    bool connected = waitFor([] { return WiFi.status() == WL_CONNECTED; }, CONNECT_TIMEOUT_MS);
+    bool ok = connected;
+    if (connected) {
         sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
         configTzTime(TIME_ZONE, "pool.ntp.org", "time.google.com");
         ok = waitFor([] { return sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED; }, NTP_TIMEOUT_MS);
         sntp_stop();
     }
+    int status = WiFi.status(); // 1 = network not found, 4 = connect failed (password?), 6 = no answer
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
     if (!ok) {
         Serial.printf("[clock] sync %s after %lu ms (Wi-Fi status %d)\n",
-                      shouldAbort() ? "interrupted" : "failed", millis() - start, WiFi.status());
-        return false;
+                      shouldAbort() ? "interrupted" : "failed", millis() - start, status);
+        return connected ? CLOCK_SYNC_FAILED : CLOCK_SYNC_NO_WIFI;
     }
     time_t now = time(nullptr), rtc;
     bool hadRtc = rtcRead(rtc);
@@ -128,26 +131,22 @@ static bool syncOnce() {
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
     if (hadRtc) Serial.printf("[clock] synced in %lu ms: %s (RTC was off by %ld s)\n", millis() - start, buf, (long)(rtc - now));
     else Serial.printf("[clock] synced in %lu ms: %s\n", millis() - start, buf);
-    return true;
+    return CLOCK_SYNC_DONE;
 }
 
+// Waits for clockSyncNow()
 static void syncTask(void *) {
-    uint32_t lastSync = 0, lastAttempt = 0;
-    bool synced = false, attempted = false;
     for (;;) {
-        uint32_t now = millis() / 1000;
-        bool due = !attempted || (synced ? now - lastSync >= SYNC_EVERY_S : now - lastAttempt >= RETRY_AFTER_S);
-        if (due && !syncPaused && audioState() == AUDIO_IDLE) {
-            syncing = true;
-            attempted = true;
-            lastAttempt = now;
-            if (syncOnce()) {
-                synced = true;
-                lastSync = now;
-            }
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (shouldAbort()) {
+            syncState = CLOCK_SYNC_NONE;
             syncing = false;
+            continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        ClockSync result = syncOnce();
+        syncState = result;
+        syncStateSince = millis();
+        syncing = false;
     }
 }
 #endif
@@ -168,7 +167,8 @@ void clockInit() {
         Serial.println("[clock] RTC has no valid time");
     }
 #ifdef WIFI_SSID
-    xTaskCreatePinnedToCore(syncTask, "clock", 4096, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(syncTask, "clock", 4096, NULL, 1, &syncTaskHandle, 0);
+    if (!valid) clockSyncNow();
 #else
     Serial.println("[clock] no src/wifi_config.h, so no NTP sync");
 #endif
@@ -185,6 +185,23 @@ void clockSet(time_t utc) {
     localtime_r(&utc, &local);
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
     Serial.printf("[clock] set to %s\n", buf);
+}
+
+bool clockSyncAvailable() { return syncTaskHandle != nullptr; }
+
+void clockSyncNow() {
+    if (!syncTaskHandle || syncing) return;
+    syncing = true; // shown right away; cleared by the sync task
+    syncState = CLOCK_SYNCING;
+    syncStateSince = millis();
+    xTaskNotifyGive(syncTaskHandle);
+}
+
+bool clockSyncing() { return syncing; }
+
+ClockSync clockSyncState(uint32_t &since) {
+    since = syncStateSince;
+    return syncState;
 }
 
 void clockPauseSync(bool paused) {

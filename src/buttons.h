@@ -21,3 +21,6 @@ void buttonsInject(ButtonEvent event); // used by the serial debug commands
 // While paused nothing is polled, so sleep code can read the PWR key itself.
 // Resuming drops any events still queued.
 void buttonsPause(bool paused);
+// No key or PWR held and nothing queued, so light sleep won't drop a press
+bool buttonsIdle();
+void buttonsWakeup(bool enable); // a press wakes the chip from light sleep

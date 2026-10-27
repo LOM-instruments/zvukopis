@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <esp_sleep.h>
 #include <mbedtls/base64.h>
+#include <soc/usb_serial_jtag_reg.h>
 
 #include "EPD_3in97.h"
 
@@ -12,6 +13,68 @@
 
 // How often the chip checks the PWR key while "asleep" on USB power
 static const uint32_t USB_POLL_MS = 200;
+// Plenty for this app (16 kHz audio, a 1 bpp screen); 240 MHz draws more for nothing
+static const uint32_t CPU_MHZ = 80;
+static const uint32_t MIN_NAP_MS = 20; // shorter naps aren't worth the wake-up
+
+static uint32_t napTotalMs = 0, napCount = 0, wokeAt = 0;
+RTC_NOINIT_ATTR static uint32_t bootCount; // survives resets, to tell them apart in logs
+
+// Light sleep stops the USB clock and the host gives up on the port. Pulling
+// D+ low for a moment looks like an unplug and replug, so the host enumerates
+// it again.
+static void usbReconnect() {
+    SET_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_PAD_PULL_OVERRIDE);
+    CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_DP_PULLUP);
+    delay(50);
+    SET_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_DP_PULLUP);
+    CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_PAD_PULL_OVERRIDE);
+}
+
+static bool onUsbPower() {
+    static bool usb = false;
+    static uint32_t checkedAt = 0;
+    if (checkedAt == 0 || millis() - checkedAt > 1000) {
+        usb = usbPowered();
+        checkedAt = millis();
+    }
+    return usb;
+}
+
+// Light sleep for up to `ms`, until a key, PWR or the timer wakes the chip
+static void nap(uint32_t ms) {
+    buttonsWakeup(true);
+    powerKeyWakeup(true);
+    esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000);
+    uint32_t start = millis();
+    esp_light_sleep_start();
+    wokeAt = millis();
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    buttonsWakeup(false);
+    powerKeyWakeup(false);
+    napTotalMs += wokeAt - start;
+    napCount++;
+}
+
+// Between button presses the chip light-sleeps (about 1 mA instead of tens):
+// the e-paper keeps showing the screen, PSRAM keeps the memos, and a key press
+// wakes it within a few ms. A timer wakes it for the clock's next minute.
+// Not on USB power, where it would cut off the serial port.
+static void napIfIdle() {
+    if (!audioAsleep() || clockSyncing() || !buttonsIdle() || !uiReadyToNap(wokeAt)) return;
+    if (onUsbPower()) return;
+    uint32_t ms = uiMsUntilNextChange();
+    if (ms < MIN_NAP_MS) return;
+    nap(ms);
+    if (onUsbPower()) usbReconnect(); // plugged in while napping
+}
+
+static void printPowerStats() {
+    uint32_t up = millis();
+    Serial.printf("[power] up %lu s, light-slept %lu s (%.1f%%) in %lu naps, CPU %lu MHz, %s, battery %d%%\n",
+                  up / 1000, napTotalMs / 1000, 100.0f * napTotalMs / max(up, (uint32_t)1), napCount,
+                  getCpuFrequencyMhz(), usbPowered() ? "on USB" : "on battery", batteryPercent());
+}
 
 // Light sleep keeps PSRAM powered, so memos held in memory survive it.
 // A PWR press pulls the PMIC's IRQ line low, which wakes the chip.
@@ -35,6 +98,7 @@ static bool sleepUntilPowerKey() {
         esp_light_sleep_start();
     } while (!powerKeyPressed());
     powerKeyWakeup(false);
+    if (usbPowered()) usbReconnect(); // plugged in while asleep
     return true;
 }
 
@@ -53,7 +117,6 @@ static void goToSleep() {
     }
 
     Serial.println("[sleep] woke up");
-    audioResume();
     uiShowSleepScreen(false);
     buttonsPause(false);
     clockPauseSync(false);
@@ -85,7 +148,9 @@ void setup() {
     DEV_Module_Init(); // e-paper GPIO setup + Serial.begin(115200)
     // Wait (up to 3 s) for a USB serial monitor so the first lines aren't lost
     while (!Serial && millis() < 3000) delay(10);
-    Serial.println("zvukopis starting");
+    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = 0;
+    Serial.printf("zvukopis starting (boot %lu, reset reason %d)\n", ++bootCount, esp_reset_reason());
+    setCpuFrequencyMhz(CPU_MHZ);
 
     boardPowerInit(); // also starts the I2C bus shared with the audio codec
     epdPowerOn();
@@ -96,7 +161,8 @@ void setup() {
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down, c = click, l = long click, "
-                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest memo");
+                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest memo, "
+                   "P = power stats, z = 3 s light sleep test (drops USB)");
 }
 
 void loop() {
@@ -115,6 +181,15 @@ void loop() {
         case 'p': buttonsInject(BTN_POWER); break;
         case 'a': dumpNewestMemo(); break;
         case 'T': clockSet((time_t)Serial.parseInt()); break;
+        case 'P': printPowerStats(); break;
+        case 'z':
+            Serial.println("[power] light sleep for 3 s, then USB reconnect");
+            Serial.flush();
+            nap(3000);
+            usbReconnect();
+            delay(1500);
+            Serial.printf("[power] back after %lu ms nap\n", napTotalMs);
+            break;
         }
     }
 
@@ -123,4 +198,5 @@ void loop() {
     uiTick();
     if (uiTakeSleepRequest()) goToSleep();
     delay(10);
+    napIfIdle();
 }

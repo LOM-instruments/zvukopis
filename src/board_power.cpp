@@ -11,6 +11,8 @@
 static const int PMU_SDA_PIN = 41;
 static const int PMU_SCL_PIN = 42;
 static const int PWR_IRQ_PIN = 38;
+static const uint8_t SHTC3_ADDRESS = 0x70;   // temperature/humidity sensor
+static const uint8_t QMI8658_ADDRESSES[] = {0x6B, 0x6A}; // IMU; which one depends on SA0 (0x6B on this board)
 
 static XPowersPMU pmu;
 static bool pmuReady = false;
@@ -45,7 +47,54 @@ bool boardPowerInit() {
     pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     pmu.clearIrqStatus();
     pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+
+    // Per the schematic only DCDC1 (VCC3V3) and ALDO1-3 (codec, audio, e-paper)
+    // are connected; switch off the rest in case the PMIC's defaults enable them
+    Serial.printf("PMIC rails on: DC1 %d DC2 %d DC3 %d DC4 %d DC5 %d ALDO1-4 %d%d%d%d BLDO1-2 %d%d DLDO1-2 %d%d CPUSLDO %d\n",
+                  pmu.isEnableDC1(), pmu.isEnableDC2(), pmu.isEnableDC3(), pmu.isEnableDC4(), pmu.isEnableDC5(),
+                  pmu.isEnableALDO1(), pmu.isEnableALDO2(), pmu.isEnableALDO3(), pmu.isEnableALDO4(),
+                  pmu.isEnableBLDO1(), pmu.isEnableBLDO2(), pmu.isEnableDLDO1(), pmu.isEnableDLDO2(),
+                  pmu.isEnableCPUSLDO());
+    pmu.disableDC2();
+    pmu.disableDC3();
+    pmu.disableDC4();
+    pmu.disableALDO4();
+    pmu.disableBLDO1();
+    pmu.disableBLDO2();
+    pmu.disableDLDO1();
+    pmu.disableDLDO2();
+    pmu.disableCPUSLDO();
+
+    sensorsSleep();
     return true;
+}
+
+static bool i2cWrite(uint8_t address, const uint8_t *data, size_t len) {
+    Wire.beginTransmission(address);
+    Wire.write(data, len);
+    return Wire.endTransmission() == 0;
+}
+
+// The board's IMU and temperature/humidity sensor aren't used; both power up
+// idle rather than asleep
+void sensorsSleep() {
+    const uint8_t shtc3Sleep[] = {0xB0, 0x98};
+    bool sht = i2cWrite(SHTC3_ADDRESS, shtc3Sleep, sizeof(shtc3Sleep));
+
+    int imu = -1;
+    for (uint8_t address : QMI8658_ADDRESSES) {
+        Wire.beginTransmission(address);
+        Wire.write(0x00); // WHO_AM_I
+        if (Wire.endTransmission(false) != 0 || Wire.requestFrom(address, (uint8_t)1) != 1) continue;
+        if (Wire.read() != 0x05) continue;
+        const uint8_t ctrl7[] = {0x08, 0x00}; // accelerometer and gyro off
+        const uint8_t ctrl1[] = {0x02, 0x61}; // address auto-increment, internal oscillator off
+        if (i2cWrite(address, ctrl7, sizeof(ctrl7)) && i2cWrite(address, ctrl1, sizeof(ctrl1))) imu = address;
+        break;
+    }
+    Serial.printf("Sensors asleep: SHTC3 %s, QMI8658 %s", sht ? "yes" : "not found", imu >= 0 ? "yes" : "not found");
+    if (imu >= 0) Serial.printf(" (0x%02X)", imu);
+    Serial.println();
 }
 
 bool powerKeyPressed() {
@@ -56,6 +105,8 @@ bool powerKeyPressed() {
     pmu.clearIrqStatus();
     return pressed;
 }
+
+bool powerKeyPending() { return digitalRead(PWR_IRQ_PIN) == LOW; }
 
 void powerKeyWakeup(bool enable) {
     if (enable) {

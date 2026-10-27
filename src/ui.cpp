@@ -39,8 +39,10 @@ static const uint32_t CONFIRM_TIMEOUT_MS = 10000;
 static const uint32_t SLEEP_SCREEN_TIMEOUT_MS = 15000;
 static const uint32_t BATTERY_READ_MS = 30000;
 static const uint32_t AUTO_SLEEP_MS = 5 * 60 * 1000; // idle time before sleeping on its own
+static const uint32_t SYNC_RESULT_MS = 10000;        // how long a clock sync result stays up
 
 // UI state: written by loop(), read by the display task
+static const int CLOCK_ROW = -1;  // the clock in the header; clicking it syncs over Wi-Fi
 static volatile int selected = 0; // row 0 = "New recording", row n = memo n-1
 static volatile bool confirmDelete = false;
 static volatile int confirmChoice = 0; // 0 = Cancel, 1 = Delete
@@ -49,6 +51,7 @@ static volatile bool sleepRequested = false;
 static uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
 static volatile bool panelAsleep = false; // what the display task has done
+static volatile uint32_t quietSince = 0;  // display task found nothing to redraw from then on; 0 while busy
 static int lastMemoCount = 0;
 static volatile bool screenshotRequested = false;
 
@@ -70,6 +73,7 @@ struct ViewState {
     int usb;
     int sdCard;
     int clockMinute; // -1 while the clock isn't set; changes once a minute
+    int clockSync;   // ClockSync, NONE once a result has been up for SYNC_RESULT_MS
 };
 
 static ViewState currentView() {
@@ -97,6 +101,10 @@ static ViewState currentView() {
     v.usb = usb;
     v.sdCard = audioUsingSdCard();
     v.clockMinute = clockValid() ? (int)(time(nullptr) / 60) : -1;
+    uint32_t since;
+    ClockSync sync = clockSyncState(since);
+    if (sync != CLOCK_SYNCING && millis() - since > SYNC_RESULT_MS) sync = CLOCK_SYNC_NONE;
+    v.clockSync = sync;
     return v;
 }
 
@@ -257,6 +265,50 @@ static void drawHint(int x, int cy, HintIcon icon, const char *label) {
 
 // --- Screen sections ---
 
+// "26 Oct  14:05", or how a sync is going; boxed when selected
+static void drawClock(const ViewState &v) {
+    const int y = 84;
+    int right = SW - MARGIN;
+    bool isSelected = v.selected == CLOCK_ROW;
+    const char *status = nullptr;
+    switch (v.clockSync) {
+    case CLOCK_SYNCING: status = "Syncing..."; break;
+    case CLOCK_SYNC_DONE: status = "Clock synced"; break;
+    case CLOCK_SYNC_NO_WIFI: status = "Wi-Fi not found"; break;
+    case CLOCK_SYNC_FAILED: status = "Sync failed"; break;
+    default:
+        if (v.clockMinute < 0 && isSelected) status = "Clock not set";
+        break;
+    }
+
+    char date[16] = "", hhmm[8] = "";
+    int w;
+    if (status) {
+        w = textWidth(&FreeSans12pt7b, status);
+    } else if (v.clockMinute >= 0) {
+        time_t now = (time_t)v.clockMinute * 60;
+        formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
+        formatLocal(date, sizeof(date), "%e %b", now);
+        w = textWidth(&FreeSans12pt7b, date[0] == ' ' ? date + 1 : date) + 10 + textWidth(&FreeSansBold12pt7b, hhmm);
+    } else {
+        return;
+    }
+
+    uint16_t fg = INK;
+    if (isSelected) {
+        canvas->fillRoundRect(right - w - 20, y - 25, w + 20, 35, 8, INK);
+        right -= 10;
+        fg = PAPER;
+    }
+    if (status) {
+        drawTextRight(right, y, &FreeSans12pt7b, status, fg);
+    } else {
+        drawTextRight(right, y, &FreeSansBold12pt7b, hhmm, fg);
+        drawTextRight(right - textWidth(&FreeSansBold12pt7b, hhmm) - 10, y, &FreeSans12pt7b,
+                      date[0] == ' ' ? date + 1 : date, fg);
+    }
+}
+
 static void drawHeader(const ViewState &v) {
     drawText(MARGIN, 50, &FreeSansBold18pt7b, "zvukopis", INK);
 
@@ -289,16 +341,7 @@ static void drawHeader(const ViewState &v) {
     }
     drawText(x + 14, 84, &FreeSans12pt7b, buf, INK);
 
-    // "26 Oct  14:05"
-    if (v.clockMinute >= 0) {
-        time_t now = (time_t)v.clockMinute * 60;
-        formatLocal(buf, sizeof(buf), "%H:%M", now);
-        drawTextRight(SW - MARGIN, 84, &FreeSansBold12pt7b, buf, INK);
-        int right = SW - MARGIN - textWidth(&FreeSansBold12pt7b, buf) - 10;
-        formatLocal(buf, sizeof(buf), "%e %b", now);
-        drawTextRight(right, 84, &FreeSans12pt7b, buf[0] == ' ' ? buf + 1 : buf, INK);
-    }
-
+    drawClock(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -500,6 +543,11 @@ static void drawFooter(const ViewState &v) {
     } else if (v.confirmDelete) {
         hints[n++] = {HINT_UPDOWN, "Choose"};
         hints[n++] = {HINT_CLICK, "Confirm"};
+    } else if (v.selected == CLOCK_ROW) {
+        hints[n++] = {HINT_UPDOWN, "Select"};
+        hints[n++] = {HINT_CLICK, clockSyncAvailable() ? "Sync clock" : "No Wi-Fi set up"};
+        hints[n++] = {HINT_BOOT, "Hold to record"};
+        hints[n++] = {HINT_PWR, "Sleep"};
     } else if (v.selected == 0) {
         hints[n++] = {HINT_UPDOWN, "Select"};
         hints[n++] = {HINT_CLICK, "Record"};
@@ -574,7 +622,9 @@ static void displayTask(void *) {
     ViewState shown = currentView();
     int partials = 0;
     for (;;) {
+        uint32_t iterationStart = millis();
         ViewState v = currentView();
+        bool pushed = true;
         if (v.sleeping != shown.sleeping) {
             // Going to sleep: full refresh for a clean sleep screen, then the panel's
             // deep sleep. Waking: the full refresh's init also wakes the panel.
@@ -586,18 +636,24 @@ static void displayTask(void *) {
             shown = v;
             partials = 0;
         } else if (v.sleeping) {
-            // leave the sleeping panel alone
+            pushed = false; // leave the sleeping panel alone
         } else if (v.audio == AUDIO_RECORDING && shown.audio == AUDIO_RECORDING) {
-            // keep the panel still while recording; see drawRecordingView
+            pushed = false; // keep the panel still while recording; see drawRecordingView
         } else if (memcmp(&v, &shown, sizeof(v)) != 0) {
+            uint32_t start = millis();
             render(v);
+            Serial.printf("[display] render took %lu ms\n", millis() - start);
             pushPartial(v);
             shown = v;
             partials++;
         } else if (partials >= FULL_REFRESH_EVERY && v.audio == AUDIO_IDLE && !v.confirmDelete) {
             pushFull();
             partials = 0;
+        } else {
+            pushed = false;
         }
+        if (pushed) quietSince = 0;
+        else if (quietSince == 0) quietSince = max(iterationStart, (uint32_t)1);
         if (screenshotRequested) {
             screenshotRequested = false;
             dumpScreenshot();
@@ -659,13 +715,14 @@ void uiHandleEvent(ButtonEvent event) {
 
     switch (event) {
     case BTN_UP:
-        if (selected > 0) selected = selected - 1;
+        if (selected > CLOCK_ROW) selected = selected - 1;
         break;
     case BTN_DOWN:
         if (selected < memoCount()) selected = selected + 1;
         break;
     case BTN_CLICK:
-        if (selected == 0) audioStartRecording();
+        if (selected == CLOCK_ROW) clockSyncNow();
+        else if (selected == 0) audioStartRecording();
         else if (audio == AUDIO_PLAYING && audioPlayingIndex() == selected - 1) audioStopPlayback();
         else audioPlay(selected - 1);
         break;
@@ -698,6 +755,34 @@ void uiTick() {
 }
 
 void uiRequestScreenshot() { screenshotRequested = true; }
+
+// Signed, so it holds across millis() wrapping
+static bool after(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
+
+bool uiReadyToNap(uint32_t since) {
+    if (sleeping || confirmDelete || audioState() != AUDIO_IDLE) return false;
+    uint32_t quiet = quietSince;
+    // The display task must have looked at the screen state after the last change
+    return quiet != 0 && after(quiet, since) && after(quiet, lastActivity);
+}
+
+uint32_t uiMsUntilNextChange() {
+    uint32_t now = millis();
+    uint32_t idle = now - lastActivity;
+    uint32_t ms = idle < AUTO_SLEEP_MS ? AUTO_SLEEP_MS - idle : 0;
+
+    timeval tv;
+    gettimeofday(&tv, nullptr);
+    uint32_t toMinute = 60000 - (tv.tv_sec % 60) * 1000 - tv.tv_usec / 1000 + 5; // just past the minute
+    ms = min(ms, toMinute);
+
+    uint32_t since;
+    ClockSync sync = clockSyncState(since);
+    if (sync != CLOCK_SYNC_NONE && sync != CLOCK_SYNCING && now - since <= SYNC_RESULT_MS) {
+        ms = min(ms, SYNC_RESULT_MS - (now - since) + 5);
+    }
+    return ms;
+}
 
 bool uiTakeSleepRequest() {
     bool requested = sleepRequested;

@@ -25,8 +25,9 @@ static const size_t MAX_MEMO_SAMPLES = (size_t)SAMPLE_RATE * MAX_MEMO_SECONDS;
 static const size_t MIN_MEMO_SAMPLES = SAMPLE_RATE / 4; // anything shorter is an accidental tap
 static const size_t PSRAM_RESERVE = 256 * 1024;         // left free for the rest of the app
 static const uint64_t SD_RESERVE = 1024 * 1024;         // for file system overhead
-static const int CHUNK_FRAMES = 256;                    // 16 ms at 16 kHz
+static const int CHUNK_FRAMES = SAMPLE_RATE / 1000 * 16; // 16 ms
 static const size_t PLAY_BUFFER_SAMPLES = 16 * CHUNK_FRAMES; // read from the SD card 256 ms at a time
+static const uint32_t STANDBY_AFTER_MS = 2000;               // idle time before the codec powers down
 
 enum CommandType : uint8_t {
     CMD_RECORD_START,
@@ -53,7 +54,9 @@ static volatile int memoTotal = 0;
 static volatile uint32_t listVersion = 0;
 static int nextMemoNumber = 1;
 
-// Recording goes into a max-length scratch buffer, then is copied into a right-sized memo
+// Recording goes into a buffer sized for the longest memo that fits, which is
+// then shrunk to the memo (in PSRAM) or written to the card and freed.
+// At 48 kHz a minute is 5.8 MB, too much to keep reserved.
 static int16_t *scratch = nullptr;
 static volatile size_t scratchLength = 0;
 static volatile size_t recordLimit = 0;
@@ -70,22 +73,56 @@ static size_t playBufferStart = 0, playBufferLength = 0; // in samples of the me
 
 static es8311_handle_t codec = nullptr;
 static SemaphoreHandle_t suspendDone;
+// Codec powered and I2S streaming. Off while idle: the codec, mic and I2S DMA
+// draw power, and the task would otherwise wake every 16 ms.
+static volatile bool running = false;
+static uint32_t idleSince = 0;
+// After power-up the ADC gives ~70 ms of silence with a click, then settles
+static const size_t SETTLE_SAMPLES = SAMPLE_RATE / 10;
+static size_t settleLeft = 0; // samples still to drop from the start of a recording
+
+static bool codecInit();
+
+static void audioWake() {
+    if (running) return;
+    uint32_t start = millis();
+    i2s_zero_dma_buffer(I2S_NUM_0);
+    i2s_start(I2S_NUM_0);
+    if (!codecInit()) Serial.println("ES8311 codec init failed");
+    running = true;
+    settleLeft = SETTLE_SAMPLES;
+    Serial.printf("[audio] codec on in %lu ms\n", millis() - start);
+}
+
+static void audioStandby() {
+    if (!running) return;
+    digitalWrite(PA_ENABLE_PIN, LOW);
+    if (codec) es8311_power_down(codec);
+    i2s_stop(I2S_NUM_0); // i2s_read() would now block, so the task waits on commands instead
+    running = false;
+    Serial.println("[audio] codec off");
+}
 
 static uint64_t samplesLeft() {
     if (memoTotal >= MAX_MEMOS) return 0;
-    if (storageAvailable()) {
-        uint64_t freeBytes = storageFreeBytes();
-        return freeBytes > SD_RESERVE ? (freeBytes - SD_RESERVE) / sizeof(int16_t) : 0;
-    }
-    size_t freeBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-    if (freeBytes <= PSRAM_RESERVE) return 0;
-    return (freeBytes - PSRAM_RESERVE) / sizeof(int16_t);
+    size_t ramBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    uint64_t ramSamples = ramBytes > PSRAM_RESERVE ? (ramBytes - PSRAM_RESERVE) / sizeof(int16_t) : 0;
+    if (!storageAvailable()) return ramSamples;
+    uint64_t freeBytes = storageFreeBytes();
+    uint64_t cardSamples = freeBytes > SD_RESERVE ? (freeBytes - SD_RESERVE) / sizeof(int16_t) : 0;
+    // Saved memos only take room on the card; PSRAM just has to hold one recording
+    return ramSamples >= MAX_MEMO_SAMPLES ? cardSamples : min(cardSamples, ramSamples);
 }
 
 static void startRecording() {
     recordLimit = (size_t)min((uint64_t)MAX_MEMO_SAMPLES, samplesLeft());
     if (recordLimit < MIN_MEMO_SAMPLES) {
         Serial.println("No room for another recording");
+        return;
+    }
+    scratch = (int16_t *)ps_malloc(recordLimit * sizeof(int16_t));
+    if (!scratch) {
+        Serial.println("Can't allocate the recording buffer");
         return;
     }
     scratchLength = 0;
@@ -112,6 +149,8 @@ static void analyse(Memo &memo, const int16_t *samples) {
 static void finishRecording() {
     size_t length = scratchLength;
     if (length < MIN_MEMO_SAMPLES) {
+        free(scratch);
+        scratch = nullptr;
         state = AUDIO_IDLE;
         Serial.println("Recording too short, discarded");
         return;
@@ -126,15 +165,14 @@ static void finishRecording() {
     state = AUDIO_SAVING;
     uint32_t start = millis();
     bool onCard = storageAvailable() && storageSaveMemo(memo, scratch); // sets memo.fileName
-    if (!onCard) {
-        memo.samples = (int16_t *)ps_malloc(length * sizeof(int16_t));
-        if (!memo.samples) {
-            state = AUDIO_IDLE;
-            Serial.println("Out of memory, recording discarded");
-            return;
-        }
-        memcpy(memo.samples, scratch, length * sizeof(int16_t));
+    if (onCard) {
+        free(scratch);
+    } else {
+        // Shrinking in place, so no second copy is needed
+        memo.samples = (int16_t *)heap_caps_realloc(scratch, length * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+        if (!memo.samples) memo.samples = scratch;
     }
+    scratch = nullptr;
 
     xSemaphoreTake(memoLock, portMAX_DELAY);
     memmove(&memos[1], &memos[0], memoTotal * sizeof(Memo));
@@ -236,14 +274,20 @@ static void handleCommand(const Command &cmd) {
     switch (cmd.type) {
     case CMD_RECORD_START:
         if (state == AUDIO_PLAYING) stopPlayback();
-        if (state == AUDIO_IDLE) startRecording();
+        if (state == AUDIO_IDLE) {
+            audioWake();
+            startRecording();
+        }
         break;
     case CMD_RECORD_STOP:
         if (state == AUDIO_RECORDING) finishRecording();
         break;
     case CMD_PLAY:
         if (state == AUDIO_PLAYING) stopPlayback();
-        if (state == AUDIO_IDLE) startPlayback(cmd.arg);
+        if (state == AUDIO_IDLE) {
+            audioWake();
+            startPlayback(cmd.arg);
+        }
         break;
     case CMD_STOP_PLAYBACK:
         if (state == AUDIO_PLAYING) stopPlayback();
@@ -252,15 +296,16 @@ static void handleCommand(const Command &cmd) {
         deleteMemo(cmd.arg);
         break;
     case CMD_SELF_TEST:
-        if (state == AUDIO_IDLE) startSelfTest();
+        if (state == AUDIO_IDLE) {
+            audioWake();
+            startSelfTest();
+        }
         break;
     case CMD_SUSPEND:
         if (state == AUDIO_RECORDING) finishRecording();
         if (state == AUDIO_PLAYING) stopPlayback();
-        digitalWrite(PA_ENABLE_PIN, LOW);
         state = AUDIO_IDLE;
-        if (codec) es8311_power_down(codec);
-        i2s_stop(I2S_NUM_0); // the next i2s_read() blocks until audioResume()
+        audioStandby();
         xSemaphoreGive(suspendDone);
         break;
     }
@@ -287,18 +332,26 @@ static void audioTask(void *) {
     static int16_t out[CHUNK_FRAMES * 2];
 
     for (;;) {
+        Command cmd;
+        if (!running) {
+            if (xQueueReceive(commandQueue, &cmd, portMAX_DELAY) == pdTRUE) handleCommand(cmd);
+            idleSince = millis();
+            continue;
+        }
+
         // Reading paces the loop: blocks until the next 16 ms of mic audio arrives
         size_t bytesRead = 0;
         i2s_read(I2S_NUM_0, in, sizeof(in), &bytesRead, portMAX_DELAY);
         size_t frames = bytesRead / 4;
 
-        Command cmd;
         while (xQueueReceive(commandQueue, &cmd, 0) == pdTRUE) handleCommand(cmd);
 
+        size_t skip = min(frames, settleLeft);
+        settleLeft -= skip;
         if (state == AUDIO_RECORDING) {
-            size_t n = min(frames, recordLimit - scratchLength);
+            size_t n = min(frames - skip, recordLimit - scratchLength);
             for (size_t i = 0; i < n; i++) {
-                scratch[scratchLength + i] = in[2 * i]; // ES8311 ADC is on the left slot
+                scratch[scratchLength + i] = in[2 * (skip + i)]; // ES8311 ADC is on the left slot
             }
             scratchLength += n;
             if (scratchLength >= recordLimit) finishRecording();
@@ -320,6 +373,9 @@ static void audioTask(void *) {
         } else if (state == AUDIO_SELF_TEST) {
             selfTestChunk(in, out, frames);
         }
+
+        if (state != AUDIO_IDLE) idleSince = millis();
+        else if (millis() - idleSince > STANDBY_AFTER_MS && uxQueueMessagesWaiting(commandQueue) == 0) audioStandby();
     }
 }
 
@@ -377,11 +433,6 @@ bool audioInit() {
     pinMode(PA_ENABLE_PIN, OUTPUT);
     digitalWrite(PA_ENABLE_PIN, LOW);
 
-    scratch = (int16_t *)ps_malloc(MAX_MEMO_SAMPLES * sizeof(int16_t));
-    if (!scratch) {
-        Serial.println("Failed to allocate recording buffer");
-        return false;
-    }
     if (storageInit()) {
         memoTotal = storageLoadMemos(memos, MAX_MEMOS);
         qsort(memos, memoTotal, sizeof(Memo), [](const void *a, const void *b) {
@@ -399,6 +450,8 @@ bool audioInit() {
         Serial.println("ES8311 codec init failed");
         return false;
     }
+    running = true;
+    idleSince = millis();
     xTaskCreatePinnedToCore(audioTask, "audio", 4096, NULL, 5, NULL, 0);
     return true;
 }
@@ -422,11 +475,7 @@ void audioSuspend() {
     if (xSemaphoreTake(suspendDone, pdMS_TO_TICKS(15000)) != pdTRUE) Serial.println("Audio suspend timed out");
 }
 
-void audioResume() {
-    i2s_zero_dma_buffer(I2S_NUM_0);
-    i2s_start(I2S_NUM_0);
-    if (!codecInit()) Serial.println("ES8311 codec init failed after sleep");
-}
+bool audioAsleep() { return !running && uxQueueMessagesWaiting(commandQueue) == 0; }
 
 AudioState audioState() { return state; }
 
