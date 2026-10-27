@@ -54,6 +54,7 @@ enum Screen {
     SCREEN_SETTINGS,
     SCREEN_TRANSFER,    // Wi-Fi file transfer running
     SCREEN_CARD_READER, // SD card open over USB
+    SCREEN_SCHEDULE,    // the scheduled recordings
 };
 
 enum Overlay {
@@ -62,6 +63,7 @@ enum Overlay {
     OVERLAY_CONFIRM_DELETE, // Cancel / Delete
     OVERLAY_CONFIRM_FORMAT, // Cancel / Format
     OVERLAY_GAIN,           // mic gain choices
+    OVERLAY_CONFIRM_UNSCHEDULE, // Cancel / Remove a scheduled recording
 };
 
 // Header buttons have negative positions: up from the first row reaches them
@@ -86,6 +88,8 @@ static volatile int overlayChoice = 0;
 static uint32_t overlaySince = 0;
 static int menuMoment = 0; // number of the moment the menu is for
 static int transferRow = SET_WEB; // settings row the web page was started from
+static int64_t unscheduleStart = 0;     // the scheduled recording the remove dialog is for
+static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen goes
 static volatile bool sleepRequested = false;
 static volatile uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
@@ -170,6 +174,11 @@ static int momentsOnDay(int key, int *out, int max) {
 
 static int *loopDayMoments, *displayDayMoments; // MAX_MOMENTS each
 
+// Main list rows: New recording, the next scheduled recording (when there
+// are any), then the moments
+static int firstMomentRow(bool scheduled) { return scheduled ? 2 : 1; }
+static const int ROW_NEXT_SCHEDULED = 1;
+
 static int momentIndexByNumber(int number) {
     Moment moment;
     for (int i = 0; momentGet(i, moment); i++) {
@@ -207,6 +216,7 @@ struct ViewState {
     int gainSetting;
     int gainNow;
     uint32_t configVersion; // categories or schedule edited on the web page
+    int scheduleCount;
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
 
@@ -257,6 +267,7 @@ static ViewState currentView() {
     Schedule next;
     int nextIndex;
     v.nextScheduleMinute = clockValid() && scheduleNext(time(nullptr), next, nextIndex) ? (int)(next.start / 60) : -1;
+    v.scheduleCount = scheduleCount();
     return v;
 }
 
@@ -425,6 +436,21 @@ static void iconCalendar(int cx, int cy, uint16_t fg, uint16_t bg) {
     for (int r = 0; r < 2; r++) {
         for (int c = 0; c < 3; c++) canvas->fillRect(x + 5 + c * 6, y + 10 + r * 5, 3, 3, fg);
     }
+}
+
+static void iconClock(int cx, int cy, int r, uint16_t c) {
+    drawArc(cx, cy, r, 0, 360, max(2, r / 5), c);
+    canvas->fillRect(cx - 1, cy - r * 6 / 10, 3, r * 6 / 10 + 1, c); // minute hand, at twelve
+    canvas->fillRect(cx, cy - 1, r * 45 / 100, 3, c);                // hour hand, at three
+}
+
+// "in 3 h 12 min", for something `seconds` from now
+static void formatIn(char *buf, size_t len, int64_t seconds) {
+    if (seconds <= 0) snprintf(buf, len, "now");
+    else if (seconds < 60) snprintf(buf, len, "in under a minute");
+    else if (seconds < 3600) snprintf(buf, len, "in %d min", (int)(seconds / 60));
+    else if (seconds < 48 * 3600) snprintf(buf, len, "in %d h %d min", (int)(seconds / 3600), (int)(seconds / 60 % 60));
+    else snprintf(buf, len, "in %d days", (int)(seconds / 86400));
 }
 
 static void iconWifi(int cx, int cy) {
@@ -637,6 +663,32 @@ static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewS
     }
 }
 
+// When the next scheduled recording is, and how long it lasts
+static void drawNextScheduledRow(int y, uint16_t fg, const ViewState &v) {
+    int lineY = y + 40;
+    iconClock(MARGIN + 14, lineY - 8, 11, fg);
+    drawText(MARGIN + 44, lineY, &Bold22, "Next recording", fg);
+    Schedule next;
+    int index;
+    char buf[48];
+    if (v.nextScheduleMinute < 0 || !scheduleNext(time(nullptr), next, index)) {
+        drawText(MARGIN + 44, y + 70, &Text17, v.clockMinute < 0 ? "Set the clock for these to run" : "", fg);
+        return;
+    }
+    char in[24];
+    formatIn(in, sizeof(in), next.start - (int64_t)v.clockMinute * 60);
+    drawTextRight(SW - MARGIN, lineY, &Text22, in, fg);
+    char when[24], length[12];
+    formatLocal(when, sizeof(when), "%a %e %b, %H:%M", (time_t)next.start);
+    formatTime(length, sizeof(length), next.seconds);
+    snprintf(buf, sizeof(buf), "%s  -  %s%s", when, length, next.daily ? "  -  every day" : "");
+    drawText(MARGIN + 44, y + 70, &Text17, buf, fg);
+    if (v.scheduleCount > 1) {
+        snprintf(buf, sizeof(buf), "+%d more", v.scheduleCount - 1);
+        drawTextRight(SW - MARGIN, y + 70, &Text17, buf, fg);
+    }
+}
+
 // Two lines: name, date, tag and duration, then a waveform. While playing,
 // the part not yet played is drawn hollow.
 static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, bool showDate) {
@@ -701,8 +753,10 @@ static void drawRows(const ViewState &v, int rows, bool withNewRecording, const 
         uint16_t fg = isSelected ? PAPER : INK;
         if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, ROW_H - 8, 12, INK);
 
+        int first = firstMomentRow(v.scheduleCount > 0);
         if (withNewRecording && row == 0) drawNewRecordingRow(y, fg, isSelected, v);
-        else if (withNewRecording) drawMomentRow(row - 1, y, fg, v, true);
+        else if (withNewRecording && row < first) drawNextScheduledRow(y, fg, v);
+        else if (withNewRecording) drawMomentRow(row - first, y, fg, v, true);
         else drawMomentRow(dayMoments[row], y, fg, v, false);
 
         bool nextSelected = row + 1 == v.selected;
@@ -722,9 +776,10 @@ static void drawRows(const ViewState &v, int rows, bool withNewRecording, const 
 
 static void drawList(const ViewState &v) {
     drawMainHeader(v);
-    drawRows(v, 1 + v.momentCount, true, nullptr);
+    int first = firstMomentRow(v.scheduleCount > 0);
+    drawRows(v, first + v.momentCount, true, nullptr);
     if (v.momentCount == 0) {
-        int cx = SW / 2, y = LIST_TOP + ROW_H + 110;
+        int cx = SW / 2, y = LIST_TOP + first * ROW_H + 110;
         drawTextCentered(cx, y, &Bold22, "No moments yet", INK);
         drawTextCentered(cx, y + 38, &Text22, "Click New recording to capture", INK);
         drawTextCentered(cx, y + 66, &Text22, "the sound of this moment", INK);
@@ -882,7 +937,6 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         } else {
             snprintf(detail, len, "None; set them up on the web page");
         }
-        enabled = v.nextScheduleMinute >= 0;
         break;
     case SET_WEB:
         title = "Web page";
@@ -978,6 +1032,71 @@ static void drawTransfer(const ViewState &v) {
         drawTextCentered(cx, y, &Text22, buf, INK);
     }
     drawTextCentered(cx, y + 34, &Text17, "Stops by itself after 10 minutes without use", INK);
+}
+
+// Every scheduled recording, soonest first
+static void drawScheduleScreen(const ViewState &v) {
+    char subtitle[32];
+    snprintf(subtitle, sizeof(subtitle), "%d recording%s", v.scheduleCount, v.scheduleCount == 1 ? "" : "s");
+    drawSubHeader(v, "Schedule", subtitle);
+    int cx = SW / 2;
+    if (v.scheduleCount == 0) {
+        drawTextCentered(cx, 300, &Bold22, "Nothing scheduled", INK);
+        drawTextCentered(cx, 338, &Text22, "Add recordings on the web page:", INK);
+        drawTextCentered(cx, 366, &Text22, "Settings, Web page", INK);
+        return;
+    }
+    const int rowH = 74, visible = (FOOTER_LINE_Y - LIST_TOP - 8) / rowH;
+    static int scrollTop = 0;
+    int sel = max(0, v.selected);
+    if (sel < scrollTop) scrollTop = sel;
+    if (sel >= scrollTop + visible) scrollTop = sel - visible + 1;
+    scrollTop = constrain(scrollTop, 0, max(0, v.scheduleCount - visible));
+
+    for (int i = 0; i < visible && scrollTop + i < v.scheduleCount; i++) {
+        int row = scrollTop + i, y = LIST_TOP + i * rowH;
+        Schedule s;
+        if (!scheduleGet(row, s)) break;
+        bool isSelected = row == v.selected;
+        uint16_t fg = isSelected ? PAPER : INK;
+        if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, rowH - 8, 12, INK);
+        else if (i > 0 && row - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
+
+        char when[32], length[12], detail[48];
+        formatLocal(when, sizeof(when), s.daily ? "Every day, %H:%M:%S" : "%a %e %b, %H:%M:%S", (time_t)s.start);
+        formatTime(length, sizeof(length), s.seconds);
+        drawText(MARGIN, y + 33, &Bold22, when, fg);
+        drawTextRight(SW - MARGIN, y + 33, &Mono20, length, fg);
+        char in[24];
+        formatIn(in, sizeof(in), v.clockMinute >= 0 ? s.start - (int64_t)v.clockMinute * 60 : 0);
+        if (s.daily) {
+            char next[24];
+            formatLocal(next, sizeof(next), "%a %e %b", (time_t)s.start);
+            snprintf(detail, sizeof(detail), "next on %s, %s", next, in);
+        } else {
+            snprintf(detail, sizeof(detail), "%s", v.clockMinute >= 0 ? in : "the clock isn't set");
+        }
+        drawText(MARGIN, y + 58, &Text17, detail, fg);
+    }
+    if (scrollTop + visible < v.scheduleCount) {
+        int bottom = LIST_TOP + visible * rowH;
+        canvas->fillTriangle(cx - 8, bottom + 3, cx + 8, bottom + 3, cx, bottom + 11, INK);
+    }
+}
+
+static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, const char *detail, const char *action);
+
+static void drawUnscheduleDialog(const ViewState &v) {
+    char detail[48] = "";
+    Schedule s;
+    for (int i = 0; scheduleGet(i, s); i++) {
+        if (s.start != unscheduleStart) continue;
+        char when[24], length[12];
+        formatLocal(when, sizeof(when), s.daily ? "every day %H:%M" : "%e %b %H:%M", (time_t)s.start);
+        formatTime(length, sizeof(length), s.seconds);
+        snprintf(detail, sizeof(detail), "%s  -  %s", when, length);
+    }
+    drawConfirm(v, [] { iconClock(SW / 2, 268 + 52, 30, INK); }, "Remove recording?", detail, "Remove");
 }
 
 static void drawCardReader(const ViewState &v) {
@@ -1243,6 +1362,11 @@ static void drawFooter(const ViewState &v) {
         hints[n++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
         hints[n++] = {HINT_HOLD_CLICK, "Back"};
         hints[n++] = {HINT_PWR, "Hold: sleep"};
+    } else if (v.screen == SCREEN_SCHEDULE) {
+        hints[n++] = {HINT_UPDOWN, "Select"};
+        hints[n++] = {HINT_CLICK, "Back"};
+        hints[n++] = {HINT_HOLD_CLICK, v.selected >= 0 ? "Remove" : "Back"};
+        hints[n++] = {HINT_PWR, "Hold: sleep"};
     } else if (v.screen == SCREEN_CALENDAR) {
         hints[n++] = {HINT_UPDOWN, "Day"};
         hints[n++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
@@ -1259,6 +1383,10 @@ static void drawFooter(const ViewState &v) {
                                                         : "Calendar";
         hints[n++] = {HINT_UPDOWN, "Select"};
         hints[n++] = {HINT_CLICK, open};
+        hints[n++] = {HINT_PWR, "Hold: sleep"};
+    } else if (v.screen == SCREEN_LIST && v.selected == ROW_NEXT_SCHEDULED && v.scheduleCount > 0) {
+        hints[n++] = {HINT_UPDOWN, "Select"};
+        hints[n++] = {HINT_CLICK, "All scheduled"};
         hints[n++] = {HINT_PWR, "Hold: sleep"};
     } else if (v.screen == SCREEN_LIST && v.selected == 0) {
         hints[n++] = {HINT_UPDOWN, "Select"};
@@ -1296,12 +1424,14 @@ static void render(const ViewState &v) {
         case SCREEN_SETTINGS: drawSettings(v); break;
         case SCREEN_TRANSFER: drawTransfer(v); break;
         case SCREEN_CARD_READER: drawCardReader(v); break;
+        case SCREEN_SCHEDULE: drawScheduleScreen(v); break;
         }
         switch (v.overlay) {
         case OVERLAY_MENU: drawMenu(v); break;
         case OVERLAY_CONFIRM_DELETE: drawDeleteDialog(v); break;
         case OVERLAY_CONFIRM_FORMAT: drawFormatDialog(v); break;
         case OVERLAY_GAIN: drawGainPicker(v); break;
+        case OVERLAY_CONFIRM_UNSCHEDULE: drawUnscheduleDialog(v); break;
         }
     }
     drawFooter(v);
@@ -1474,6 +1604,15 @@ static void handleOverlay(ButtonEvent event) {
         } else if (overlay == OVERLAY_GAIN) {
             audioSetMicGain(GAIN_CHOICES[overlayChoice]);
             overlay = OVERLAY_NONE;
+        } else if (overlay == OVERLAY_CONFIRM_UNSCHEDULE) {
+            Schedule s;
+            for (int i = 0; overlayChoice == 1 && scheduleGet(i, s); i++) {
+                if (s.start == unscheduleStart) {
+                    scheduleRemove(i);
+                    break;
+                }
+            }
+            overlay = OVERLAY_NONE;
         }
         break;
     }
@@ -1482,22 +1621,30 @@ static void handleOverlay(ButtonEvent event) {
     }
 }
 
+static void openSchedule(Screen from) {
+    scheduleFrom = from;
+    showScreen(SCREEN_SCHEDULE, scheduleCount() > 0 ? 0 : ROW_BACK);
+}
+
 static void handleList(ButtonEvent event) {
+    bool scheduled = scheduleCount() > 0;
+    int first = firstMomentRow(scheduled);
     switch (event) {
     case BTN_UP:
         if (selected > ROW_SETTINGS) selected = selected - 1;
         break;
     case BTN_DOWN:
-        if (selected < momentCount()) selected = selected + 1;
+        if (selected < first + momentCount() - 1) selected = selected + 1;
         break;
     case BTN_CLICK:
         if (selected == ROW_SETTINGS) showScreen(SCREEN_SETTINGS, 0);
         else if (selected == ROW_CALENDAR) openCalendar();
         else if (selected == 0) audioStartRecording();
-        else togglePlay(selected - 1);
+        else if (selected < first) openSchedule(SCREEN_LIST);
+        else togglePlay(selected - first);
         break;
     case BTN_LONG_CLICK:
-        if (selected > 0) openMenu(selected - 1);
+        if (selected >= first) openMenu(selected - first);
         break;
     default:
         break;
@@ -1553,6 +1700,31 @@ static void handleCalendar(ButtonEvent event) {
     }
 }
 
+static void handleSchedule(ButtonEvent event) {
+    Schedule s;
+    switch (event) {
+    case BTN_UP:
+        if (selected > ROW_BACK) selected = selected - 1;
+        break;
+    case BTN_DOWN:
+        if (selected < scheduleCount() - 1) selected = selected + 1;
+        break;
+    case BTN_CLICK:
+        showScreen(scheduleFrom, scheduleFrom == SCREEN_SETTINGS ? SET_SCHEDULE : ROW_NEXT_SCHEDULED);
+        break;
+    case BTN_LONG_CLICK:
+        if (selected >= 0 && scheduleGet(selected, s)) {
+            unscheduleStart = s.start;
+            openOverlay(OVERLAY_CONFIRM_UNSCHEDULE, 0);
+        } else {
+            showScreen(scheduleFrom, scheduleFrom == SCREEN_SETTINGS ? SET_SCHEDULE : ROW_NEXT_SCHEDULED);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 static void handleSettings(ButtonEvent event) {
     switch (event) {
     case BTN_UP:
@@ -1571,6 +1743,9 @@ static void handleSettings(ButtonEvent event) {
             break;
         case SET_SYNC:
             clockSyncNow();
+            break;
+        case SET_SCHEDULE:
+            openSchedule(SCREEN_SETTINGS);
             break;
         case SET_GAIN: {
             int current = 0;
@@ -1653,6 +1828,7 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_DAY: handleDay(event); break;
     case SCREEN_CALENDAR: handleCalendar(event); break;
     case SCREEN_SETTINGS: handleSettings(event); break;
+    case SCREEN_SCHEDULE: handleSchedule(event); break;
     case SCREEN_TRANSFER:
         if (event == BTN_CLICK) {
             transferStop();
@@ -1664,9 +1840,16 @@ static void handleEvent(ButtonEvent event) {
 
 void uiTick() {
     int count = momentCount();
-    if (count > lastMomentCount && screen == SCREEN_LIST) selected = 1; // a recording just finished: select it so a click plays it
+    // The next-scheduled row comes and goes; keep the same moment selected
+    static bool wasScheduled = false;
+    bool scheduled = scheduleCount() > 0;
+    int first = firstMomentRow(scheduled);
+    if (screen == SCREEN_LIST && scheduled != wasScheduled && selected >= 1) selected = selected + (scheduled ? 1 : -1);
+    wasScheduled = scheduled;
+    if (count > lastMomentCount && screen == SCREEN_LIST) selected = first; // a recording just finished: select it so a click plays it
     lastMomentCount = count;
-    if (screen == SCREEN_LIST && selected > count) selected = count;
+    if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
+    if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty
     static uint32_t checkedVersion = UINT32_MAX;
     if (screen == SCREEN_DAY && momentListVersion() != checkedVersion) {
         checkedVersion = momentListVersion(); // a moment of the day may have been deleted
