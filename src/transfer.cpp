@@ -13,6 +13,7 @@
 #include "config.h"
 #include "storage.h"
 #include "networks.h"
+#include "ui.h"
 
 static const char *HOST_NAME = "zvukopis"; // http://zvukopis.local/
 static const uint32_t IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -189,8 +190,34 @@ function saveWifi(){const s=$('ssid').value||$('otherssid').value.trim();
  if(!s){alert('Choose or enter a network');return}
  post('/wifi/save',new URLSearchParams({ssid:s,password:$('pass').value}))}
 function forget(i,n){if(confirm('Forget '+n+'?'))post('/wifi/forget?i='+i)}
+async function record(start){
+ const s=(+$('recmin').value||0)*60+(+$('recsec').value||0);
+ const r=await fetch(start?'/record/start?seconds='+s:'/record/stop',{method:'POST'});
+ if(!r.ok)alert(await r.text());poll()}
+let moments=null;
+async function poll(){
+ try{const st=await(await fetch('/status')).json();
+  const t=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+  $('recstatus').textContent=st.state=='recording'?'Recording '+t(st.seconds)+' of up to '+t(st.limit)
+   :st.state=='saving'?'Saving...':st.state=='playing'?'Playing on zvukopis':'Ready to record';
+  $('recstart').disabled=st.state=='recording'||st.state=='saving';$('recstop').disabled=st.state!='recording';
+  if(moments!==null&&st.moments!=moments)location.reload();moments=st.moments;
+ }catch(e){}}
+setInterval(poll,1000);poll();
 if($('ssid'))scan();
 </script></body></html>)";
+
+static void sendRecord(char *buf, size_t len) {
+    int longest = (int)audioLongestRecording();
+    snprintf(buf, len, "<h2>Record</h2><div class=row><b id=recstatus>&nbsp;</b></div>"
+                       "<div class=row><button id=recstart onclick=record(1)>Start recording</button>"
+                       "<button id=recstop onclick=record(0) disabled>Stop</button>"
+                       "<span>for <input type=number id=recmin min=0 value=0> min <input type=number id=recsec min=0 max=59 value=0> s"
+                       "</span></div><p class=note>Leave the length at 0 to record until you press Stop (up to %d:%02d). "
+                       "Wi-Fi stays on meanwhile, which may add a little noise.</p>",
+             longest / 60, longest % 60);
+    server.sendContent(buf);
+}
 
 static void sendMoments(char *buf, size_t len) {
     int count = momentCount();
@@ -355,6 +382,7 @@ static void handleIndex() {
     server.sendContent(buf);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
     if (firstTime) sendWifi(buf, sizeof(buf)); // what someone setting it up came for
+    sendRecord(buf, sizeof(buf));
     sendMoments(buf, sizeof(buf));
     sendSchedule(buf, sizeof(buf));
     sendCategories(buf, sizeof(buf));
@@ -429,6 +457,44 @@ static void handleCategories() {
     server.send(200, "text/plain", "ok");
 }
 
+static void handleRecordStart() {
+    noteRequest();
+    AudioState a = audioState();
+    if (a == AUDIO_RECORDING || a == AUDIO_SAVING) {
+        server.send(409, "text/plain", "Already recording");
+        return;
+    }
+    if (!uiCanRecord() || audioLongestRecording() < 1) {
+        server.send(409, "text/plain", "No room to record (memory or card full)");
+        return;
+    }
+    if (a == AUDIO_PLAYING) audioStopPlayback();
+    uint32_t seconds = server.arg("seconds").toInt();
+    audioStartRecording(seconds > 0 ? seconds : 24 * 3600); // otherwise until stopped or memory runs out
+    server.send(200, "text/plain", "ok");
+}
+
+static void handleRecordStop() {
+    noteRequest();
+    if (audioState() == AUDIO_RECORDING) audioStopRecording();
+    server.send(200, "text/plain", "ok");
+}
+
+// Polled every second by the page; not counted as use, so an open tab doesn't keep Wi-Fi on forever
+static void handleStatus() {
+    const char *state = "idle";
+    switch (audioState()) {
+    case AUDIO_RECORDING: state = "recording"; break;
+    case AUDIO_SAVING: state = "saving"; break;
+    case AUDIO_PLAYING: state = "playing"; break;
+    default: break;
+    }
+    char json[128];
+    snprintf(json, sizeof(json), "{\"state\":\"%s\",\"seconds\":%.1f,\"limit\":%.0f,\"moments\":%d}", state,
+             audioRecordingSeconds(), audioRecordingLimitSeconds(), momentCount());
+    server.send(200, "application/json", json);
+}
+
 static void handleTimeZone() {
     noteRequest();
     String tz = server.arg("tz");
@@ -500,6 +566,9 @@ static void addRoutes() {
     server.on("/schedule/remove", HTTP_POST, handleScheduleRemove);
     server.on("/categories", HTTP_POST, handleCategories);
     server.on("/timezone", HTTP_POST, handleTimeZone);
+    server.on("/record/start", HTTP_POST, handleRecordStart);
+    server.on("/record/stop", HTTP_POST, handleRecordStop);
+    server.on("/status", HTTP_GET, handleStatus);
     server.on("/wifi/scan", HTTP_GET, handleWifiScan);
     server.on("/wifi/save", HTTP_POST, handleWifiSave);
     server.on("/wifi/forget", HTTP_POST, handleWifiForget);

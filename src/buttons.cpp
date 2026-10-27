@@ -7,10 +7,11 @@
 #include "board_power.h"
 
 // All active low
+static const int BOOT_PIN = 0;
 static const int UP_PIN = 4;
 static const int CLICK_PIN = 5;
 static const int DOWN_PIN = 6;
-static const int KEY_PINS[] = {UP_PIN, CLICK_PIN, DOWN_PIN};
+static const int KEY_PINS[] = {BOOT_PIN, UP_PIN, CLICK_PIN, DOWN_PIN};
 
 static const uint32_t POLL_MS = 10;
 static const uint32_t LONG_PRESS_MS = 800;
@@ -47,7 +48,7 @@ static int updateKey(Key &key) {
 }
 
 static void buttonTask(void *) {
-    Key up = {UP_PIN}, click = {CLICK_PIN}, down = {DOWN_PIN};
+    Key boot = {BOOT_PIN}, up = {UP_PIN}, click = {CLICK_PIN}, down = {DOWN_PIN};
     int polls = 0;
 
     for (;;) {
@@ -59,6 +60,7 @@ static void buttonTask(void *) {
         if (upChange) buttonsInject(upChange == 1 ? BTN_UP : BTN_UP_RELEASE);
         if (downChange) buttonsInject(downChange == 1 ? BTN_DOWN : BTN_DOWN_RELEASE);
         int clickChange = updateKey(click);
+        if (updateKey(boot) == 1) buttonsInject(BTN_MENU);
         uint32_t now = millis();
 
         if (click.down && !click.held && now - click.pressedAt >= LONG_PRESS_MS) {
@@ -69,7 +71,7 @@ static void buttonTask(void *) {
 
 
         if (++polls % POWER_KEY_POLL_EVERY == 0 && powerKeyPressed()) buttonsInject(BTN_POWER);
-        keysDown = up.down || click.down || down.down;
+        keysDown = boot.down || up.down || click.down || down.down;
 
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }

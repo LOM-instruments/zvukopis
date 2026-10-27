@@ -280,7 +280,7 @@ void setup() {
     if (!audioInit()) Serial.println("Audio init failed");
     uiStart();
     buttonsInit();
-    Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, "
+    Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "
                    "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, "
                    "P = power stats, z = 3 s light sleep test (drops USB)");
 }
@@ -291,6 +291,7 @@ void loop() {
         case 'u': buttonsInject(BTN_UP); break;
         case 'd': buttonsInject(BTN_DOWN); break;
         case 'U': buttonsInject(BTN_UP_RELEASE); break;
+        case 'm': buttonsInject(BTN_MENU); break;
         case 'D': buttonsInject(BTN_DOWN_RELEASE); break;
         case 'c': buttonsInject(BTN_CLICK); break;
         case 'l': buttonsInject(BTN_LONG_CLICK); break;

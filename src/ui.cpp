@@ -71,7 +71,6 @@ enum Overlay {
 // Header buttons have negative positions: up from the first row reaches them
 static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
-static const int ROW_SETTINGS = -2; // main list
 
 enum SettingsRow { SET_SYNC, SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
@@ -92,6 +91,8 @@ static int menuMoment = 0; // number of the moment the menu is for
 static int transferRow = SET_WEB; // settings row the web page was started from
 static int64_t unscheduleStart = 0;     // the scheduled recording the remove dialog is for
 static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen goes
+static Screen menuFrom = SCREEN_LIST;     // where closing the menu (Settings) returns to
+static int menuFromSelected = 0;
 static volatile bool sleepRequested = false;
 static volatile uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
@@ -420,15 +421,6 @@ static void iconTrash(int cx, int cy) {
     for (int dx = -10; dx <= 10; dx += 10) canvas->fillRect(cx + dx - 1, cy - 12, 3, 36, INK);
 }
 
-static void iconGear(int cx, int cy, uint16_t fg, uint16_t bg) {
-    for (int i = 0; i < 8; i++) {
-        float a = i * (float)M_PI / 4;
-        canvas->fillCircle(cx + (int)roundf(10 * cosf(a)), cy + (int)roundf(10 * sinf(a)), 3, fg);
-    }
-    canvas->fillCircle(cx, cy, 9, fg);
-    canvas->fillCircle(cx, cy, 4, bg);
-}
-
 static void iconCalendar(int cx, int cy, uint16_t fg, uint16_t bg) {
     int x = cx - 12, y = cy - 10;
     canvas->fillRoundRect(x, y, 24, 22, 3, fg);
@@ -538,7 +530,7 @@ static int iconBattery(int right, int cy, int percent) {
     return x;
 }
 
-enum HintIcon { HINT_UPDOWN, HINT_CLICK, HINT_HOLD_CLICK, HINT_PWR };
+enum HintIcon { HINT_UPDOWN, HINT_CLICK, HINT_HOLD_CLICK, HINT_PWR, HINT_BOOT };
 
 // A key name in a rounded box, like a keycap. Returns its width.
 static int drawKeycap(int x, int cy, const char *name) {
@@ -548,7 +540,9 @@ static int drawKeycap(int x, int cy, const char *name) {
     return w;
 }
 
-static void drawHint(int x, int cy, HintIcon icon, const char *label) {
+// Returns the hint's width
+static int drawHint(int x, int cy, HintIcon icon, const char *label) {
+    int start = x;
     switch (icon) {
     case HINT_UPDOWN:
         iconUpDown(x + 6, cy, INK);
@@ -565,17 +559,21 @@ static void drawHint(int x, int cy, HintIcon icon, const char *label) {
     case HINT_PWR:
         x += drawKeycap(x, cy, "PWR") + 8;
         break;
+    case HINT_BOOT:
+        x += drawKeycap(x, cy, "BOOT") + 8;
+        break;
     }
     drawText(x, cy + 7, &Text22, label, INK);
+    return x - start + textWidth(&Text22, label);
 }
 
 // A header button: icon in a rounded box, filled when selected
-static void drawHeaderButton(int x, int cy, bool isSelected, void (*icon)(int, int, uint16_t, uint16_t)) {
-    int y = cy - ICON_BOX / 2;
+static void drawHeaderButton(int x, int cy, int size, bool isSelected, void (*icon)(int, int, uint16_t, uint16_t)) {
+    int y = cy - size / 2;
     uint16_t fg = isSelected ? PAPER : INK, bg = isSelected ? INK : PAPER;
-    if (isSelected) canvas->fillRoundRect(x, y, ICON_BOX, ICON_BOX, 9, INK);
-    else canvas->drawRoundRect(x, y, ICON_BOX, ICON_BOX, 9, INK);
-    icon(x + ICON_BOX / 2, cy, fg, bg);
+    if (isSelected) canvas->fillRoundRect(x, y, size, size, 8, INK);
+    else canvas->drawRoundRect(x, y, size, size, 8, INK);
+    icon(x + size / 2, cy, fg, bg);
 }
 
 // --- Screen sections ---
@@ -608,21 +606,30 @@ static void drawDateTime(const ViewState &v) {
     drawTextRight(SW - MARGIN - textWidth(&MonoBold20, hhmm) - 10, 84, &Text22, date, INK);
 }
 
-// "zvukopis", status, calendar and settings buttons; moment count and clock below
+// First line: name, date and time, battery. Second: moments, time left, and
+// the calendar button.
 static void drawMainHeader(const ViewState &v) {
     drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
-    int settingsX = SW - MARGIN - ICON_BOX, calendarX = settingsX - ICON_BOX - 8;
-    drawHeaderButton(settingsX, 38, v.selected == ROW_SETTINGS, iconGear);
-    drawHeaderButton(calendarX, 38, v.selected == ROW_CALENDAR, iconCalendar);
-    drawStatus(calendarX - 14, 38, v);
+    int statusLeft = drawStatus(SW - MARGIN, 38, v);
+    if (v.clockMinute >= 0) {
+        char date[16], hhmm[8];
+        time_t now = (time_t)v.clockMinute * 60;
+        formatLocal(date, sizeof(date), "%e %b", now);
+        formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
+        int dateW = textWidth(&Text22, date), w = dateW + 8 + textWidth(&MonoBold20, hhmm);
+        int titleRight = MARGIN + textWidth(&Bold32, "zvukopis");
+        int x = (titleRight + statusLeft) / 2 - w / 2;
+        drawText(x, 47, &Text22, date, INK);
+        drawText(x + dateW + 8, 47, &MonoBold20, hhmm, INK);
+    }
 
     // "2 moments  •  3:04 left"
     char buf[32];
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
     else snprintf(buf, sizeof(buf), "%d moments", v.momentCount);
-    drawText(MARGIN, 84, &Text22, buf, INK);
+    drawText(MARGIN, 86, &Text22, buf, INK);
     int x = MARGIN + textWidth(&Text22, buf) + 14;
-    canvas->fillCircle(x, 78, 2, INK);
+    canvas->fillCircle(x, 80, 2, INK);
     if (v.secondsLeft < 1) {
         snprintf(buf, sizeof(buf), v.sdCard ? "card full" : "memory full");
     } else {
@@ -630,8 +637,9 @@ static void drawMainHeader(const ViewState &v) {
         formatTimeLeft(left, sizeof(left), v.secondsLeft);
         snprintf(buf, sizeof(buf), "%s left", left);
     }
-    drawText(x + 14, 84, &Text22, buf, INK);
-    drawDateTime(v);
+    drawText(x + 14, 86, &Text22, buf, INK);
+    const int buttonSize = 34;
+    drawHeaderButton(SW - MARGIN - buttonSize, 79, buttonSize, v.selected == ROW_CALENDAR, iconCalendar);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -1370,75 +1378,75 @@ static void drawSleepScreen(const ViewState &v) {
     if (work) drawText(MARGIN, y + 56, &Text17, work, INK);
 }
 
-// Context hints in a 2x2 grid
+// Context hints: what the rocker does on the first line, BOOT and PWR on the second
 static void drawFooter(const ViewState &v) {
     struct Hint {
         HintIcon icon;
         const char *label;
-    } hints[4];
-    int n = 0;
+    } rocker[3], keys[2];
+    int nr = 0, nk = 0;
+    bool menuKeys = true; // BOOT for the menu, PWR to sleep
     bool playing = v.audio == AUDIO_PLAYING;
     if (v.sleeping) {
-        hints[n++] = {HINT_PWR, "Hold 2 s to wake"};
+        keys[nk++] = {HINT_PWR, "Hold 2 s to wake"};
+        menuKeys = false;
     } else if (v.audio == AUDIO_SAVING || v.audio == AUDIO_FORMATTING) {
-        // nothing to press meanwhile
+        menuKeys = false; // nothing to press meanwhile
     } else if (v.audio == AUDIO_RECORDING) {
-        hints[n++] = {HINT_CLICK, "Stop recording"};
+        rocker[nr++] = {HINT_CLICK, "Stop recording"};
+        menuKeys = false;
     } else if (v.overlay != OVERLAY_NONE) {
-        hints[n++] = {HINT_UPDOWN, "Choose"};
-        hints[n++] = {HINT_CLICK, "Confirm"};
+        rocker[nr++] = {HINT_UPDOWN, "Choose"};
+        rocker[nr++] = {HINT_CLICK, "Confirm"};
+        menuKeys = false;
     } else if (v.screen == SCREEN_TRANSFER) {
-        hints[n++] = {HINT_CLICK, "Stop the web page"};
+        rocker[nr++] = {HINT_CLICK, "Stop the web page"};
+        menuKeys = false;
     } else if (v.screen == SCREEN_CARD_READER) {
-        hints[n++] = {HINT_CLICK, "Leave (restarts)"};
+        rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
+        menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
-        hints[n++] = {HINT_HOLD_CLICK, "Back"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
     } else if (v.screen == SCREEN_SCHEDULE) {
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, "Back"};
-        hints[n++] = {HINT_HOLD_CLICK, v.selected >= 0 ? "Remove" : "Back"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, "Back"};
+        if (v.selected >= 0) rocker[nr++] = {HINT_HOLD_CLICK, "Remove"};
     } else if (v.screen == SCREEN_CALENDAR) {
-        hints[n++] = {HINT_UPDOWN, "Day"};
-        hints[n++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
-        hints[n++] = {HINT_HOLD_CLICK, "Back"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Day"};
+        rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
     } else if (playing && (v.screen == SCREEN_LIST || v.screen == SCREEN_DAY)) {
-        hints[n++] = {HINT_UPDOWN, "Hold: speed"};
-        hints[n++] = {HINT_CLICK, "Stop"};
-        hints[n++] = {HINT_HOLD_CLICK, "Tag, delete"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Hold: speed"};
+        rocker[nr++] = {HINT_CLICK, "Stop"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Tag, delete"};
     } else if (v.selected < 0) {
-        const char *open = v.screen == SCREEN_DAY ? "Back"
-                           : v.selected == ROW_SETTINGS ? "Settings"
-                                                        : "Calendar";
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, open};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, v.screen == SCREEN_DAY ? "Back" : "Calendar"};
     } else if (v.screen == SCREEN_LIST && v.selected == ROW_NEXT_SCHEDULED && v.scheduleCount > 0) {
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, "All scheduled"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, "All scheduled"};
     } else if (v.screen == SCREEN_LIST && v.selected == 0) {
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, "Record"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, "Record"};
     } else {
-        hints[n++] = {HINT_UPDOWN, "Select"};
-        hints[n++] = {HINT_CLICK, "Play"};
-        hints[n++] = {HINT_HOLD_CLICK, "Tag, delete"};
-        hints[n++] = {HINT_PWR, "Hold: sleep"};
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, "Play"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Tag, delete"};
+    }
+    if (menuKeys) {
+        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS ? "Close menu" : "Menu"};
+        keys[nk++] = {HINT_PWR, "Hold: sleep"};
     }
 
     canvas->drawFastHLine(MARGIN, FOOTER_LINE_Y, SW - 2 * MARGIN, INK);
-    for (int i = 0; i < n; i++) {
-        int x = MARGIN + (i % 2) * (SW / 2 - MARGIN + 8);
-        int cy = FOOTER_LINE_Y + 34 + (i / 2) * 40;
-        drawHint(x, cy, hints[i].icon, hints[i].label);
-    }
+    const int gap = 22;
+    int x = MARGIN, cy = FOOTER_LINE_Y + 34;
+    for (int i = 0; i < nr; i++) x += drawHint(x, cy, rocker[i].icon, rocker[i].label) + gap;
+    x = MARGIN;
+    cy = nr > 0 ? cy + 40 : cy;
+    for (int i = 0; i < nk; i++) x += drawHint(x, cy, keys[i].icon, keys[i].label) + gap;
 }
 
 static void render(const ViewState &v) {
@@ -1570,6 +1578,7 @@ static const char *eventName(ButtonEvent event) {
     case BTN_CLICK: return "click";
     case BTN_LONG_CLICK: return "long click";
     case BTN_POWER: return "power";
+    case BTN_MENU: return "menu";
     }
     return "?";
 }
@@ -1660,19 +1669,26 @@ static void openSchedule(Screen from) {
     showScreen(SCREEN_SCHEDULE, scheduleCount() > 0 ? 0 : ROW_BACK);
 }
 
+static void openSettings() {
+    menuFrom = (Screen)(int)screen;
+    menuFromSelected = selected;
+    showScreen(SCREEN_SETTINGS, 0);
+}
+
+static void closeSettings() { showScreen(menuFrom, menuFromSelected); }
+
 static void handleList(ButtonEvent event) {
     bool scheduled = scheduleCount() > 0;
     int first = firstMomentRow(scheduled);
     switch (event) {
     case BTN_UP:
-        if (selected > ROW_SETTINGS) selected = selected - 1;
+        if (selected > ROW_CALENDAR) selected = selected - 1;
         break;
     case BTN_DOWN:
         if (selected < first + momentCount() - 1) selected = selected + 1;
         break;
     case BTN_CLICK:
-        if (selected == ROW_SETTINGS) showScreen(SCREEN_SETTINGS, 0);
-        else if (selected == ROW_CALENDAR) openCalendar();
+        if (selected == ROW_CALENDAR) openCalendar();
         else if (selected == 0) audioStartRecording();
         else if (selected < first) openSchedule(SCREEN_LIST);
         else togglePlay(selected - first);
@@ -1768,12 +1784,12 @@ static void handleSettings(ButtonEvent event) {
         if (selected < SET_ROWS - 1) selected = selected + 1;
         break;
     case BTN_LONG_CLICK:
-        showScreen(SCREEN_LIST, ROW_SETTINGS);
+        closeSettings();
         break;
     case BTN_CLICK:
         switch (selected) {
         case ROW_BACK:
-            showScreen(SCREEN_LIST, ROW_SETTINGS);
+            closeSettings();
             break;
         case SET_SYNC:
             clockSyncNow();
@@ -1850,6 +1866,12 @@ static void handleEvent(ButtonEvent event) {
         return;
     }
     if (audio == AUDIO_FORMATTING) return;
+    // BOOT opens the menu from anywhere, and closes it again
+    if (event == BTN_MENU) {
+        if (screen == SCREEN_SETTINGS) closeSettings();
+        else if (screen != SCREEN_TRANSFER) openSettings();
+        return;
+    }
     // Up and down are the tape transport while a moment plays
     if (audio == AUDIO_PLAYING && (event == BTN_UP || event == BTN_DOWN) &&
         (screen == SCREEN_LIST || screen == SCREEN_DAY)) {
