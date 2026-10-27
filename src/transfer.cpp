@@ -28,9 +28,29 @@ static uint32_t lastRequestAt = 0;
 
 static volatile bool hotspotOnly = false;
 
-// Previews of the category icons, in the order of CategoryIcon
-static const char *const ICON_EMOJI[ICON_COUNT] = {"&#x1F464;", "&#x1F333;", "&#x1F642;", "&#x1F3A8;", "&#x2726;",
-                                                   "&#x3030;",  "&#x1F3B5;", "&#x2665;",  "&#x1F4A7;", "&#x2600;"};
+// The category icons as SVG, drawn like on zvukopis (ui.cpp, iconCategory),
+// in the order of CategoryIcon; they take the text colour
+static const char *const ICON_SVG[ICON_COUNT] = {
+    "<circle cy=-4 r=4 /><rect x=-8 y=1 width=16 height=9 rx=4 />",
+    "<path d='M0-10L-8 4H8Z'/><rect x=-1.7 y=4 width=3.4 height=6 />",
+    "<circle r=9 fill=none stroke=currentColor stroke-width=2 /><circle cx=-3.5 cy=-3 r=1.4 /><circle cx=3.5 cy=-3 r=1.4 />"
+    "<path d='M5 2.3A5.5 5.5 0 0 1-5 2.3' fill=none stroke=currentColor stroke-width=1.7 />",
+    "<path fill-rule=evenodd d='M-10 0a10 10 0 1 0 20 0a10 10 0 1 0-20 0ZM1.5 4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0Z"
+    "M-6.2-1.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0-3.4 0ZM-2.7-5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0-3.4 0Z"
+    "M1.8-3.5a1.7 1.7 0 1 0 3.4 0a1.7 1.7 0 1 0-3.4 0Z'/>",
+    "<path d='M0-10L3.3-3.3L10 0L3.3 3.3L0 10L-3.3 3.3L-10 0L-3.3-3.3Z'/>",
+    "<path d='M-10 0Q-7.5-9-5 0T0 0T5 0T10 0' fill=none stroke=currentColor stroke-width=2.6 />",
+    "<circle cx=-3 cy=5.5 r=3.8 /><rect x=-0.2 y=-10 width=2 height=15.5 /><path d='M1.8-10V-4L7-3Z'/>",
+    "<circle cx=-4.5 cy=-2.5 r=4.8 /><circle cx=4.5 cy=-2.5 r=4.8 /><path d='M-9.2-1H9.2L0 10Z'/>",
+    "<circle cy=3 r=6 /><path d='M0-10L-5.7 1.5H5.7Z'/>",
+    "<circle r=4.5 /><path d='M6.5 0H10M-6.5 0H-10M0 6.5V10M0-6.5V-10M4.6 4.6L7.1 7.1M-4.6-4.6L-7.1-7.1M4.6-4.6L7.1-7.1"
+    "M-4.6 4.6L-7.1 7.1' stroke=currentColor stroke-width=1.6 />",
+};
+
+static String iconSvg(int icon, int size = 20) {
+    return String("<svg class=icon width=") + size + " height=" + size + " viewBox='-11 -11 22 22' fill=currentColor>" +
+           ICON_SVG[icon < ICON_COUNT ? icon : ICON_STAR] + "</svg>";
+}
 
 // Common time zones as POSIX rules, with the IANA names browsers report
 struct Zone {
@@ -144,12 +164,16 @@ max-width:40rem;margin:0 auto;padding:1rem;color:#111;background:#fff;line-heigh
 h1{margin:.2rem 0}h2{margin:2rem 0 .4rem;font-size:1.15rem}.sub,small,.note{color:#555}.note{font-size:.9rem}
 table{width:100%;border-collapse:collapse}td{padding:.55rem .3rem;border-top:1px solid #ddd;vertical-align:middle}
 td.r{text-align:right;white-space:nowrap}a,button,input,select{font:inherit}
+.icon{vertical-align:-4px}.pick{display:inline-flex;gap:2px;flex-wrap:wrap}
+.pick label{cursor:pointer;padding:5px;border-radius:.4rem;border:1px solid transparent;line-height:0}
+.pick input{display:none}.pick input:checked+svg{color:#fff;background:#111;border-radius:.3rem;box-shadow:0 0 0 4px #111}
 button{border:1px solid #111;background:#fff;color:#111;border-radius:.4rem;padding:.3rem .7rem;cursor:pointer}
-input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;background:inherit;color:inherit}
+input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;background:inherit;color:inherit;max-width:100%}
 .tag{font-size:.85rem;border:1px solid #888;border-radius:1rem;padding:0 .45rem;white-space:nowrap}
 .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
 input[type=number]{width:4.5rem}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}
+.pick input:checked+svg{color:#111;background:#eee;box-shadow:0 0 0 4px #eee}
 button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}a{color:#9cf}}
 </style></head><body><h1>zvukopis</h1>
 )";
@@ -170,7 +194,7 @@ function addSchedule(){
 function unschedule(s){post('/schedule/remove?start='+s)}
 function saveCategories(){
  const q=new URLSearchParams();
- for(let i=1;i<=5;i++){q.set('name'+i,$('name'+i).value);q.set('icon'+i,$('icon'+i).value)}
+ for(let i=1;i<=5;i++){q.set('name'+i,$('name'+i).value);q.set('icon'+i,document.querySelector('input[name=icon'+i+']:checked').value)}
  post('/categories?'+q)}
 function zoneChanged(){$('customtz').style.display=$('tz').value==='custom'?'':'none'}
 function useBrowserZone(){
@@ -225,7 +249,7 @@ static void sendMoments(char *buf, size_t len) {
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
-        char when[32] = "", name[40], tag[64] = "";
+        char when[32] = "", name[40], tag[1024] = "";
         if (moment.recordedAt) {
             tm local;
             localtime_r(&moment.recordedAt, &local);
@@ -237,7 +261,7 @@ static void sendMoments(char *buf, size_t len) {
             Category c = configCategory(moment.tag);
             char escaped[CATEGORY_NAME_LEN * 6];
             htmlEscape(c.name, escaped, sizeof(escaped));
-            snprintf(tag, sizeof(tag), " <span class=tag>%s %s</span>", ICON_EMOJI[c.icon], escaped);
+            snprintf(tag, sizeof(tag), " <span class=tag>%s %s</span>", iconSvg(c.icon, 14).c_str(), escaped);
         }
         snprintf(buf, len,
                  "<tr><td><b>Moment %d</b>%s<br><small>%s</small></td><td class=r>%d:%02d</td>"
@@ -296,15 +320,16 @@ static void sendCategories(char *buf, size_t len) {
         Category c = configCategory(slot);
         char escaped[CATEGORY_NAME_LEN * 6];
         htmlEscape(c.name, escaped, sizeof(escaped));
-        snprintf(buf, len, "<div class=row><select id=icon%d>", slot);
+        snprintf(buf, len, "<div class=row><input id=name%d maxlength=%d value=\"%s\"><span class=pick>",
+                 slot, CATEGORY_NAME_LEN - 1, escaped);
         server.sendContent(buf);
         for (int icon = 0; icon < ICON_COUNT; icon++) {
-            snprintf(buf, len, "<option value=%d%s>%s %s</option>", icon, icon == c.icon ? " selected" : "",
-                     ICON_EMOJI[icon], ICON_NAMES[icon]);
+            snprintf(buf, len, "<label title=%s><input type=radio name=icon%d value=%d%s>", ICON_NAMES[icon], slot, icon,
+                     icon == c.icon ? " checked" : "");
             server.sendContent(buf);
+            server.sendContent(iconSvg(icon) + "</label>");
         }
-        snprintf(buf, len, "</select><input id=name%d maxlength=%d value=\"%s\"></div>", slot, CATEGORY_NAME_LEN - 1, escaped);
-        server.sendContent(buf);
+        server.sendContent("</span></div>");
     }
     server.sendContent("<div class=row><button onclick=saveCategories()>Save categories</button></div>");
 }
@@ -365,7 +390,7 @@ static void handleIndex() {
     server.send(200, "text/html; charset=utf-8", "");
     server.sendContent_P(PAGE_HEAD);
 
-    char buf[512];
+    char buf[2048]; // a moment's row carries its category icon as SVG
     time_t now = time(nullptr);
     char clock[32] = "not set";
     if (clockValid()) {

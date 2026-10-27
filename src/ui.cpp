@@ -15,6 +15,7 @@
 #include "fonts.h"
 #include "networks.h"
 #include "quotes.h"
+#include "spectrum.h"
 #include "storage.h"
 #include "transfer.h"
 
@@ -57,6 +58,7 @@ enum Screen {
     SCREEN_TRANSFER,    // Wi-Fi file transfer running
     SCREEN_CARD_READER, // SD card open over USB
     SCREEN_SCHEDULE,    // the scheduled recordings
+    SCREEN_SPECTRUM,    // frequency analysis of one moment
 };
 
 enum Overlay {
@@ -75,9 +77,14 @@ static const int ROW_CALENDAR = -1; // main list
 enum SettingsRow { SET_SYNC, SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
-static const int MENU_DELETE = TAG_COUNT - 1; // after the five tags
-static const int MENU_CANCEL = TAG_COUNT;
-static const int MENU_ITEMS = TAG_COUNT + 1;
+static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
+static const int MENU_DELETE = TAG_COUNT;
+static const int MENU_CANCEL = TAG_COUNT + 1;
+static const int MENU_ITEMS = TAG_COUNT + 2;
+
+// Frequency analysis plot; labels go left of and below it
+static const int PLOT_X = MARGIN + 46, PLOT_Y = 124;
+static const int PLOT_W = SW - MARGIN - PLOT_X, PLOT_H = 436;
 
 
 // UI state: written by loop(), read by the display task
@@ -93,6 +100,9 @@ static int64_t unscheduleStart = 0;     // the scheduled recording the remove di
 static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen goes
 static Screen menuFrom = SCREEN_LIST;     // where closing the menu (Settings) returns to
 static int menuFromSelected = 0;
+static volatile int spectrumMoment = 0; // number of the moment being analysed
+static Screen spectrumFrom = SCREEN_LIST;
+static int spectrumFromSelected = 0;
 static volatile bool sleepRequested = false;
 static volatile uint32_t lastActivity = 0; // last button press, or recording/playback still running
 static volatile bool sleeping = false;    // what the screen should show
@@ -220,6 +230,8 @@ struct ViewState {
     int gainNow;
     uint32_t configVersion; // categories or schedule edited on the web page
     int scheduleCount;
+    int spectrumMoment;
+    int spectrumReady;
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
 
@@ -271,6 +283,8 @@ static ViewState currentView() {
     int nextIndex;
     v.nextScheduleMinute = clockValid() && scheduleNext(time(nullptr), next, nextIndex) ? (int)(next.start / 60) : -1;
     v.scheduleCount = scheduleCount();
+    v.spectrumMoment = spectrumMoment;
+    v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
     return v;
 }
 
@@ -432,6 +446,15 @@ static void iconCalendar(int cx, int cy, uint16_t fg, uint16_t bg) {
     }
 }
 
+// Bars of a spectrum, for frequency analysis
+static void iconBars(int cx, int cy, int r, uint16_t c) {
+    const int heights[5] = {5, 10, 7, 12, 4}; // of 12
+    for (int i = 0; i < 5; i++) {
+        int h = heights[i] * r * 2 / 12;
+        canvas->fillRect(cx - r + i * r * 2 / 5, cy + r - h, max(2, r * 2 / 5 - 2), h, c);
+    }
+}
+
 static void iconClock(int cx, int cy, int r, uint16_t c) {
     drawArc(cx, cy, r, 0, 360, max(2, r / 5), c);
     canvas->fillRect(cx - 1, cy - r * 6 / 10, 3, r * 6 / 10 + 1, c); // minute hand, at twelve
@@ -579,49 +602,54 @@ static void drawHeaderButton(int x, int cy, int size, bool isSelected, void (*ic
 // --- Screen sections ---
 
 // SD card, USB and battery, right-aligned at `right`; returns the left edge
-static int drawStatus(int right, int cy, const ViewState &v) {
-    int x = right;
+// Header status text: one size and weight, on the title's baseline, with the
+// icons centred on its lowercase letters
+static const GFXfont *const STATUS_FONT = &Text22;
+static const int TITLE_BASELINE = 50;
+
+static int drawStatus(int right, int baseline, const ViewState &v) {
+    int x = right, cy = baseline - 8;
     char buf[8];
     if (v.battery >= 0) {
         x = iconBattery(x, cy, v.battery) - 8;
         snprintf(buf, sizeof(buf), "%d%%", v.battery);
-        drawTextRight(x, cy + 8, &Text22, buf, INK);
-        x -= textWidth(&Text22, buf) + 6;
+        drawTextRight(x, baseline, STATUS_FONT, buf, INK);
+        x -= textWidth(STATUS_FONT, buf) + 10;
     }
     if (v.usb) {
-        iconBolt(x - 6, cy - 1);
+        iconBolt(x - 6, cy);
         x -= 22;
     }
-    if (v.sdCard) x = iconSdCard(x, cy - 1) - 8;
+    if (v.sdCard) x = iconSdCard(x, cy) - 10;
     return x;
 }
 
-static void drawDateTime(const ViewState &v) {
+// "27 Oct  18:23" in the status font
+static void formatDateTime(char *buf, size_t len, const ViewState &v) {
+    buf[0] = 0;
     if (v.clockMinute < 0) return;
     char date[16], hhmm[8];
     time_t now = (time_t)v.clockMinute * 60;
-    formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
     formatLocal(date, sizeof(date), "%e %b", now);
-    drawTextRight(SW - MARGIN, 84, &MonoBold20, hhmm, INK);
-    drawTextRight(SW - MARGIN - textWidth(&MonoBold20, hhmm) - 10, 84, &Text22, date, INK);
+    formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
+    snprintf(buf, len, "%s  %s", date, hhmm);
+}
+
+static void drawDateTime(const ViewState &v) {
+    char buf[24];
+    formatDateTime(buf, sizeof(buf), v);
+    drawTextRight(SW - MARGIN, 84, STATUS_FONT, buf, INK);
 }
 
 // First line: name, date and time, battery. Second: moments, time left, and
 // the calendar button.
 static void drawMainHeader(const ViewState &v) {
-    drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
-    int statusLeft = drawStatus(SW - MARGIN, 38, v);
-    if (v.clockMinute >= 0) {
-        char date[16], hhmm[8];
-        time_t now = (time_t)v.clockMinute * 60;
-        formatLocal(date, sizeof(date), "%e %b", now);
-        formatLocal(hhmm, sizeof(hhmm), "%H:%M", now);
-        int dateW = textWidth(&Text22, date), w = dateW + 8 + textWidth(&MonoBold20, hhmm);
-        int titleRight = MARGIN + textWidth(&Bold32, "zvukopis");
-        int x = (titleRight + statusLeft) / 2 - w / 2;
-        drawText(x, 47, &Text22, date, INK);
-        drawText(x + dateW + 8, 47, &MonoBold20, hhmm, INK);
-    }
+    drawText(MARGIN, TITLE_BASELINE, &Bold32, "zvukopis", INK);
+    int statusLeft = drawStatus(SW - MARGIN, TITLE_BASELINE, v);
+    char when[24];
+    formatDateTime(when, sizeof(when), v);
+    int titleRight = MARGIN + textWidth(&Bold32, "zvukopis");
+    drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
     // "2 moments  •  3:04 left"
     char buf[32];
@@ -657,7 +685,7 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
         x += w + 14;
     }
     drawText(x, 50, &Bold32, title, INK);
-    drawStatus(SW - MARGIN, 38, v);
+    drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     if (subtitle) drawText(MARGIN, 84, &Text22, subtitle, INK);
     drawDateTime(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
@@ -1141,6 +1169,88 @@ static void drawUnscheduleDialog(const ViewState &v) {
     drawConfirm(v, [] { iconClock(SW / 2, 268 + 52, 30, INK); }, "Remove recording?", detail, "Remove");
 }
 
+// "2.4 kHz", "180 Hz"
+static void formatHz(char *buf, size_t len, float hz) {
+    if (hz < 1000) snprintf(buf, len, "%d Hz", (int)roundf(hz));
+    else if (hz < 10000) snprintf(buf, len, "%.1f kHz", hz / 1000);
+    else snprintf(buf, len, "%d kHz", (int)roundf(hz / 1000));
+}
+
+// "1:03.4"
+static void formatSeconds(char *buf, size_t len, float seconds) {
+    snprintf(buf, len, "%d:%04.1f", (int)seconds / 60, fmodf(seconds, 60));
+}
+
+// Spectrogram: time across, frequency up (log), loudness as dithered ink.
+// Marked with the frequency scale, the time, and a ring on the loudest point.
+static void drawSpectrum(const ViewState &v) {
+    Moment moment;
+    if (!momentGet(momentIndexByNumber(v.spectrumMoment), moment)) return;
+    char title[24];
+    snprintf(title, sizeof(title), "Moment %d", moment.number);
+    drawSubHeader(v, title, "Frequency analysis");
+    const Spectrogram *sp = spectrumResult(v.spectrumMoment);
+    if (!sp) {
+        iconBars(SW / 2, 300, 30, INK);
+        drawTextCentered(SW / 2, 380, &Bold22, "Analysing...", INK);
+        return;
+    }
+
+    // Loudness as a 4x4 ordered dither: 17 shades from paper to ink
+    static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    for (int y = 0; y < sp->height && y < PLOT_H; y++) {
+        const uint8_t *row = sp->cells + y * sp->width;
+        for (int x = 0; x < sp->width && x < PLOT_W; x++) {
+            if (row[x] * 17 / 256 > BAYER[y & 3][x & 3]) canvas->drawPixel(PLOT_X + x, PLOT_Y + y, INK);
+        }
+    }
+    canvas->drawRect(PLOT_X - 1, PLOT_Y - 1, PLOT_W + 2, PLOT_H + 2, INK);
+
+    // Frequency scale: decades with labels, the octaves between as ticks
+    char buf[48];
+    for (float hz = 50; hz <= SPECTRUM_HIGH_HZ; hz *= 2) {
+        int y = PLOT_Y + spectrumHzRow(hz, PLOT_H);
+        canvas->drawFastHLine(PLOT_X - 5, y, 4, INK);
+    }
+    const float decades[] = {100, 1000, 10000};
+    const char *labels[] = {"100", "1k", "10k"};
+    for (int i = 0; i < 3; i++) {
+        int y = PLOT_Y + spectrumHzRow(decades[i], PLOT_H);
+        canvas->drawFastHLine(PLOT_X - 9, y, 8, INK);
+        for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += 6) canvas->drawPixel(x, y, INK);
+        drawTextRight(PLOT_X - 12, y + 6, &Text17, labels[i], INK);
+    }
+    drawTextRight(PLOT_X - 12, PLOT_Y + 12, &Text17, "Hz", INK);
+
+    // Time: start, middle, end
+    for (int i = 0; i <= 2; i++) {
+        int x = PLOT_X + i * (PLOT_W - 1) / 2;
+        canvas->drawFastVLine(x, PLOT_Y + PLOT_H + 1, 6, INK);
+        formatSeconds(buf, sizeof(buf), sp->seconds * i / 2);
+        if (i == 0) drawText(x, PLOT_Y + PLOT_H + 26, &Text17, buf, INK);
+        else if (i == 1) drawTextCentered(x, PLOT_Y + PLOT_H + 26, &Text17, buf, INK);
+        else drawTextRight(x, PLOT_Y + PLOT_H + 26, &Text17, buf, INK);
+    }
+
+    // The loudest point: a ring, paper outside ink so it shows on both
+    int px = PLOT_X + sp->peakColumn, py = PLOT_Y + sp->peakRow;
+    drawArc(px, py, 13, 0, 360, 3, PAPER);
+    drawArc(px, py, 10, 0, 360, 3, INK);
+    drawArc(px, py, 7, 0, 360, 2, PAPER);
+
+    char hz[16], at[16], low[16], high[16];
+    formatHz(hz, sizeof(hz), sp->peakHz);
+    formatSeconds(at, sizeof(at), sp->peakSeconds);
+    int y = PLOT_Y + PLOT_H + 64;
+    drawArc(MARGIN + 9, y - 8, 9, 0, 360, 3, INK);
+    snprintf(buf, sizeof(buf), "Loudest: %s, at %s", hz, at);
+    drawText(MARGIN + 28, y, &Text22, buf, INK);
+    formatHz(low, sizeof(low), sp->bandLowHz);
+    formatHz(high, sizeof(high), sp->bandHighHz);
+    snprintf(buf, sizeof(buf), "80%% of the sound: %s to %s", low, high);
+    drawText(MARGIN, y + 30, &Text22, buf, INK);
+}
+
 static void drawCardReader(const ViewState &v) {
     drawSubHeader(v, "USB card reader", "The SD card is open on the computer", false);
     int cx = SW / 2;
@@ -1270,7 +1380,7 @@ static void drawMenu(const ViewState &v) {
     Moment moment;
     if (!momentGet(index, moment)) return;
     shadeBehindDialog();
-    const int itemH = 50, y = 160, h = 76 + MENU_ITEMS * itemH + 14;
+    const int itemH = 50, y = 140, h = 76 + MENU_ITEMS * itemH + 14;
     const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
     dialogBox(y, h);
     char title[32];
@@ -1285,7 +1395,8 @@ static void drawMenu(const ViewState &v) {
         if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
         int cy = iy + (itemH - 4) / 2;
         const char *label;
-        if (i < MENU_DELETE) {
+        if (i == MENU_ANALYSIS && !chosen) dottedLine(x + 24, x + w - 24, iy - 2); // tags above, actions below
+        if (i < MENU_ANALYSIS) {
             int tag = TAG_HUMAN + i;
             iconTag(tag, x + 44, cy, 13, fg);
             label = configCategory(tag).name;
@@ -1296,12 +1407,15 @@ static void drawMenu(const ViewState &v) {
                 canvas->drawLine(x + w - 48, cy + 8, x + w - 34, cy - 8, fg);
                 canvas->drawLine(x + w - 48, cy + 9, x + w - 34, cy - 7, fg);
             }
+        } else if (i == MENU_ANALYSIS) {
+            iconBars(x + 44, cy, 12, fg);
+            label = "Frequency analysis";
         } else if (i == MENU_DELETE) {
             label = "Delete...";
         } else {
             label = "Cancel";
         }
-        drawText(x + 76, cy + 8, i < MENU_DELETE ? &Bold22 : &Text22, label, fg);
+        drawText(x + 76, cy + 8, i < MENU_ANALYSIS ? &Bold22 : &Text22, label, fg);
     }
 }
 
@@ -1321,7 +1435,7 @@ static int drawQuoteMark(int x, int y) {
 // footer (how to wake)
 static void drawSleepScreen(const ViewState &v) {
     drawText(MARGIN, 50, &Bold32, "zvukopis", INK);
-    drawStatus(SW - MARGIN, 38, v);
+    drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     char buf[48];
     if (v.clockMinute >= 0) {
         char since[12];
@@ -1409,6 +1523,8 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Choose"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Back"};
+    } else if (v.screen == SCREEN_SPECTRUM) {
+        rocker[nr++] = {HINT_CLICK, "Back"};
     } else if (v.screen == SCREEN_SCHEDULE) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Back"};
@@ -1467,6 +1583,7 @@ static void render(const ViewState &v) {
         case SCREEN_TRANSFER: drawTransfer(v); break;
         case SCREEN_CARD_READER: drawCardReader(v); break;
         case SCREEN_SCHEDULE: drawScheduleScreen(v); break;
+        case SCREEN_SPECTRUM: drawSpectrum(v); break;
         }
         switch (v.overlay) {
         case OVERLAY_MENU: drawMenu(v); break;
@@ -1628,7 +1745,14 @@ static void handleOverlay(ButtonEvent event) {
     case BTN_CLICK: {
         int index = momentIndexByNumber(menuMoment);
         if (overlay == OVERLAY_MENU) {
-            if (overlayChoice < MENU_DELETE) {
+            if (overlayChoice == MENU_ANALYSIS) {
+                spectrumFrom = (Screen)(int)screen;
+                spectrumFromSelected = selected;
+                spectrumMoment = menuMoment;
+                spectrumRequest(menuMoment, PLOT_W, PLOT_H);
+                overlay = OVERLAY_NONE;
+                showScreen(SCREEN_SPECTRUM, 0);
+            } else if (overlayChoice < MENU_ANALYSIS) {
                 Moment moment;
                 int tag = TAG_HUMAN + overlayChoice;
                 if (momentGet(index, moment)) audioSetTag(index, (MomentTag)(moment.tag == tag ? TAG_NONE : tag));
@@ -1885,6 +2009,9 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_CALENDAR: handleCalendar(event); break;
     case SCREEN_SETTINGS: handleSettings(event); break;
     case SCREEN_SCHEDULE: handleSchedule(event); break;
+    case SCREEN_SPECTRUM:
+        if (event == BTN_CLICK || event == BTN_LONG_CLICK) showScreen(spectrumFrom, spectrumFromSelected);
+        break;
     case SCREEN_TRANSFER:
         if (event == BTN_CLICK) {
             transferStop();
@@ -1906,6 +2033,11 @@ void uiTick() {
     lastMomentCount = count;
     if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
     if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty
+    static uint32_t spectrumCheckedVersion = UINT32_MAX;
+    if (screen == SCREEN_SPECTRUM && momentListVersion() != spectrumCheckedVersion) {
+        spectrumCheckedVersion = momentListVersion();
+        if (momentIndexByNumber(spectrumMoment) < 0) showScreen(spectrumFrom, 0); // deleted meanwhile
+    }
     static uint32_t checkedVersion = UINT32_MAX;
     if (screen == SCREEN_DAY && momentListVersion() != checkedVersion) {
         checkedVersion = momentListVersion(); // a moment of the day may have been deleted
@@ -1953,6 +2085,7 @@ static bool after(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
 bool uiReadyToNap(uint32_t since) {
     if (sleeping || overlay != OVERLAY_NONE || audioState() != AUDIO_IDLE) return false;
     if (screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER) return false;
+    if (screen == SCREEN_SPECTRUM && !spectrumResult(spectrumMoment)) return false; // still working it out
     uint32_t quiet = quietSince;
     // The display task must have looked at the screen state after the last change
     return quiet != 0 && after(quiet, since) && after(quiet, lastActivity);
