@@ -18,7 +18,10 @@ static const uint32_t CPU_MHZ = 80;
 static const uint32_t MIN_NAP_MS = 20; // shorter naps aren't worth the wake-up
 
 static uint32_t napTotalMs = 0, napCount = 0, wokeAt = 0;
-RTC_NOINIT_ATTR static uint32_t bootCount; // survives resets, to tell them apart in logs
+// These survive resets (not power-offs), so a session on battery can be
+// checked after plugging in, which resets the board when the port is opened
+RTC_NOINIT_ATTR static uint32_t bootCount;
+RTC_NOINIT_ATTR static uint32_t lastUpMs, lastNapMs, lastNaps;
 
 // Light sleep stops the USB clock and the host gives up on the port. Pulling
 // D+ low for a moment looks like an unplug and replug, so the host enumerates
@@ -54,6 +57,9 @@ static void nap(uint32_t ms) {
     powerKeyWakeup(false);
     napTotalMs += wokeAt - start;
     napCount++;
+    lastUpMs = wokeAt;
+    lastNapMs = napTotalMs;
+    lastNaps = napCount;
 }
 
 // Between button presses the chip light-sleeps (about 1 mA instead of tens):
@@ -148,8 +154,13 @@ void setup() {
     DEV_Module_Init(); // e-paper GPIO setup + Serial.begin(115200)
     // Wait (up to 3 s) for a USB serial monitor so the first lines aren't lost
     while (!Serial && millis() < 3000) delay(10);
-    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = 0;
+    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = lastUpMs = lastNapMs = lastNaps = 0;
     Serial.printf("zvukopis starting (boot %lu, reset reason %d)\n", ++bootCount, esp_reset_reason());
+    if (lastNaps > 0 && lastNapMs <= lastUpMs) {
+        Serial.printf("[power] previous boot: light-slept %lu of %lu s (%.1f%%) in %lu naps\n",
+                      lastNapMs / 1000, lastUpMs / 1000, 100.0f * lastNapMs / lastUpMs, lastNaps);
+    }
+    lastUpMs = lastNapMs = lastNaps = 0;
     setCpuFrequencyMhz(CPU_MHZ);
 
     boardPowerInit(); // also starts the I2C bus shared with the audio codec
