@@ -10,12 +10,11 @@
 #include "clock.h"
 #include "ui.h"
 
-// How often the sleeping chip wakes briefly to check the PWR key
-static const uint64_t POWER_KEY_POLL_US = 200 * 1000;
+// How often the chip checks the PWR key while "asleep" on USB power
+static const uint32_t USB_POLL_MS = 200;
 
 // Light sleep keeps PSRAM powered, so memos held in memory survive it.
-// The PWR key reaches the chip only through the PMIC over I2C, so instead of a
-// wake-up pin, a timer wakes it every 200 ms to ask the PMIC.
+// A PWR press pulls the PMIC's IRQ line low, which wakes the chip.
 // On USB power the chip stays awake instead: light sleep shuts down its USB
 // port, which doesn't come back afterwards, and power isn't scarce then.
 // A 'p' over serial also wakes it in that case.
@@ -23,7 +22,7 @@ static bool sleepUntilPowerKey() {
     if (usbPowered()) {
         while (Serial.available()) Serial.read();
         for (;;) {
-            delay(POWER_KEY_POLL_US / 1000);
+            delay(USB_POLL_MS);
             if (powerKeyPressed()) return true;
             while (Serial.available()) {
                 if (Serial.read() == 'p') return true;
@@ -31,11 +30,11 @@ static bool sleepUntilPowerKey() {
             if (!usbPowered()) return false; // unplugged: continue in light sleep
         }
     }
-    esp_sleep_enable_timer_wakeup(POWER_KEY_POLL_US);
+    powerKeyWakeup(true);
     do {
         esp_light_sleep_start();
     } while (!powerKeyPressed());
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    powerKeyWakeup(false);
     return true;
 }
 

@@ -15,3 +15,6 @@ bool usbPowered();
 // True once for each short press of PWR since the last call. A long hold
 // (about 6 s) still powers the board off in hardware.
 bool powerKeyPressed();
+
+// Lets a PWR press wake the chip from light sleep (the PMIC's IRQ line, GPIO38)
+void powerKeyWakeup(bool enable);
