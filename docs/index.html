@@ -73,7 +73,8 @@ timeline at the right time of day.</p>
 a USB cable, and Chrome or Edge on a computer (they can talk to USB ports; Safari and Firefox can't).</p>
 <ol>
   <li>Connect the board over USB. It must be awake: if its screen says it's sleeping, hold PWR for 2 seconds.</li>
-  <li>Press <b>Install</b> and choose the board's port. Flashing takes about a minute.</li>
+  <li>Press <b>Install</b> and choose the board's port. On a board straight from the box, tick <i>Erase device</i>
+  in the dialog so nothing from the factory firmware is left behind. Flashing takes about a minute.</li>
   <li>When it's done, <b>unplug and replug the USB cable</b> (or hold PWR for 10 seconds). The board stays
   in download mode after the flasher's reset.</li>
 </ol>
@@ -83,8 +84,8 @@ a USB cable, and Chrome or Edge on a computer (they can talk to USB ports; Safar
     <span slot="not-allowed">This page has to be opened over HTTPS for the browser to allow USB access.</span>
   </esp-web-install-button>
 </div>
-<p>Moments on the SD card and your settings are kept: the flasher doesn't erase the device unless you choose
-<i>erase</i> in its dialog. The firmware it installs contains no network credentials; you add your Wi-Fi
+<p>When updating, leave <i>Erase device</i> unticked: moments on the SD card are never touched, and your settings
+(Wi-Fi networks, categories, schedule) are kept. The firmware it installs contains no network credentials; you add your Wi-Fi
 from the device's own web interface.</p>
 
 <h2>Source</h2>

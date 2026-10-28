@@ -69,7 +69,7 @@ def main():
     manifest = {
         "name": "zvukopis",
         "version": version,
-        "new_install_prompt_erase": False,
+        "new_install_prompt_erase": True,  # a fresh board may hold factory data; the dialog offers to wipe it
         "builds": [{
             "chipFamily": "ESP32-S3",
             "parts": [{"path": f"firmware/{name}", "offset": offset} for name, offset in PARTS],
