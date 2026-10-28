@@ -1,5 +1,7 @@
 #include "storage.h"
 
+#include "config.h"
+
 #include <Arduino.h>
 #include <SD_MMC.h>
 #include <driver/sdmmc_host.h>
@@ -65,23 +67,70 @@ static_assert(sizeof(BextChunk) == 602, "bext is 602 bytes before the coding his
 static_assert(WAV_HEADER_BYTES == 12 + (8 + sizeof(WavFormat)) + (8 + sizeof(BextChunk)) + (8 + EXTRA_PADDED) + 8,
               "WAV_HEADER_BYTES is out of date");
 
-static void momentPath(char *buf, size_t len, const char *fileName) {
-    snprintf(buf, len, "%s/%s", MOMENT_DIR, fileName);
+static void folderPath(char *buf, size_t len, const Moment &moment) {
+    if (moment.folder[0]) snprintf(buf, len, "%s/%s", MOMENT_DIR, moment.folder);
+    else snprintf(buf, len, "%s", MOMENT_DIR); // files from before the day folders
 }
 
-// Local start time if known, else the moment number; made unique if taken
-static void chooseFileName(Moment &moment) {
-    char base[24], path[48];
+static void momentPath(char *buf, size_t len, const Moment &moment) {
+    char folder[32];
+    folderPath(folder, sizeof(folder), moment);
+    snprintf(buf, len, "%s/%s", folder, moment.fileName);
+}
+
+// "_nature": the category's name, lower case, anything but letters and digits as "-"
+static void tagSuffix(const Moment &moment, char *buf, size_t len) {
+    buf[0] = 0;
+    if (moment.tag == TAG_NONE || len < 3) return;
+    Category c = configCategory(moment.tag);
+    size_t n = 0;
+    buf[n++] = '_';
+    bool dash = false;
+    for (const char *p = c.name; *p && n < len - 1; p++) {
+        if (isalnum((uint8_t)*p)) {
+            buf[n++] = tolower((uint8_t)*p);
+            dash = false;
+        } else if (!dash) {
+            buf[n++] = '-';
+            dash = true;
+        }
+    }
+    if (n > 1 && buf[n - 1] == '-') n--;
+    buf[n] = 0;
+    if (n == 1) buf[0] = 0; // a name with nothing usable in it
+}
+
+void storageMomentFileName(const Moment &moment, char *buf, size_t len) {
+    char base[24], suffix[CATEGORY_NAME_LEN + 2];
     if (moment.recordedAt) {
         tm local;
         localtime_r(&moment.recordedAt, &local);
-        strftime(base, sizeof(base), "%Y-%m-%d_%H-%M-%S", &local);
+        strftime(base, sizeof(base), "%Y-%m-%dT%H-%M-%S", &local);
     } else {
         snprintf(base, sizeof(base), "MOMENT_%04d", moment.number);
     }
-    snprintf(moment.fileName, sizeof(moment.fileName), "%s.wav", base);
-    momentPath(path, sizeof(path), moment.fileName);
-    if (SD_MMC.exists(path)) snprintf(moment.fileName, sizeof(moment.fileName), "%s_%d.wav", base, moment.number);
+    tagSuffix(moment, suffix, sizeof(suffix));
+    snprintf(buf, len, "%s%s.wav", base, suffix);
+}
+
+// The day's folder and a file name from the time and tag, made unique if taken
+static void chooseFileName(Moment &moment) {
+    if (moment.recordedAt) {
+        tm local;
+        localtime_r(&moment.recordedAt, &local);
+        strftime(moment.folder, sizeof(moment.folder), "%Y-%m-%d", &local);
+    } else {
+        strlcpy(moment.folder, "undated", sizeof(moment.folder));
+    }
+    char folder[32], path[96];
+    folderPath(folder, sizeof(folder), moment);
+    if (!SD_MMC.exists(folder)) SD_MMC.mkdir(folder);
+    storageMomentFileName(moment, moment.fileName, sizeof(moment.fileName));
+    momentPath(path, sizeof(path), moment);
+    if (SD_MMC.exists(path)) {
+        char *dot = strrchr(moment.fileName, '.');
+        if (dot) snprintf(dot, sizeof(moment.fileName) - (dot - moment.fileName), "_%d.wav", moment.number);
+    }
 }
 
 static void updateSpace() {
@@ -174,8 +223,8 @@ size_t storageWavHeader(const Moment &moment, uint8_t *buf) {
 bool storageSaveMoment(Moment &moment, const int16_t *samples) {
     if (!mounted) return false;
     chooseFileName(moment);
-    char path[48];
-    momentPath(path, sizeof(path), moment.fileName);
+    char path[96];
+    momentPath(path, sizeof(path), moment);
     File f = SD_MMC.open(path, FILE_WRITE);
     if (!f) {
         Serial.printf("Can't create %s\n", path);
@@ -250,42 +299,65 @@ static bool readMomentHeader(File &f, Moment &moment) {
     return haveData && haveFormat && haveExtra && moment.length > 0;
 }
 
-int storageLoadMoments(Moment *out, int max) {
-    if (!mounted) return 0;
-    File dir = SD_MMC.open(MOMENT_DIR);
+// The moment files in one folder ("" for /moments itself, from before the day folders)
+static int loadFolder(const char *folder, Moment *out, int max) {
+    char path[32];
+    snprintf(path, sizeof(path), folder[0] ? "%s/%s" : "%s%s", MOMENT_DIR, folder);
+    File dir = SD_MMC.open(path);
     if (!dir) return 0;
     int count = 0;
-    uint32_t start = millis();
     for (File f = dir.openNextFile(); f && count < max; f = dir.openNextFile()) {
         // f.name() is the bare file name in this core version
         const char *dot = strrchr(f.name(), '.');
         if (!f.isDirectory() && dot && strcasecmp(dot, ".wav") == 0) {
-            if (readMomentHeader(f, out[count])) count++;
-            else Serial.printf("Skipping %s: not a moment file\n", f.name());
+            if (readMomentHeader(f, out[count])) {
+                strlcpy(out[count].folder, folder, sizeof(out[count].folder));
+                count++;
+            } else {
+                Serial.printf("Skipping %s/%s: not a moment file\n", folder, f.name());
+            }
         }
         f.close();
     }
     dir.close();
+    return count;
+}
+
+int storageLoadMoments(Moment *out, int max) {
+    if (!mounted) return 0;
+    uint32_t start = millis();
+    int count = loadFolder("", out, max);
+    File dir = SD_MMC.open(MOMENT_DIR);
+    for (File f = dir ? dir.openNextFile() : File(); f && count < max; f = dir.openNextFile()) {
+        if (f.isDirectory() && strlen(f.name()) < sizeof(out->folder)) count += loadFolder(f.name(), out + count, max - count);
+        f.close();
+    }
+    if (dir) dir.close();
     Serial.printf("Loaded %d moments from SD card in %lu ms\n", count, millis() - start);
     return count;
 }
 
 bool storageDeleteMoment(const Moment &moment) {
     if (!mounted) return false;
-    char path[48];
-    momentPath(path, sizeof(path), moment.fileName);
+    char path[96];
+    momentPath(path, sizeof(path), moment);
     File f = SD_MMC.open(path);
     size_t fileSize = f ? f.size() : 0;
     f.close();
     if (!SD_MMC.remove(path)) return false;
     freeBytes += fileSize;
+    if (moment.folder[0]) { // the day's folder goes once it's empty (rmdir fails otherwise, which is fine)
+        char folder[32];
+        folderPath(folder, sizeof(folder), moment);
+        SD_MMC.rmdir(folder);
+    }
     return true;
 }
 
-bool storageUpdateMoment(const Moment &moment) {
+bool storageUpdateMoment(Moment &moment) {
     if (!mounted) return false;
-    char path[48];
-    momentPath(path, sizeof(path), moment.fileName);
+    char path[96];
+    momentPath(path, sizeof(path), moment);
     File f = SD_MMC.open(path, "r+");
     if (!f) return false;
     bool ok = forEachChunk(f, [&](const char *id, uint32_t size, uint32_t payload) {
@@ -295,12 +367,30 @@ bool storageUpdateMoment(const Moment &moment) {
         return true;
     });
     f.close();
-    return ok;
+    if (!ok) return false;
+
+    // The name carries the tag, so it changes with it
+    Moment renamed = moment;
+    storageMomentFileName(renamed, renamed.fileName, sizeof(renamed.fileName));
+    if (strcmp(renamed.fileName, moment.fileName) == 0) return true;
+    char newPath[96];
+    momentPath(newPath, sizeof(newPath), renamed);
+    if (SD_MMC.exists(newPath)) {
+        char *dot = strrchr(renamed.fileName, '.');
+        if (dot) snprintf(dot, sizeof(renamed.fileName) - (dot - renamed.fileName), "_%d.wav", renamed.number);
+        momentPath(newPath, sizeof(newPath), renamed);
+    }
+    if (!SD_MMC.rename(path, newPath)) {
+        Serial.printf("Couldn't rename %s to %s\n", path, newPath);
+        return true; // the tag is in the file anyway
+    }
+    strlcpy(moment.fileName, renamed.fileName, sizeof(moment.fileName));
+    return true;
 }
 
 File storageOpenMoment(const Moment &moment) {
-    char path[48];
-    momentPath(path, sizeof(path), moment.fileName);
+    char path[96];
+    momentPath(path, sizeof(path), moment);
     File f = SD_MMC.open(path);
     if (f) f.seek(moment.dataOffset);
     return f;

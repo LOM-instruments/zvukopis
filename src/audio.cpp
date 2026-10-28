@@ -254,8 +254,9 @@ static void finishRecording() {
     listVersion++;
     xSemaphoreGive(momentLock);
     state = AUDIO_IDLE;
-    Serial.printf("Saved Moment %d %s%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s\n",
-                  moment.number, onCard ? "to SD card as " : "in memory", moment.fileName, millis() - start,
+    Serial.printf("Saved Moment %d %s%s%s%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s\n",
+                  moment.number, onCard ? "to SD card as " : "in memory", onCard ? moment.folder : "", onCard ? "/" : "",
+                  moment.fileName, millis() - start,
                   (float)length / SAMPLE_RATE, moment.gain, gainNow,
                   gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "");
 }
@@ -309,8 +310,16 @@ static void tagMoment(int index, int tag) {
     moments[index].tag = tag;
     listVersion++;
     xSemaphoreGive(momentLock);
-    if (!moments[index].samples && !storageUpdateMoment(moments[index])) {
-        Serial.printf("Couldn't save the tag of Moment %d to the SD card\n", moments[index].number);
+    if (!moments[index].samples) {
+        Moment updated = moments[index];
+        if (!storageUpdateMoment(updated)) {
+            Serial.printf("Couldn't save the tag of Moment %d to the SD card\n", moments[index].number);
+        } else if (strcmp(updated.fileName, moments[index].fileName) != 0) {
+            xSemaphoreTake(momentLock, portMAX_DELAY);
+            strlcpy(moments[index].fileName, updated.fileName, sizeof(moments[index].fileName));
+            listVersion++;
+            xSemaphoreGive(momentLock);
+        }
     }
 }
 
@@ -607,7 +616,9 @@ bool audioInit() {
     }
     running = true;
     idleSince = millis();
-    xTaskCreatePinnedToCore(audioTask, "audio", 4096, NULL, 5, NULL, 0);
+    // 8 KB: saving builds the WAV header and card paths on this stack, and the
+    // card's long-file-name code adds its own buffers
+    xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 5, NULL, 0);
     return true;
 }
 

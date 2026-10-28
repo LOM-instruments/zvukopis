@@ -662,16 +662,6 @@ static void drawMainHeader(const ViewState &v) {
     drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
     char buf[40];
-    if (v.momentCount == 0) {
-        // Nothing to count yet: point at the switch instead (top left of the
-        // device, about where this line is)
-        int ay = SECOND_BASELINE - 7;
-        canvas->fillTriangle(4, ay, 18, ay - 8, 18, ay + 8, INK);
-        canvas->fillRect(18, ay - 2, 14, 5, INK);
-        drawText(42, SECOND_BASELINE, &Text22, "Press in the switch here to record", INK);
-        canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
-        return;
-    }
     // "2 moments  •  3:04 left"
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
     else snprintf(buf, sizeof(buf), "%d moments", v.momentCount);
@@ -715,6 +705,14 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
 
 static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewState &v) {
     int cy = y + ROW_H / 2;
+    if (v.momentCount == 0) {
+        // First time: the switch sits beside this row, so the row points at it
+        canvas->fillTriangle(MARGIN - 6, cy, MARGIN + 10, cy - 10, MARGIN + 10, cy + 10, fg);
+        canvas->fillRect(MARGIN + 10, cy - 3, 16, 7, fg);
+        iconRecord(MARGIN + 56, cy, fg);
+        drawText(MARGIN + 86, cy + 8, &Bold22, "Press in to record", fg);
+        return;
+    }
     iconRecord(MARGIN + 14, cy, fg);
     drawText(MARGIN + 44, cy + 8, &Bold22, "New recording", fg);
     if (isSelected && v.secondsLeft < 1) drawTextRight(SW - MARGIN, cy + 8, &Text22, v.sdCard ? "card full" : "memory full", fg);
@@ -1561,6 +1559,13 @@ static void drawSleepScreen(const ViewState &v) {
     drawTextRight(SW - MARGIN, SECOND_BASELINE, &Text22, buf, INK);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 
+    // How to wake: the PWR button is on the right edge, about 5 mm above the
+    // rocker (which sits beside the first list row), so the pointer goes there
+    const int py = LIST_TOP + 4;
+    canvas->fillRect(SW - 30, py - 2, 16, 5, INK);
+    canvas->fillTriangle(SW - 14, py - 8, SW - 14, py + 8, SW - 4, py, INK);
+    drawTextRight(SW - 42, py + 8, &Text22, "Hold 2 s to wake", INK);
+
     // "Pauline Oliveros, Deep Listening" -> author, then the work below
     const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
     char author[64];
@@ -1573,7 +1578,7 @@ static void drawSleepScreen(const ViewState &v) {
         while (*work == ' ') work++;
     }
 
-    const int top = HEADER_LINE_Y + 24, bottom = FOOTER_LINE_Y - 24, width = SW - 2 * MARGIN;
+    const int top = LIST_TOP + 36, bottom = SH - 36, width = SW - 2 * MARGIN;
     struct Size {
         const GFXfont *font;
         int lineHeight;
@@ -1605,10 +1610,7 @@ static void drawFooter(const ViewState &v) {
     int nr = 0, nk = 0;
     bool menuKeys = true; // BOOT for the menu, PWR to sleep
     bool playing = v.audio == AUDIO_PLAYING;
-    if (v.sleeping) {
-        keys[nk++] = {HINT_PWR, "Hold 2 s to wake"};
-        menuKeys = false;
-    } else if (v.audio == AUDIO_SAVING || v.audio == AUDIO_FORMATTING) {
+    if (v.audio == AUDIO_SAVING || v.audio == AUDIO_FORMATTING) {
         menuKeys = false; // nothing to press meanwhile
     } else if (v.audio == AUDIO_RECORDING) {
         rocker[nr++] = {HINT_CLICK, "Stop recording"};
@@ -1720,8 +1722,7 @@ static void drawFooter(const ViewState &v) {
 static void render(const ViewState &v) {
     canvas->fillScreen(PAPER);
     if (v.sleeping) {
-        drawSleepScreen(v);
-        drawFooter(v);
+        drawSleepScreen(v); // its own pointer says how to wake, so no footer
         return;
     }
     if (v.audio == AUDIO_RECORDING || v.audio == AUDIO_SAVING) {

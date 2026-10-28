@@ -30,7 +30,8 @@ struct Moment {
     time_t recordedAt;               // UTC start of the recording, 0 if the clock wasn't set
     uint16_t startMs;                // milliseconds past recordedAt
     uint8_t tag;                     // MomentTag
-    char fileName[32];               // on the SD card, in /moments
+    char folder[12];                 // on the SD card: the day's folder in /moments ("2026-10-28", or "undated")
+    char fileName[48];               // ... and the file in it: 2026-10-28T10-05-15_nature.wav
     int16_t *samples;                // mono, SAMPLE_RATE Hz; nullptr when the moment is on the SD card
     size_t length;                   // in samples
     uint32_t dataOffset;             // where the samples start in the moment's file on the SD card

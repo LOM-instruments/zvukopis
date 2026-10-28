@@ -140,15 +140,8 @@ static bool findMoment(int number, int &index, Moment &moment) {
 
 // Name for downloads: the card's file name, or the same pattern for moments in memory
 static void downloadName(const Moment &moment, char *buf, size_t len) {
-    if (moment.fileName[0]) {
-        strlcpy(buf, moment.fileName, len);
-    } else if (moment.recordedAt) {
-        tm local;
-        localtime_r(&moment.recordedAt, &local);
-        strftime(buf, len, "%Y-%m-%d_%H-%M-%S.wav", &local);
-    } else {
-        snprintf(buf, len, "MOMENT_%04d.wav", moment.number);
-    }
+    if (moment.fileName[0]) strlcpy(buf, moment.fileName, len);
+    else storageMomentFileName(moment, buf, len); // held in memory: the name it would have on the card
 }
 
 static void noteRequest() {
@@ -290,7 +283,7 @@ static void sendMoments(char *buf, size_t len) {
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
-        char when[32] = "", name[40], tag[1024] = "";
+        char when[32] = "", name[48], tag[1024] = "";
         if (moment.recordedAt) {
             tm local;
             localtime_r(&moment.recordedAt, &local);
@@ -716,7 +709,7 @@ static void handleMoment() {
         server.send(404, "text/plain", "No such moment");
         return;
     }
-    char name[40], disposition[64];
+    char name[48], disposition[80];
     downloadName(moment, name, sizeof(name));
     snprintf(disposition, sizeof(disposition), "%s; filename=\"%s\"", server.hasArg("play") ? "inline" : "attachment", name);
     server.sendHeader("Content-Disposition", disposition);
