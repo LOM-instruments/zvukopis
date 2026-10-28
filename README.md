@@ -51,9 +51,9 @@ also works with it, so you can format it from a computer instead.
 
 ## Flashing
 
-**Without any tools:** open the [web flasher](docs/index.html) hosted from this
-repository's `docs/` folder (GitHub Pages) in Chrome or Edge, connect the
-board over USB and press *Install*. After flashing, unplug and replug the USB
+**Without any tools:** open the project page,
+[lom-instruments.github.io/zvukopis](https://lom-instruments.github.io/zvukopis/),
+in Chrome or Edge, connect the board over USB and press *Install*. After flashing, unplug and replug the USB
 cable, or hold PWR for 10 seconds: the board stays in download mode after the
 flasher's reset.
 

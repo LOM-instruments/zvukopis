@@ -3,49 +3,99 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>zvukopis flasher</title>
+<title>zvukopis</title>
+<meta name="description" content="zvukopis is a pocket recorder for sonic moments: an e-paper screen, a rocker switch, a microphone and a microSD card. Open source firmware, flashable from the browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 36rem; margin: 0 auto; padding: 1.5rem 1rem; line-height: 1.5; color: #111; background: #fff; }
-  h1 { margin: 0 0 .2rem; }
-  .sub { color: #555; margin-bottom: 1.5rem; }
-  ol { padding-left: 1.3rem; }
-  li { margin: .4rem 0; }
-  .install { margin: 1.5rem 0; }
-  esp-web-install-button { --esp-tools-button-color: #111; --esp-tools-button-text-color: #fff; }
-  .note { font-size: .9rem; color: #555; border-top: 1px solid #ddd; padding-top: 1rem; margin-top: 2rem; }
-  code { background: #eee; padding: 0 .3rem; border-radius: .3rem; }
-  @media (prefers-color-scheme: dark) {
-    body { color: #eee; background: #111; } .sub, .note { color: #aaa; } .note { border-color: #333; }
-    code { background: #222; } esp-web-install-button { --esp-tools-button-color: #eee; --esp-tools-button-text-color: #111; }
-  }
+  :root { color-scheme: light dark; --ink: #111; --paper: #fff; --dim: #555; --rule: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #eee; --paper: #111; --dim: #aaa; --rule: #333; } }
+  body { font-family: "Atkinson Hyperlegible", -apple-system, system-ui, sans-serif; max-width: 40rem; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.55; color: var(--ink); background: var(--paper); }
+  h1 { font-size: 2.6rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .tag { font-size: 1.25rem; color: var(--dim); margin: 0 0 2rem; }
+  h2 { font-size: 1.3rem; margin: 2.4rem 0 .6rem; }
+  p, li { margin: .4rem 0; }
+  ul, ol { padding-left: 1.3rem; }
+  a { color: inherit; }
+  .screen { border: 2px solid var(--ink); border-radius: 12px; padding: 1rem 1.2rem; margin: 1.5rem 0; }
+  .screen b { display: block; margin-bottom: .3rem; }
+  .screen i { color: var(--dim); font-style: normal; }
+  .install { margin: 1.2rem 0; }
+  esp-web-install-button { --esp-tools-button-color: var(--ink); --esp-tools-button-text-color: var(--paper); }
+  code { background: rgba(127,127,127,.15); padding: 0 .3rem; border-radius: .3rem; }
+  .note { font-size: .9rem; color: var(--dim); border-top: 1px solid var(--rule); padding-top: 1rem; margin-top: 2.5rem; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .row > div { flex: 1 1 14rem; }
 </style>
 <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
 <h1>zvukopis</h1>
-<div class="sub">Install the firmware from this browser, no tools needed.</div>
+<p class="tag">A pocket recorder for sonic moments.</p>
 
+<p>zvukopis records the sound of here and now and keeps it as a <em>moment</em>: a time, a waveform, a tag.
+It runs on the Waveshare ESP32-S3 e-paper board, so it has a calm paper-like screen, a side switch
+that does everything, a microphone, a small speaker, a microSD slot and a battery. The firmware is
+open source and you can put it on a board from this page.</p>
+
+<div class="screen">
+  <b>What it does</b>
+  <i>Records at 48 kHz onto the SD card, for up to 12 hours at a time. Plays moments back, with tape-style
+  varispeed. Tags them (human, nature, funny, art, other, or your own). Browses them by day in a calendar.
+  Shows a spectrogram and a spectrum. Records on a schedule, waking up by itself. Serves a web page on
+  Wi-Fi for downloading, recording from a phone and settings. Sleeps with a thought about listening on
+  the screen.</i>
+</div>
+
+<h2>How it feels</h2>
+<div class="row">
+  <div>
+    <p><b>Record.</b> Press the side switch in. Press again to stop. That's it.</p>
+    <p><b>Listen.</b> Move to a moment, press in. Hold up or down while it plays to change the speed.</p>
+    <p><b>Mark.</b> Hold the switch in on a moment to tag it, analyse it or delete it.</p>
+  </div>
+  <div>
+    <p><b>Rest.</b> Hold PWR for 2 seconds to sleep or wake. It sleeps by itself after 5 minutes and wakes
+    for scheduled recordings.</p>
+    <p><b>Set up.</b> The BOOT button opens the settings. The web interface starts from there: the first time,
+    the screen shows a QR code that connects your phone.</p>
+  </div>
+</div>
+
+<h2>Files</h2>
+<p>Moments are ordinary WAV files (48 kHz, mono, 16-bit), one folder per day:</p>
+<p><code>/moments/2026-10-28/2026-10-28T10-12-27_nature.wav</code></p>
+<p>Each file carries a Broadcast Wave timecode of the moment it started, so audio editors place it on their
+timeline at the right time of day.</p>
+
+<h2 id="flash">Put it on a board</h2>
+<p>You need a <a href="https://www.waveshare.com/esp32-s3-epaper-3.97.htm">Waveshare ESP32-S3-ePaper-3.97</a>,
+a USB cable, and Chrome or Edge on a computer (they can talk to USB ports; Safari and Firefox can't).</p>
 <ol>
-  <li>Use Chrome or Edge on a computer (they can talk to USB ports; Safari and Firefox can't).</li>
-  <li>Connect the zvukopis board over USB. It must be awake: if its screen says it's sleeping, hold PWR for 2 seconds.</li>
-  <li>Press <b>Install</b> below and choose the board's port. Flashing takes about a minute.</li>
-  <li>When it's done, <b>unplug and replug the USB cable</b> (or hold PWR for 10 seconds). The board stays in download mode after the flasher's reset.</li>
+  <li>Connect the board over USB. It must be awake: if its screen says it's sleeping, hold PWR for 2 seconds.</li>
+  <li>Press <b>Install</b> and choose the board's port. Flashing takes about a minute.</li>
+  <li>When it's done, <b>unplug and replug the USB cable</b> (or hold PWR for 10 seconds). The board stays
+  in download mode after the flasher's reset.</li>
 </ol>
-
 <div class="install">
   <esp-web-install-button manifest="manifest.json">
     <span slot="unsupported">This browser can't talk to USB ports. Use Chrome or Edge on a computer.</span>
     <span slot="not-allowed">This page has to be opened over HTTPS for the browser to allow USB access.</span>
   </esp-web-install-button>
 </div>
+<p>Moments on the SD card and your settings are kept: the flasher doesn't erase the device unless you choose
+<i>erase</i> in its dialog. The firmware it installs contains no network credentials; you add your Wi-Fi
+from the device's own web interface.</p>
 
-<p>Moments on the SD card are kept; settings (Wi-Fi networks, categories, schedule) are kept too, since the flasher
-doesn't erase the device. Choose <i>erase</i> in the flasher's dialog to start fresh.</p>
+<h2>Source</h2>
+<p>The firmware, the web flasher and the tools are at
+<a href="https://github.com/LOM-instruments/zvukopis">github.com/LOM-instruments/zvukopis</a> (MIT).
+Build it with PlatformIO, or read the README for how it all fits together.</p>
 
 <div class="note">
-  The firmware is built from the source in this repository; <code>manifest.json</code> says which version.
-  The flasher is <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>.
+  Fonts on the device: Atkinson Hyperlegible Next and Mono by the Braille Institute of America.
+  Quotes on the sleep screen: Pauline Oliveros. Flasher: <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>.
+  <code>manifest.json</code> says which firmware version this page installs.
 </div>
 </body>
 </html>
