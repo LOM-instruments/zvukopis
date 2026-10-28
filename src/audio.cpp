@@ -39,13 +39,13 @@ static const uint32_t STANDBY_AFTER_MS = 2000;               // idle time before
 // Varispeed, per 16 ms chunk: holding a key multiplies or divides the speed by
 // SPEED_STEP (so it keeps accelerating, like a tape reel), and on release it
 // eases back to normal
-static const float SPEED_STEP = 1.012f;  // 2x after ~1 s held, 8x after ~2.8 s
-static const float SPEED_RETURN = 0.93f; // fraction of the distance to 1x left after each chunk (~0.2 s)
-static const float MAX_SPEED = 8.0f;
+static const float SPEED_STEP = 1.04f;   // 2x after ~0.3 s held; 1x to -2x in ~1.6 s
+static const float SPEED_RETURN = 0.85f; // fraction of the distance to 1x left after each chunk (~0.1 s)
+static const float MAX_SPEED = 2.0f;
 // Below this the speed stops shrinking by steps and slides straight through
-// zero: the tape stops, then runs backwards (and on up to -8x while held)
+// zero: the tape stops, then runs backwards (and on up to -2x while held)
 static const float SCRUB_SPEED = 0.25f;
-static const float SCRUB_STEP = 0.02f; // per chunk: 0.4 s from +0.25 to -0.25
+static const float SCRUB_STEP = 0.05f; // per chunk: 0.16 s from +0.25 to -0.25
 
 enum CommandType : uint8_t {
     CMD_RECORD_START,
