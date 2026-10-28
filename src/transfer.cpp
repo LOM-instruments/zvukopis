@@ -11,6 +11,7 @@
 #include "board_power.h"
 #include "clock.h"
 #include "config.h"
+#include "library.h"
 #include "storage.h"
 #include "networks.h"
 #include "ui.h"
@@ -230,6 +231,10 @@ function saveWifi(){const s=$('ssid').value||$('otherssid').value.trim();
  if(!s){alert('Choose or enter a network');return}
  post('/wifi/save',new URLSearchParams({ssid:s,password:$('pass').value}))}
 function forget(i,n){if(confirm('Forget '+n+'?'))post('/wifi/forget?i='+i)}
+async function upload(){const f=$('docfile').files[0];if(!f){alert('Choose a .md or .txt file first');return}
+ const fd=new FormData();fd.append('doc',f,f.name);$('upbtn').disabled=true;
+ const r=await fetch('/library/upload',{method:'POST',body:fd});if(!r.ok)alert(await r.text());location.reload()}
+function deldoc(f,t){if(confirm('Delete '+t+' from the device?'))post('/library/delete?f='+encodeURIComponent(f))}
 let recState='idle',moments=null;
 async function toggleRecord(){
  const r=await fetch(recState=='recording'?'/record/stop':'/record/start?seconds='+$('reclen').value,{method:'POST'});
@@ -437,6 +442,38 @@ static void sendTimeZone(char *buf, size_t len) {
     server.sendContent(buf);
 }
 
+static void sendLibrary(char *buf, size_t len) {
+    int n = libraryCount();
+    if (n) snprintf(buf, len, "<h2>Library (%d)</h2>", n);
+    else snprintf(buf, len, "<h2>Library</h2>");
+    server.sendContent(buf);
+    if (!audioUsingSdCard()) {
+        server.sendContent("<p class=note>Documents live on the SD card; there is none in zvukopis right now.</p>");
+        return;
+    }
+    server.sendContent("<table>");
+    Document doc;
+    for (int i = 0; libraryGet(i, doc); i++) {
+        char title[CATEGORY_NAME_LEN * 0 + 300], name[300];
+        htmlEscape(doc.title, title, sizeof(title));
+        htmlEscape(doc.fileName, name, sizeof(name));
+        // Into a JS string inside an HTML attribute: JSON-escape, then HTML-escape the lot
+        char jsName[400], jsTitle[400];
+        htmlEscape(jsonString(doc.fileName).c_str(), jsName, sizeof(jsName));
+        htmlEscape(jsonString(doc.title).c_str(), jsTitle, sizeof(jsTitle));
+        snprintf(buf, len, "<tr><td><b>%s</b><br><small>%s, %lu KB</small></td>"
+                           "<td class=c><button class=ic title=Delete onclick=\"deldoc(%s,%s)\">%s</button></td></tr>",
+                 title, name, (unsigned long)((doc.bytes + 1023) / 1024), jsName, jsTitle, TRASH_SVG);
+        server.sendContent(buf);
+    }
+    if (n == 0) server.sendContent("<tr><td>Nothing to read yet. Add a Markdown or text file below.</td></tr>");
+    server.sendContent("</table><div class=row><input type=file id=docfile accept=\".md,.txt,text/markdown,text/plain\">"
+                       "<button id=upbtn onclick=upload()>Upload</button></div>"
+                       "<p class=note>Markdown or plain text, up to 512 KB each. Headings, paragraphs, <i>italics</i>, "
+                       "<b>bold</b>, quotations and lists are shown; they go in the <code>doc</code> folder on the card, "
+                       "and zvukopis remembers the page you left each one at.</p>");
+}
+
 static void sendWifi(char *buf, size_t len) {
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
     int n = wifiNetworkCount();
@@ -502,6 +539,7 @@ static void handleIndex() {
     sendSchedule(buf, sizeof(buf));
     sendCategories(buf, sizeof(buf));
     sendTimeZone(buf, sizeof(buf));
+    sendLibrary(buf, sizeof(buf));
     if (!firstTime) sendWifi(buf, sizeof(buf));
     server.sendContent("</div>");
     server.sendContent_P(PAGE_TAIL);
@@ -624,6 +662,86 @@ static void handleStatus() {
     server.send(200, "application/json", json);
 }
 
+// Documents arrive in pieces; the file is written as they come
+static File uploadFile;
+static String uploadError;
+
+static String uploadPath;
+static size_t uploadBytes = 0;
+
+// A failed upload leaves nothing behind
+static void dropUpload(const char *why) {
+    uploadError = why;
+    if (uploadFile) uploadFile.close();
+    if (uploadPath.length()) SD_MMC.remove(uploadPath);
+    uploadPath = "";
+}
+
+static void handleLibraryUploadPiece() {
+    HTTPUpload &up = server.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        uploadError = "";
+        uploadPath = "";
+        uploadBytes = 0;
+        if (!audioUsingSdCard()) {
+            uploadError = "No SD card in zvukopis";
+            return;
+        }
+        // A plain file name: letters, digits, dots, dashes, spaces; .md or .txt
+        String name = up.filename;
+        int slash = max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0) name = name.substring(slash + 1);
+        String clean;
+        for (unsigned i = 0; i < name.length() && clean.length() < 40; i++) {
+            char c = name[i];
+            if (isalnum((uint8_t)c) || c == '.' || c == '-' || c == '_' || c == ' ') clean += c;
+        }
+        clean.trim();
+        if (!clean.endsWith(".md") && !clean.endsWith(".txt") && !clean.endsWith(".MD") && !clean.endsWith(".TXT")) clean += ".md";
+        if (clean.length() < 4 || clean[0] == '.') {
+            uploadError = "Give the file a plain name ending in .md or .txt";
+            return;
+        }
+        if (!SD_MMC.exists(libraryDir())) SD_MMC.mkdir(libraryDir());
+        uploadPath = String(libraryDir()) + "/" + clean;
+        uploadFile = SD_MMC.open(uploadPath, FILE_WRITE);
+        if (!uploadFile) dropUpload("Can't create the file on the SD card");
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (!uploadFile) return; // already failed
+        // Counted here: the file's own size() reads the directory entry, which
+        // FatFs only updates on close
+        if (uploadBytes + up.currentSize > MAX_DOCUMENT_BYTES) dropUpload("Documents can be 512 KB at most");
+        else if (uploadFile.write(up.buf, up.currentSize) != up.currentSize) dropUpload("Writing to the SD card failed");
+        else uploadBytes += up.currentSize;
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (uploadFile) {
+            uploadFile.close();
+            if (uploadBytes == 0) dropUpload("The file is empty");
+        }
+        uploadPath = "";
+        libraryScan();
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        if (uploadFile || uploadPath.length()) dropUpload("The upload was cut off");
+        libraryScan();
+    }
+    lastRequestAt = millis();
+}
+
+static void handleLibraryUpload() {
+    noteRequest();
+    if (uploadError.length()) server.send(400, "text/plain", uploadError);
+    else server.send(200, "text/plain", "ok");
+}
+
+static void handleLibraryDelete() {
+    noteRequest();
+    if (!libraryDelete(server.arg("f").c_str())) {
+        server.send(404, "text/plain", "No such document");
+        return;
+    }
+    server.send(200, "text/plain", "ok");
+}
+
 static void handleTimeZone() {
     noteRequest();
     String tz = server.arg("tz");
@@ -698,6 +816,8 @@ static void addRoutes() {
     server.on("/record/start", HTTP_POST, handleRecordStart);
     server.on("/record/stop", HTTP_POST, handleRecordStop);
     server.on("/gain", HTTP_POST, handleGain);
+    server.on("/library/upload", HTTP_POST, handleLibraryUpload, handleLibraryUploadPiece);
+    server.on("/library/delete", HTTP_POST, handleLibraryDelete);
     server.on("/status", HTTP_GET, handleStatus);
     server.on("/wifi/scan", HTTP_GET, handleWifiScan);
     server.on("/wifi/save", HTTP_POST, handleWifiSave);

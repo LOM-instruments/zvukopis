@@ -7,7 +7,8 @@ a microSD slot and a battery.
 A recording is a *moment*: the sound of here and now. Moments are listed with
 the time they were taken, a waveform and a tag, and can be played back,
 browsed by day in a calendar, tagged, deleted, analysed (spectrogram and
-spectrum), downloaded over Wi-Fi and recorded on a schedule.
+spectrum), downloaded over Wi-Fi and recorded on a schedule. There is also a
+small library: Markdown or text files on the card can be read on the screen.
 
 ## Using it
 
@@ -17,6 +18,10 @@ spectrum), downloaded over Wi-Fi and recorded on a schedule.
   changes the speed, like a tape reel.
 - **Tag, analyse, delete:** hold the switch in on a moment.
 - **Calendar:** up from *New recording*, then press in.
+- **Library:** the book button next to the calendar, shown once the card has
+  documents. Up and down turn the pages; the page you left at is remembered.
+- **Spectrogram:** up switches between spectrogram and spectrum, down steps
+  through four contrast levels.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader and formatting the card.
@@ -35,7 +40,17 @@ save your Wi-Fi network. From then on it joins that network and is at
 
 The page has a *Recording* tab (record and stop, mic gain, the moments with
 playback, download and delete) and a *Settings* tab (scheduled recordings,
-categories, time and time zone, Wi-Fi networks).
+categories, time and time zone, library, Wi-Fi networks).
+
+### Library
+
+Documents go in `/doc` on the card, uploaded from the web interface or copied
+there with the USB card reader. Markdown (`.md`) and plain text (`.txt`) files
+up to 512 KB; the first `#` heading is the title. Headings, paragraphs,
+`> quotes`, lists, rules, *italic* and **bold** are laid out in Atkinson
+Hyperlegible; the text is shown as ASCII, with typographic quotes and dashes
+mapped to their plain forms. `library/walden-sounds.md` is a sample, the
+chapter *Sounds* from Thoreau's *Walden*.
 
 ### SD card
 

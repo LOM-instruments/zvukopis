@@ -11,6 +11,7 @@
 #include "buttons.h"
 #include "clock.h"
 #include "config.h"
+#include "library.h"
 #include "networks.h"
 #include "ui.h"
 
@@ -278,6 +279,7 @@ void setup() {
     configInit();
 
     if (!audioInit()) Serial.println("Audio init failed");
+    libraryScan(); // the card is mounted by audioInit
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "

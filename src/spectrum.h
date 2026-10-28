@@ -8,13 +8,12 @@
 // 2048-point FFTs with a Hann window.
 
 static const float SPECTRUM_HIGH_HZ = 20000; // both views run from 0 Hz to this
-static const float SPECTRUM_RANGE_DB = 60; // cells span this far below the loudest point
 
 struct Spectrogram {
     int momentNumber;
     int width, height;
-    const uint8_t *cells; // width * height, row by row: 0 = RANGE_DB below the peak or quieter, 255 = the
-                          // peak, on a squared scale so the noise floor stays light
+    const float *db; // width * height, row by row: loudness in dB (any scale); the screen picks the contrast
+    float loudestDb;
     int peakColumn, peakRow;
     float peakHz, peakSeconds;
     float bandLowHz, bandHighHz; // 10% and 90% of the energy lie below these

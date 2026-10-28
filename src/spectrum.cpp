@@ -11,7 +11,7 @@ static const int FFT_SIZE = 2048; // 23 Hz bins at 48 kHz
 static const float PEAK_MIN_HZ = 40; // the loudest point is looked for above this: below is DC offset and rumble
 
 static Spectrogram result;
-static uint8_t *cells = nullptr;
+static float *dbGrid = nullptr; // kept between analyses (PSRAM), sized by the first request
 static float *averageDb = nullptr; // FFT_SIZE / 2
 static volatile int readyNumber = -1;   // moment whose spectrogram is in `result`
 static volatile int progress = 0;       // percent of the columns done
@@ -65,7 +65,8 @@ static bool compute(int number, int width, int height) {
     if (index < 0 || moment.length < FFT_SIZE / 4) return false;
     uint32_t start = millis();
 
-    float *db = (float *)ps_malloc(width * height * sizeof(float));
+    if (!dbGrid) dbGrid = (float *)ps_malloc(wantedWidth * wantedHeight * sizeof(float));
+    float *db = dbGrid;
     float *fft = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_INTERNAL);
     int16_t *frame = (int16_t *)malloc(FFT_SIZE * sizeof(int16_t));
     float *window = (float *)malloc(FFT_SIZE * sizeof(float));
@@ -74,9 +75,8 @@ static bool compute(int number, int width, int height) {
     // Bin range of each row: the bins inside its slice of the linear scale
     int *binLow = (int *)malloc(height * sizeof(int)), *binHigh = (int *)malloc(height * sizeof(int));
     bool ok = db && fft && frame && window && rowEnergy && binPower && binLow && binHigh;
-    if (ok && !cells) cells = (uint8_t *)ps_malloc(width * height);
     if (ok && !averageDb) averageDb = (float *)ps_malloc(FFT_SIZE / 2 * sizeof(float));
-    ok = ok && cells && averageDb && width * height <= wantedWidth * wantedHeight;
+    ok = ok && averageDb && width * height <= wantedWidth * wantedHeight;
     if (ok) {
         const float binHz = (float)SAMPLE_RATE / FFT_SIZE;
         for (int r = 0; r < height; r++) {
@@ -121,10 +121,6 @@ static bool compute(int number, int width, int height) {
         }
         ok = wantedNumber == number;
         if (ok) {
-            for (int i = 0; i < width * height; i++) {
-                float level = constrain((db[i] - (loudest - SPECTRUM_RANGE_DB)) / SPECTRUM_RANGE_DB, 0.0f, 1.0f);
-                cells[i] = (uint8_t)(level * level * 255); // squared, so the noise floor stays light
-            }
             // Where the energy lies: rows from the bottom (low) up, by share of the total
             double total = 0, below = 0;
             for (int r = 0; r < height; r++) total += rowEnergy[r];
@@ -145,7 +141,8 @@ static bool compute(int number, int width, int height) {
             result.momentNumber = number;
             result.width = width;
             result.height = height;
-            result.cells = cells;
+            result.db = db;
+            result.loudestDb = loudest;
             result.peakHz = spectrumRowHz(result.peakRow, height);
             result.seconds = (float)moment.length / SAMPLE_RATE;
             result.peakSeconds = (result.peakColumn + 0.5f) / width * result.seconds;
@@ -163,7 +160,6 @@ static bool compute(int number, int width, int height) {
                           result.bandHighHz);
         }
     }
-    free(db);
     heap_caps_free(fft);
     free(frame);
     free(window);

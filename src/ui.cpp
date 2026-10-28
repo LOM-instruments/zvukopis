@@ -13,6 +13,7 @@
 #include "clock.h"
 #include "config.h"
 #include "fonts.h"
+#include "library.h"
 #include "networks.h"
 #include "quotes.h"
 #include "spectrum.h"
@@ -58,6 +59,8 @@ enum Screen {
     SCREEN_CARD_READER, // SD card open over USB
     SCREEN_SCHEDULE,    // the scheduled recordings
     SCREEN_SPECTRUM,    // frequency analysis of one moment
+    SCREEN_LIBRARY,     // the documents on the card
+    SCREEN_READER,      // one of them, page by page
 };
 
 enum Overlay {
@@ -72,6 +75,7 @@ enum Overlay {
 // Header buttons have negative positions: up from the first row reaches them
 static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
+static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
 enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
@@ -102,6 +106,11 @@ static int menuFromSelected = 0;
 static volatile int spectrumMoment = 0; // number of the moment being analysed
 enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
 static volatile int spectrumView = VIEW_SPECTROGRAM;
+static volatile int spectrumContrast = 1; // index into CONTRAST_DB
+static const float CONTRAST_DB[] = {70, 55, 40, 28}; // dynamic range shown: less is more contrast
+static const int CONTRAST_LEVELS = 4;
+static Document readerDocument;      // the one open in the reader
+static volatile int readerPage = 0;
 static Screen spectrumFrom = SCREEN_LIST;
 static int spectrumFromSelected = 0;
 static volatile bool sleepRequested = false;
@@ -236,6 +245,9 @@ struct ViewState {
     int spectrumReady;
     int spectrumProgress; // in steps of 10%, so the screen isn't redrawn for every column
     int spectrumView;
+    int spectrumContrast;
+    int libraryCount;
+    int readerPage;
     int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
 };
@@ -293,6 +305,9 @@ static ViewState currentView() {
     v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
     v.spectrumProgress = screen == SCREEN_SPECTRUM && !v.spectrumReady ? spectrumProgress(spectrumMoment) / 10 * 10 : 0;
     v.spectrumView = spectrumView;
+    v.spectrumContrast = spectrumContrast;
+    v.libraryCount = libraryCount();
+    v.readerPage = readerPage;
     if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
     return v;
 }
@@ -323,12 +338,22 @@ static void formatBytes(char *buf, size_t len, uint64_t bytes) {
     else snprintf(buf, len, "%llu MB", bytes >> 20);
 }
 
-static int textWidth(const GFXfont *font, const char *text) {
+static int textWidthOn(Adafruit_GFX &gfx, const GFXfont *font, const char *text) {
     int16_t x1, y1;
     uint16_t w, h;
-    canvas->setFont(font);
-    canvas->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    gfx.setFont(font);
+    gfx.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
     return x1 + w;
+}
+
+static int textWidth(const GFXfont *font, const char *text) { return textWidthOn(*canvas, font, text); }
+
+// For the reader's layout, which runs on the loop task while the display task
+// may be drawing: measuring sets the canvas font, so it gets a canvas of its own
+static int measureWidth(const GFXfont *font, const char *text) {
+    static GFXcanvas1 ruler(1, 1);
+    ruler.setTextWrap(false); // or it would wrap at its own edge and measure short
+    return textWidthOn(ruler, font, text);
 }
 
 // y is the text baseline
@@ -443,6 +468,17 @@ static void iconTrash(int cx, int cy) {
     canvas->fillRect(cx - 9, cy - 40, 18, 6, INK);           // handle
     for (int i = 0; i < 3; i++) canvas->drawRect(cx - 22 + i, cy - 22 + i, 44 - 2 * i, 56 - 2 * i, INK);
     for (int dx = -10; dx <= 10; dx += 10) canvas->fillRect(cx + dx - 1, cy - 12, 3, 36, INK);
+}
+
+static void iconBook(int cx, int cy, uint16_t fg, uint16_t bg) {
+    // An open book: two pages meeting at the spine
+    canvas->fillRoundRect(cx - 12, cy - 8, 11, 17, 2, fg);
+    canvas->fillRoundRect(cx + 1, cy - 8, 11, 17, 2, fg);
+    canvas->fillRect(cx - 1, cy - 9, 2, 19, bg);
+    for (int i = 0; i < 3; i++) {
+        canvas->drawFastHLine(cx - 9, cy - 4 + i * 4, 6, bg);
+        canvas->drawFastHLine(cx + 3, cy - 4 + i * 4, 6, bg);
+    }
 }
 
 static void iconCalendar(int cx, int cy, uint16_t fg, uint16_t bg) {
@@ -681,6 +717,10 @@ static void drawMainHeader(const ViewState &v) {
     // The calendar has nothing to show until there are moments
     if (v.momentCount > 0 || v.selected == ROW_CALENDAR) {
         drawHeaderButton(SW - MARGIN - HEADER_BUTTON, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
+    }
+    if (v.libraryCount > 0) {
+        int x = SW - MARGIN - HEADER_BUTTON - (v.momentCount > 0 || v.selected == ROW_CALENDAR ? HEADER_BUTTON + 8 : 0);
+        drawHeaderButton(x, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_LIBRARY, iconBook);
     }
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
@@ -1220,10 +1260,14 @@ static const char *const FREQ_LABELS[FREQ_STEPS + 1] = {"0", "5k", "10k", "15k",
 static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
     // Loudness as a 4x4 ordered dither: 17 shades from paper to ink
     static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    const float range = CONTRAST_DB[v.spectrumContrast], floor = sp->loudestDb - range;
     for (int y = 0; y < sp->height && y < PLOT_H; y++) {
-        const uint8_t *row = sp->cells + y * sp->width;
+        const float *row = sp->db + y * sp->width;
         for (int x = 0; x < sp->width && x < PLOT_W; x++) {
-            if (row[x] * 17 / 256 > BAYER[y & 3][x & 3]) canvas->drawPixel(PLOT_X + x, PLOT_Y + y, INK);
+            float level = (row[x] - floor) / range;
+            if (level <= 0) continue;
+            if (level > 1) level = 1;
+            if ((int)(level * level * 17) > BAYER[y & 3][x & 3]) canvas->drawPixel(PLOT_X + x, PLOT_Y + y, INK);
         }
     }
     canvas->drawRect(PLOT_X - 1, PLOT_Y - 1, PLOT_W + 2, PLOT_H + 2, INK);
@@ -1279,7 +1323,7 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
 // FFT graph: the moment's average spectrum, loudness (dB below its loudest
 // frequency) up against frequency (linear) across, filled lightly below
 static void drawFftGraph(const ViewState &v, const Spectrogram *sp) {
-    const float rangeDb = 80;
+    const float rangeDb = CONTRAST_DB[v.spectrumContrast] + 10; // 80 down to 38 dB
     int lastBin = min(sp->bins - 1, (int)(SPECTRUM_HIGH_HZ / sp->binHz));
     float loudest = -1000;
     for (int b = 1; b <= lastBin; b++) loudest = max(loudest, sp->averageDb[b]);
@@ -1303,7 +1347,7 @@ static void drawFftGraph(const ViewState &v, const Spectrogram *sp) {
 
     // dB scale on the left, every 20 dB
     char buf[48];
-    for (int db = 0; db <= (int)rangeDb; db += 20) {
+    for (int db = 0; db <= (int)rangeDb; db += rangeDb > 50 ? 20 : 10) {
         int y = PLOT_Y + (int)(db / rangeDb * (PLOT_H - 1));
         canvas->drawFastHLine(PLOT_X - 7, y, 6, INK);
         if (db > 0 && db < rangeDb) {
@@ -1349,7 +1393,10 @@ static void drawSpectrum(const ViewState &v) {
     if (!momentGet(momentIndexByNumber(v.spectrumMoment), moment)) return;
     char title[24];
     snprintf(title, sizeof(title), "Moment %d", moment.number);
-    drawSubHeader(v, title, v.spectrumView == VIEW_FFT ? "Spectrum (FFT)" : "Spectrogram");
+    char subtitle[40];
+    snprintf(subtitle, sizeof(subtitle), "%s, contrast %d/%d", v.spectrumView == VIEW_FFT ? "FFT" : "Spectrogram",
+             v.spectrumContrast + 1, CONTRAST_LEVELS);
+    drawSubHeader(v, title, subtitle);
     const Spectrogram *sp = spectrumResult(v.spectrumMoment);
     if (!sp) {
         iconBars(SW / 2, 300, 30, INK);
@@ -1364,6 +1411,289 @@ static void drawSpectrum(const ViewState &v) {
     }
     if (v.spectrumView == VIEW_FFT) drawFftGraph(v, sp);
     else drawSpectrogram(v, sp);
+}
+
+// --- Library and reader ---
+
+// A document is laid out once when opened: words with their style, lines of
+// words, and where each page starts. All in PSRAM; the text stays as loaded.
+enum WordStyle : uint8_t { STYLE_BOLD = 1, STYLE_ITALIC = 2 };
+enum LineKind : uint8_t { LINE_TEXT, LINE_H1, LINE_H2, LINE_QUOTE, LINE_LIST, LINE_RULE, LINE_BLANK };
+
+struct Word {
+    uint32_t offset;
+    uint16_t length;
+    uint8_t style;
+    uint8_t first; // first word of a list item: gets the bullet
+};
+struct Line {
+    uint32_t firstWord;
+    uint16_t words;
+    uint8_t kind;
+    uint8_t pad;
+};
+
+static const int READER_TOP = LIST_TOP + 10, READER_BOTTOM = FOOTER_LINE_Y - 14;
+static const int READER_FULL_REFRESH_EVERY = 8; // page turns, against ghosting in the text
+
+static char *readerText = nullptr;
+static size_t readerLength = 0;
+static Word *words = nullptr;
+static Line *lines = nullptr;
+static uint32_t *pageStarts = nullptr; // line index each page begins at
+static uint32_t wordTotal = 0, lineTotal = 0, pageTotal = 0, wordCapacity = 0, lineCapacity = 0;
+
+static const GFXfont *lineFont(const Line &line, const Word &word) {
+    if (line.kind == LINE_H1) return &Bold38;
+    if (line.kind == LINE_H2 || (word.style & STYLE_BOLD)) return &Bold27;
+    if (line.kind == LINE_QUOTE || (word.style & STYLE_ITALIC)) return &Italic27;
+    return &Text27;
+}
+
+static int lineHeight(uint8_t kind) {
+    switch (kind) {
+    case LINE_H1: return 50;
+    case LINE_H2: return 41;
+    case LINE_RULE: return 24;
+    case LINE_BLANK: return 14;
+    default: return 36;
+    }
+}
+
+static int lineIndent(uint8_t kind) { return kind == LINE_QUOTE ? 28 : kind == LINE_LIST ? 22 : 0; }
+
+static const int MAX_WORD = 63; // longer runs are split, so a word always fits a buffer
+
+static int wordWidth(const GFXfont *font, const Word &word) {
+    char buf[MAX_WORD + 1];
+    memcpy(buf, readerText + word.offset, word.length);
+    buf[word.length] = 0;
+    return measureWidth(font, buf);
+}
+
+static void addLine(uint32_t firstWord, uint16_t count, uint8_t kind) {
+    if (lineTotal >= lineCapacity) return;
+    lines[lineTotal++] = {firstWord, count, kind, 0};
+}
+
+// Lays out one block of text (a paragraph, heading, quote line or list item)
+// into words and lines. Inline *italic*, _italic_ and **bold** markers are
+// stripped off the ends of words and set the style.
+static void layoutBlock(const char *start, const char *end, uint8_t kind) {
+    uint32_t firstWord = wordTotal, lineStart = wordTotal;
+    int width = 0, maxWidth = SW - 2 * MARGIN - lineIndent(kind);
+    uint8_t style = 0;
+    const char *p = start;
+    while (p < end && wordTotal < wordCapacity) {
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n')) p++;
+        if (p >= end) break;
+        const char *w = p;
+        while (p < end && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        char *we = (char *)p;
+        uint8_t wordStyle = style, after = style;
+        // markers at the front switch a style on for this word, at the back off
+        // after it; closing markers may sit before punctuation ("*so*, he said")
+        while (we - w > 1) {
+            if (we - w > 2 && w[0] == '*' && w[1] == '*') { wordStyle |= STYLE_BOLD; after |= STYLE_BOLD; w += 2; }
+            else if (*w == '*' || *w == '_') { wordStyle |= STYLE_ITALIC; after |= STYLE_ITALIC; w++; }
+            else break;
+        }
+        char *tail = we;
+        while (tail > w && strchr(".,;:!?)\"'", tail[-1])) tail--;
+        size_t punctuation = we - tail;
+        while (tail - w > 1) {
+            if (tail - w > 2 && tail[-1] == '*' && tail[-2] == '*') { after &= ~STYLE_BOLD; wordStyle |= STYLE_BOLD; tail -= 2; }
+            else if (tail[-1] == '*' || tail[-1] == '_') { after &= ~STYLE_ITALIC; wordStyle |= STYLE_ITALIC; tail--; }
+            else break;
+        }
+        if (punctuation) memmove(tail, we - punctuation, punctuation); // the punctuation closes up over the markers
+        we = tail + punctuation;
+        style = after;
+        bool first = wordTotal == firstWord && kind == LINE_LIST;
+        while (we > w && wordTotal < wordCapacity) {
+            size_t len = min((size_t)(we - w), (size_t)MAX_WORD);
+            Word word = {(uint32_t)(w - readerText), (uint16_t)len, wordStyle, (uint8_t)first};
+            first = false;
+            Line probe = {0, 0, kind, 0};
+            const GFXfont *font = lineFont(probe, word);
+            int ww = wordWidth(font, word), space = measureWidth(font, "n") * 3 / 5;
+            if (wordTotal > lineStart && width + space + ww > maxWidth) {
+                addLine(lineStart, wordTotal - lineStart, kind);
+                lineStart = wordTotal;
+                width = 0;
+            }
+            width += (wordTotal > lineStart ? space : 0) + ww;
+            words[wordTotal++] = word;
+            w += len;
+        }
+    }
+    if (wordTotal > lineStart) addLine(lineStart, wordTotal - lineStart, kind);
+}
+
+static void paginate() {
+    pageTotal = 0;
+    int y = READER_TOP;
+    bool pageOpen = false;
+    for (uint32_t i = 0; i < lineTotal; i++) {
+        int h = lineHeight(lines[i].kind);
+        if (!pageOpen) {
+            if (lines[i].kind == LINE_BLANK) continue; // no gaps at the top of a page
+            pageStarts[pageTotal++] = i;
+            pageOpen = true;
+            y = READER_TOP;
+        }
+        if (y + h > READER_BOTTOM) {
+            pageOpen = false;
+            i--; // this line opens the next page
+            continue;
+        }
+        y += h;
+    }
+    if (pageTotal == 0) pageStarts[pageTotal++] = 0;
+}
+
+// Reads the document into words, lines and pages. False if it can't be read.
+static bool readerOpen(int doc) {
+    readerText = libraryLoad(doc, readerLength);
+    if (!readerText) return false;
+    uint32_t t0 = millis(), newlines = 0;
+    for (size_t i = 0; i < readerLength; i++) newlines += readerText[i] == '\n';
+    wordCapacity = readerLength / 2 + 64;            // a word takes a byte plus a separator
+    lineCapacity = wordCapacity + 2 * newlines + 64; // a line holds a word, or is a blank or rule
+    free(words);
+    free(lines);
+    free(pageStarts);
+    words = (Word *)ps_malloc(wordCapacity * sizeof(Word));
+    lines = (Line *)ps_malloc(lineCapacity * sizeof(Line));
+    pageStarts = (uint32_t *)ps_malloc((lineCapacity + 1) * sizeof(uint32_t));
+    if (!words || !lines || !pageStarts) {
+        Serial.println("[reader] out of memory for the layout");
+        return false;
+    }
+    wordTotal = lineTotal = 0;
+
+    // Blocks: paragraphs run until an empty line; headings, quote lines, list
+    // items and rules are one source line each
+    const char *p = readerText, *end = readerText + readerLength;
+    const char *paraStart = nullptr;
+    uint8_t lastKind = LINE_BLANK;
+    auto flushParagraph = [&](const char *upTo) {
+        if (paraStart && upTo > paraStart) layoutBlock(paraStart, upTo, LINE_TEXT);
+        paraStart = nullptr;
+    };
+    while (p < end) {
+        const char *lineEnd = (const char *)memchr(p, '\n', end - p);
+        if (!lineEnd) lineEnd = end;
+        const char *q = p;
+        while (q < lineEnd && *q == ' ') q++;
+        size_t len = lineEnd - q;
+        if (len == 0) {
+            flushParagraph(p);
+            if (lastKind != LINE_BLANK) addLine(wordTotal, 0, LINE_BLANK);
+            lastKind = LINE_BLANK;
+        } else if (*q == '#') {
+            flushParagraph(p);
+            int level = 0;
+            while (*q == '#') { q++; level++; }
+            while (q < lineEnd && *q == ' ') q++;
+            layoutBlock(q, lineEnd, level == 1 ? LINE_H1 : LINE_H2);
+            addLine(wordTotal, 0, LINE_BLANK);
+            lastKind = LINE_BLANK;
+        } else if (*q == '>') {
+            flushParagraph(p);
+            q++;
+            while (q < lineEnd && *q == ' ') q++;
+            layoutBlock(q, lineEnd, LINE_QUOTE);
+            lastKind = LINE_QUOTE;
+        } else if ((len >= 2 && (q[0] == '-' || q[0] == '*' || q[0] == '+') && q[1] == ' ') ||
+                   (len >= 3 && isdigit((uint8_t)q[0]) && isdigit((uint8_t)q[1]) && isdigit((uint8_t)q[2]) && q[3] && (q[3] == '.' || q[3] == ')') && q[4] == ' ') ||
+                   (len >= 3 && isdigit((uint8_t)q[0]) && isdigit((uint8_t)q[1]) && (q[2] == '.' || q[2] == ')') && q[3] == ' ') ||
+                   (len >= 3 && isdigit((uint8_t)q[0]) && (q[1] == '.' || q[1] == ')') && q[2] == ' ')) {
+            flushParagraph(p);
+            while (isdigit((uint8_t)*q)) q++;
+            q += q[0] == ' ' ? 1 : 2;
+            layoutBlock(q, lineEnd, LINE_LIST);
+            lastKind = LINE_LIST;
+        } else if (len >= 3 && (strncmp(q, "---", 3) == 0 || strncmp(q, "***", 3) == 0 || strncmp(q, "___", 3) == 0)) {
+            flushParagraph(p);
+            addLine(wordTotal, 0, LINE_RULE);
+            lastKind = LINE_RULE;
+        } else {
+            if (!paraStart) paraStart = q;
+            lastKind = LINE_TEXT;
+        }
+        p = lineEnd + 1;
+    }
+    flushParagraph(end);
+    paginate();
+    Serial.printf("[reader] %u words, %u lines, %u pages, laid out in %lu ms\n", wordTotal, lineTotal, pageTotal, millis() - t0);
+    return true;
+}
+
+static void drawLibrary(const ViewState &v) {
+    char subtitle[32];
+    snprintf(subtitle, sizeof(subtitle), "%d document%s", v.libraryCount, v.libraryCount == 1 ? "" : "s");
+    drawSubHeader(v, "Library", subtitle);
+    const int rowH = 72, visible = (FOOTER_LINE_Y - LIST_TOP - 8) / rowH;
+    static int scrollTop = 0;
+    int sel = max(0, v.selected);
+    if (sel < scrollTop) scrollTop = sel;
+    if (sel >= scrollTop + visible) scrollTop = sel - visible + 1;
+    scrollTop = constrain(scrollTop, 0, max(0, v.libraryCount - visible));
+    for (int i = 0; i < visible && scrollTop + i < v.libraryCount; i++) {
+        int row = scrollTop + i, y = LIST_TOP + i * rowH;
+        Document doc;
+        if (!libraryGet(row, doc)) break;
+        bool isSelected = row == v.selected;
+        uint16_t fg = isSelected ? PAPER : INK;
+        if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, rowH - 8, 12, INK);
+        else if (i > 0 && row - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
+        iconBook(MARGIN + 14, y + 30, fg, isSelected ? INK : PAPER);
+        drawText(MARGIN + 44, y + 36, &Bold22, doc.title, fg);
+        char detail[48];
+        int page = libraryLastPage(doc.fileName);
+        if (page > 0) snprintf(detail, sizeof(detail), "%lu KB  -  left at page %d", (unsigned long)((doc.bytes + 1023) / 1024), page + 1);
+        else snprintf(detail, sizeof(detail), "%lu KB", (unsigned long)((doc.bytes + 1023) / 1024));
+        drawText(MARGIN + 44, y + 60, &Text17, detail, fg);
+    }
+    if (v.libraryCount == 0) {
+        drawTextCentered(SW / 2, 300, &Bold22, "Nothing to read yet", INK);
+        drawTextCentered(SW / 2, 338, &Text22, "Add Markdown or text files on the", INK);
+        drawTextCentered(SW / 2, 366, &Text22, "web interface, or in /doc on the card", INK);
+    }
+}
+
+static void drawReader(const ViewState &v) {
+    if (!readerText) return;
+    char subtitle[32];
+    snprintf(subtitle, sizeof(subtitle), "Page %d of %u", v.readerPage + 1, pageTotal);
+    drawSubHeader(v, readerDocument.title, subtitle, false);
+    if (v.readerPage < 0 || (uint32_t)v.readerPage >= pageTotal) return;
+    uint32_t first = pageStarts[v.readerPage];
+    uint32_t last = (uint32_t)v.readerPage + 1 < pageTotal ? pageStarts[v.readerPage + 1] : lineTotal;
+    int y = READER_TOP;
+    for (uint32_t i = first; i < last; i++) {
+        const Line &line = lines[i];
+        int h = lineHeight(line.kind);
+        if (y + h > READER_BOTTOM) break;
+        if (line.kind == LINE_RULE) {
+            canvas->drawFastHLine(MARGIN + 40, y + h / 2, SW - 2 * MARGIN - 80, INK);
+        } else if (line.kind != LINE_BLANK) {
+            int x = MARGIN + lineIndent(line.kind), baseline = y + h - 10;
+            if (line.kind == LINE_QUOTE) canvas->fillRect(MARGIN + 6, y + 2, 2, h - 2, INK);
+            for (uint32_t w = line.firstWord; w < line.firstWord + line.words; w++) {
+                const Word &word = words[w];
+                const GFXfont *font = lineFont(line, word);
+                if (word.first) canvas->fillCircle(MARGIN + 7, baseline - 7, 3, INK);
+                char buf[MAX_WORD + 1];
+                memcpy(buf, readerText + word.offset, word.length);
+                buf[word.length] = 0;
+                drawText(x, baseline, font, buf, INK);
+                x += textWidth(font, buf) + textWidth(font, "n") * 3 / 5;
+            }
+        }
+        y += h;
+    }
 }
 
 static void drawCardReader(const ViewState &v) {
@@ -1661,9 +1991,17 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_SPECTRUM) {
         if (playing) rocker[nr++] = {HINT_UPDOWN, "Up or down: speed"};
-        else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram" : "FFT"};
+        else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram / contrast" : "FFT / contrast"};
         rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+    } else if (v.screen == SCREEN_LIBRARY) {
+        rocker[nr++] = {HINT_UPDOWN, "Select"};
+        rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Read"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+    } else if (v.screen == SCREEN_READER) {
+        rocker[nr++] = {HINT_UPDOWN, "Page"};
+        rocker[nr++] = {HINT_CLICK, "Next page"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: library"};
     } else if (v.screen == SCREEN_SCHEDULE) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "Back"};
@@ -1677,7 +2015,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Stop"}; // the hold hint is back once stopped (its row would overflow)
     } else if (v.selected < 0) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
-        rocker[nr++] = {HINT_CLICK, v.screen == SCREEN_DAY ? "Back" : "Open calendar"};
+        rocker[nr++] = {HINT_CLICK, v.screen == SCREEN_DAY ? "Back" : v.selected == ROW_LIBRARY ? "Open library" : "Open calendar"};
     } else if (v.screen == SCREEN_LIST && v.selected == ROW_NEXT_SCHEDULED && v.scheduleCount > 0) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, "All scheduled"};
@@ -1747,6 +2085,8 @@ static void render(const ViewState &v) {
         case SCREEN_CARD_READER: drawCardReader(v); break;
         case SCREEN_SCHEDULE: drawScheduleScreen(v); break;
         case SCREEN_SPECTRUM: drawSpectrum(v); break;
+        case SCREEN_LIBRARY: drawLibrary(v); break;
+        case SCREEN_READER: drawReader(v); break;
         }
         switch (v.overlay) {
         case OVERLAY_MENU: drawMenu(v); break;
@@ -1815,6 +2155,12 @@ static void displayTask(void *) {
             pushed = false; // leave the sleeping panel alone
         } else if (v.audio == AUDIO_RECORDING && shown.audio == AUDIO_RECORDING) {
             pushed = false; // keep the panel still while recording; see drawRecordingView
+        } else if (memcmp(&v, &shown, sizeof(v)) != 0 && v.screen == SCREEN_READER && v.readerPage != shown.readerPage &&
+                   partials >= READER_FULL_REFRESH_EVERY) {
+            render(v); // text ghosts; a full refresh every few pages keeps it crisp
+            pushFull();
+            shown = v;
+            partials = 0;
         } else if (memcmp(&v, &shown, sizeof(v)) != 0) {
             uint32_t start = millis();
             render(v);
@@ -1976,13 +2322,19 @@ static void handleList(ButtonEvent event) {
     int first = firstMomentRow(scheduled);
     switch (event) {
     case BTN_UP:
-        if (selected > (momentCount() > 0 ? ROW_CALENDAR : 0)) selected = selected - 1;
+        // Up from the top row reaches the header buttons that are shown
+        if (selected == 0 && momentCount() == 0 && libraryCount() > 0) selected = ROW_LIBRARY;
+        else if (selected == ROW_CALENDAR && libraryCount() > 0) selected = ROW_LIBRARY;
+        else if (selected == 0 && momentCount() > 0) selected = ROW_CALENDAR;
+        else if (selected > 0) selected = selected - 1;
         break;
     case BTN_DOWN:
-        if (selected < first + momentCount() - 1) selected = selected + 1;
+        if (selected == ROW_LIBRARY) selected = momentCount() > 0 ? ROW_CALENDAR : 0;
+        else if (selected < first + momentCount() - 1) selected = selected + 1;
         break;
     case BTN_CLICK:
-        if (selected == ROW_CALENDAR) openCalendar();
+        if (selected == ROW_LIBRARY) showScreen(SCREEN_LIBRARY, libraryCount() > 0 ? 0 : ROW_BACK);
+        else if (selected == ROW_CALENDAR) openCalendar();
         else if (selected == 0) audioStartRecording();
         else if (selected < first) openSchedule(SCREEN_LIST);
         else togglePlay(selected - first);
@@ -2066,6 +2418,57 @@ static void handleSchedule(ButtonEvent event) {
         break;
     default:
         break;
+    }
+}
+
+static void openReader(int index) {
+    Document doc;
+    if (!libraryGet(index, doc) || !readerOpen(index)) return;
+    readerDocument = doc;
+    readerPage = constrain(libraryLastPage(doc.fileName), 0, (int)pageTotal - 1);
+    showScreen(SCREEN_READER, 0);
+}
+
+static void handleLibrary(ButtonEvent event) {
+    switch (event) {
+    case BTN_UP:
+        if (selected > ROW_BACK) selected = selected - 1;
+        break;
+    case BTN_DOWN:
+        if (selected < libraryCount() - 1) selected = selected + 1;
+        break;
+    case BTN_CLICK:
+        if (selected == ROW_BACK) showScreen(SCREEN_LIST, 0);
+        else openReader(selected);
+        break;
+    case BTN_LONG_CLICK:
+        showScreen(SCREEN_LIST, 0);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handleReader(ButtonEvent event) {
+    int page = readerPage;
+    switch (event) {
+    case BTN_UP:
+        if (page > 0) page--;
+        break;
+    case BTN_DOWN:
+    case BTN_CLICK:
+        if ((uint32_t)page + 1 < pageTotal) page++;
+        break;
+    case BTN_LONG_CLICK:
+        librarySetLastPage(readerDocument.fileName, readerPage);
+        showScreen(SCREEN_LIBRARY, max(0, libraryFind(readerDocument.fileName)));
+        return;
+    default:
+        return;
+    }
+    if (page != readerPage) {
+        readerPage = page;
+        librarySetLastPage(readerDocument.fileName, page);
     }
 }
 
@@ -2179,9 +2582,13 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_CALENDAR: handleCalendar(event); break;
     case SCREEN_SETTINGS: handleSettings(event); break;
     case SCREEN_SCHEDULE: handleSchedule(event); break;
+    case SCREEN_LIBRARY: handleLibrary(event); break;
+    case SCREEN_READER: handleReader(event); break;
     case SCREEN_SPECTRUM:
-        if (event == BTN_UP || event == BTN_DOWN) {
+        if (event == BTN_UP) {
             spectrumView = spectrumView == VIEW_FFT ? VIEW_SPECTROGRAM : VIEW_FFT;
+        } else if (event == BTN_DOWN) {
+            spectrumContrast = (spectrumContrast + 1) % CONTRAST_LEVELS;
         } else if (event == BTN_CLICK) {
             int index = momentIndexByNumber(spectrumMoment);
             if (index >= 0) togglePlay(index);
@@ -2211,6 +2618,7 @@ void uiTick() {
     lastMomentCount = count;
     if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
     if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty
+    if (screen == SCREEN_LIBRARY && selected >= libraryCount()) selected = libraryCount() - 1;   // after an upload or delete on the web
     static uint32_t spectrumCheckedVersion = UINT32_MAX;
     if (screen == SCREEN_SPECTRUM && momentListVersion() != spectrumCheckedVersion) {
         spectrumCheckedVersion = momentListVersion();
