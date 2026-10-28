@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-// The web page, over Wi-Fi: the moments (download, delete), scheduled
+// The web interface, over Wi-Fi: the moments (download, delete), scheduled
 // recordings, the categories, and setting the clock from the browser's time.
 // Only runs when started from Settings. It joins the network in
 // wifi_config.h, or opens its own hotspot "zvukopis" when asked to or when that

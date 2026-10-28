@@ -17,8 +17,13 @@
 // RIFF + fmt + bext + zvkp + data chunk headers; the samples follow
 static const size_t WAV_HEADER_BYTES = 12 + (8 + 16) + (8 + 602) + (8 + 100) + 8;
 
-bool storageInit(); // mounts the card; false when there is none
+bool storageInit(); // mounts the card; false when there is none or it can't be read
 bool storageAvailable();
+
+// A card that answers but can't be mounted is most likely exFAT (fresh cards
+// over 32 GB): this firmware reads FAT only, so it has to be formatted first
+enum CardState { SD_ABSENT, SD_UNREADABLE, SD_MOUNTED };
+CardState storageCardState();
 
 // Appends the moments found on the card to `out` (up to `max`), in any order.
 // Their samples stay on the card: samples is nullptr and dataOffset is set.

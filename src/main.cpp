@@ -48,7 +48,7 @@ static bool onUsbPower() {
     return usb;
 }
 
-// --- Scheduled recordings (set up on the web page) ---
+// --- Scheduled recordings (set up on the web interface) ---
 
 static const uint32_t SCHEDULE_LEAD_MS = 300; // wake this early, so recording starts on the second
 static int64_t scheduledStart = 0; // start of the entry being recorded, 0 if none

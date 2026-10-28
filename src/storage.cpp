@@ -21,6 +21,7 @@ static const char *MOMENT_DIR = "/moments";
 static const uint32_t MOMENT_CHUNK_VERSION = 2;
 
 static bool mounted = false;
+static CardState cardState = SD_ABSENT;
 static uint64_t freeBytes = 0, totalBytes = 0;
 
 // "zvkp" chunk payload: what the list needs, so it can be built from headers alone
@@ -92,9 +93,19 @@ bool storageInit() {
     SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN);
     mounted = SD_MMC.begin(MOUNT_POINT, false);
     if (!mounted) {
-        Serial.println("No SD card, moments are kept in memory only");
+        sdmmc_card_t *card = storageOpenRawCard();
+        if (card) {
+            cardState = SD_UNREADABLE;
+            Serial.printf("SD card found (%llu MB) but its file system can't be read (exFAT?): format it in Settings\n",
+                          (uint64_t)card->csd.capacity * card->csd.sector_size >> 20);
+            sdmmc_host_deinit();
+        } else {
+            cardState = SD_ABSENT;
+            Serial.println("No SD card, moments are kept in memory only");
+        }
         return false;
     }
+    cardState = SD_MOUNTED;
     if (!SD_MMC.exists(MOMENT_DIR)) SD_MMC.mkdir(MOMENT_DIR);
     updateSpace();
     Serial.printf("SD card mounted: %llu MB, %llu MB free\n", SD_MMC.cardSize() >> 20, freeBytes >> 20);
@@ -102,6 +113,7 @@ bool storageInit() {
 }
 
 bool storageAvailable() { return mounted; }
+CardState storageCardState() { return cardState; }
 
 uint64_t storageFreeBytes() { return mounted ? freeBytes : 0; }
 uint64_t storageTotalBytes() { return mounted ? totalBytes : 0; }
@@ -302,6 +314,7 @@ sdmmc_card_t *storageOpenRawCard() {
     if (mounted) {
         SD_MMC.end();
         mounted = false;
+        cardState = SD_ABSENT;
     }
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;

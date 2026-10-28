@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-// The Wi-Fi networks zvukopis knows: up to four saved on the web page (kept in
+// The Wi-Fi networks zvukopis knows: up to four saved on the web interface (kept in
 // NVS), plus the one in wifi_config.h if that file exists. And the password of
 // its own hotspot, made up once per device unless wifi_config.h sets one.
 
@@ -14,7 +14,7 @@ struct WifiNetwork {
 };
 
 void wifiInit();
-int wifiNetworkCount(); // saved on the web page
+int wifiNetworkCount(); // saved on the web interface
 bool wifiNetworkGet(int index, WifiNetwork &out);
 bool wifiNetworkSave(const WifiNetwork &network); // replaces one with the same name; false when full
 void wifiNetworkForget(int index);

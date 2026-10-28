@@ -73,7 +73,7 @@ enum Overlay {
 static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 
-enum SettingsRow { SET_SYNC, SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_CARD_READER, SET_FORMAT, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
@@ -94,7 +94,7 @@ static volatile int overlay = OVERLAY_NONE;
 static volatile int overlayChoice = 0;
 static uint32_t overlaySince = 0;
 static int menuMoment = 0; // number of the moment the menu is for
-static int transferRow = SET_WEB; // settings row the web page was started from
+static int transferRow = SET_WEB; // settings row the web interface was started from
 static int64_t unscheduleStart = 0;     // the scheduled recording the remove dialog is for
 static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen goes
 static Screen menuFrom = SCREEN_LIST;     // where closing the menu (Settings) returns to
@@ -221,6 +221,7 @@ struct ViewState {
     int battery;
     int usb;
     int sdCard;
+    int cardUnreadable; // a card is in, but its file system can't be read
     int clockMinute; // -1 while the clock isn't set; changes once a minute
     int clockSync;   // ClockSync, NONE once a result has been up for RESULT_MS
     int formatStatus; // 0, 1 done, -1 failed (for RESULT_MS), 2 formatting
@@ -229,7 +230,7 @@ struct ViewState {
     int cardEjected;
     int gainSetting;
     int gainNow;
-    uint32_t configVersion; // categories or schedule edited on the web page
+    uint32_t configVersion; // categories or schedule edited on the web interface
     int scheduleCount;
     int spectrumMoment;
     int spectrumReady;
@@ -268,6 +269,7 @@ static ViewState currentView() {
     v.battery = battery;
     v.usb = usb;
     v.sdCard = audioUsingSdCard();
+    v.cardUnreadable = storageCardState() == SD_UNREADABLE;
     v.clockMinute = clockValid() ? (int)(time(nullptr) / 60) : -1;
     uint32_t since;
     ClockSync sync = clockSyncState(since);
@@ -972,7 +974,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         case CLOCK_SYNC_FAILED: snprintf(detail, len, "No answer from the time server"); break;
         default:
             if (clockSyncAvailable()) snprintf(detail, len, "Time from the internet, over Wi-Fi");
-            else snprintf(detail, len, "Add a Wi-Fi network on the web page first");
+            else snprintf(detail, len, "Add a Wi-Fi network on the web interface first");
             enabled = clockSyncAvailable();
             break;
         }
@@ -990,30 +992,32 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
             int n = scheduleCount();
             snprintf(detail, len, "Next %s%s", when, n > 1 ? "  (+ more)" : "");
         } else {
-            snprintf(detail, len, "None; set them up on the web page");
+            snprintf(detail, len, "None; set them up on the web interface");
         }
         break;
     case SET_WEB:
-        title = "Web page";
+        title = "Web interface";
         snprintf(detail, len, "%s", wifiKnowsAny() ? "Moments, schedule, settings, on your Wi-Fi"
                                                   : "Set up Wi-Fi: scan the code it shows");
         break;
     case SET_HOTSPOT:
-        title = "Web page on own hotspot";
+        title = "Web interface on own hotspot";
         snprintf(detail, len, "zvukopis makes its own Wi-Fi network");
         break;
     case SET_CARD_READER:
         title = "USB card reader";
-        enabled = v.sdCard && v.usb;
-        snprintf(detail, len, !v.sdCard ? "No SD card" : !v.usb ? "Connect USB to a computer first"
-                                                                 : "Open the SD card on the computer");
+        enabled = (v.sdCard || v.cardUnreadable) && v.usb;
+        snprintf(detail, len, !(v.sdCard || v.cardUnreadable) ? "No SD card"
+                              : !v.usb                        ? "Connect USB to a computer first"
+                                                              : "Open the SD card on the computer");
         break;
     case SET_FORMAT:
         title = "Format SD card";
-        enabled = v.sdCard && v.formatStatus != 2;
+        enabled = (v.sdCard || v.cardUnreadable) && v.formatStatus != 2;
         if (v.formatStatus == 2) snprintf(detail, len, "Formatting...");
         else if (v.formatStatus == 1) snprintf(detail, len, "Formatted");
         else if (v.formatStatus == -1) snprintf(detail, len, "Formatting failed");
+        else if (v.cardUnreadable) snprintf(detail, len, "The card can't be read: format it to use it");
         else if (!v.sdCard) snprintf(detail, len, "No SD card");
         else snprintf(detail, len, "Erases everything on the card");
         break;
@@ -1051,7 +1055,8 @@ static void drawSettings(const ViewState &v) {
         snprintf(buf, sizeof(buf), "%s card, %s free", total, free);
         drawText(MARGIN + 30, y, &Text22, buf, INK);
     } else {
-        drawText(MARGIN, y, &Text17, "No SD card: moments stay in memory, lost on restart", INK);
+        drawText(MARGIN, y, &Text17, v.cardUnreadable ? "SD card found, but it can't be read (exFAT?): format it"
+                                                   : "No SD card: moments stay in memory, lost on restart", INK);
     }
 }
 
@@ -1085,7 +1090,7 @@ static void drawQr(const char *text, int x, int y, int size) {
 // opens by itself. On the usual network: a QR code with the page's address.
 static void drawTransfer(const ViewState &v) {
     TransferInfo info = transferInfo();
-    drawSubHeader(v, "Web page", info.state == TRANSFER_READY && info.hotspot ? "zvukopis's own Wi-Fi is on" : "Wi-Fi is on", false);
+    drawSubHeader(v, "Web interface", info.state == TRANSFER_READY && info.hotspot ? "zvukopis's own Wi-Fi is on" : "Wi-Fi is on", false);
     int cx = SW / 2, y = 250;
     if (info.state != TRANSFER_READY) {
         iconWifi(cx, y);
@@ -1129,8 +1134,8 @@ static void drawScheduleScreen(const ViewState &v) {
     int cx = SW / 2;
     if (v.scheduleCount == 0) {
         drawTextCentered(cx, 300, &Bold22, "Nothing scheduled", INK);
-        drawTextCentered(cx, 338, &Text22, "Add recordings on the web page:", INK);
-        drawTextCentered(cx, 366, &Text22, "Settings, Web page", INK);
+        drawTextCentered(cx, 338, &Text22, "Add recordings on the web interface:", INK);
+        drawTextCentered(cx, 366, &Text22, "Settings, Web interface", INK);
         return;
     }
     const int rowH = 74, visible = (FOOTER_LINE_Y - LIST_TOP - 8) / rowH;
@@ -1444,7 +1449,8 @@ static void drawFormatDialog(const ViewState &v) {
     for (int i = 0; momentGet(i, moment); i++) {
         if (!moment.samples) onCard++;
     }
-    snprintf(detail, sizeof(detail), "Erases %d moment%s and all else", onCard, onCard == 1 ? "" : "s");
+    if (storageCardState() == SD_UNREADABLE) snprintf(detail, sizeof(detail), "Erases the card so zvukopis can use it");
+    else snprintf(detail, sizeof(detail), "Erases %d moment%s and all else", onCard, onCard == 1 ? "" : "s");
     drawConfirm(v, [] { iconSdCard(SW / 2 + 24, CONFIRM_Y + 62, 3); }, "Format SD card?", detail, "Format");
 }
 
@@ -1626,13 +1632,13 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, press};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: cancel"};
     } else if (v.screen == SCREEN_TRANSFER) {
-        rocker[nr++] = {HINT_CLICK, "Stop the web page"};
+        rocker[nr++] = {HINT_CLICK, "Stop the web interface"};
         menuKeys = false;
     } else if (v.screen == SCREEN_CARD_READER) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Sync now", "Change", "Open", "Start", "Start", "Start", "Format..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Open", "Start", "Start", "Sync now", "Start", "Format..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2059,12 +2065,12 @@ static void handleSettings(ButtonEvent event) {
             showScreen(SCREEN_TRANSFER, 0);
             break;
         case SET_CARD_READER:
-            if (!audioUsingSdCard() || !usbPowered()) break;
+            if (storageCardState() == SD_ABSENT || !usbPowered()) break;
             audioSuspend(); // the audio task lets go of the card
             if (cardReaderStart()) showScreen(SCREEN_CARD_READER, 0);
             break;
         case SET_FORMAT:
-            if (audioUsingSdCard() && audioState() != AUDIO_FORMATTING) openOverlay(OVERLAY_CONFIRM_FORMAT, 0);
+            if (storageCardState() != SD_ABSENT && audioState() != AUDIO_FORMATTING) openOverlay(OVERLAY_CONFIRM_FORMAT, 0);
             break;
         }
         break;

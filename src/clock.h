@@ -5,7 +5,7 @@
 // Wall clock. The board's PCF85063 RTC (I2C 0x51, same bus as the PMIC) keeps
 // time in UTC; NTP over Wi-Fi corrects it when asked (Settings), and by itself
 // only when the RTC has no valid time at startup. Local time follows a POSIX
-// TZ rule set on the web page (default: TIME_ZONE in wifi_config.h, or CET).
+// TZ rule set on the web interface (default: TIME_ZONE in wifi_config.h, or CET).
 // Wi-Fi is only switched on for a sync, and never while recording, since the
 // radio could add interference to the audio. Credentials and time zone come
 // from src/wifi_config.h (see wifi_config.example.h).

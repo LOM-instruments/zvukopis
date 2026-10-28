@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <time.h>
 
-// Settings made on the web page, kept in flash (NVS): the five categories a
+// Settings made on the web interface, kept in flash (NVS): the five categories a
 // moment can be tagged with, and scheduled recordings. Safe to use from any task.
 
 // --- Categories ---
@@ -25,7 +25,7 @@ enum CategoryIcon : uint8_t {
     ICON_COUNT,
 };
 
-extern const char *const ICON_NAMES[ICON_COUNT]; // for the web page
+extern const char *const ICON_NAMES[ICON_COUNT]; // for the web interface
 
 struct Category {
     char name[CATEGORY_NAME_LEN];

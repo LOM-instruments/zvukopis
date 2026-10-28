@@ -161,7 +161,11 @@ static const char PAGE_HEAD[] PROGMEM = R"(<!doctype html><html><head><meta char
 <style>
 body{font-family:"Atkinson Hyperlegible Next","Atkinson Hyperlegible",-apple-system,system-ui,sans-serif;
 max-width:40rem;margin:0 auto;padding:1rem;color:#111;background:#fff;line-height:1.4}
-h1{margin:.2rem 0}h2{margin:2rem 0 .4rem;font-size:1.15rem}.sub,small,.note{color:#555}.note{font-size:.9rem}
+h1{margin:.2rem 0}h2{margin:1.6rem 0 .4rem;font-size:1.15rem}.sub,small,.note{color:#555}.note{font-size:.9rem}
+.tabs{display:flex;gap:.3rem;margin:1rem 0 0;border-bottom:1px solid #ddd}
+.tabs button{border:none;border-bottom:3px solid transparent;border-radius:0;padding:.5rem 1rem;background:none;color:inherit;font-weight:600;opacity:.55}
+.tabs button.on{border-bottom-color:currentColor;opacity:1}.tab{display:none}.tab.on{display:block}
+#recstatus{font-size:1.2rem}
 table{width:100%;border-collapse:collapse}td{padding:.55rem .3rem;border-top:1px solid #ddd;vertical-align:middle}
 td.r{text-align:right;white-space:nowrap}a,button,input,select{font:inherit}
 .icon{vertical-align:-4px}.pick{display:inline-flex;gap:2px;flex-wrap:wrap}
@@ -172,7 +176,7 @@ input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;back
 .tag{font-size:.85rem;border:1px solid #888;border-radius:1rem;padding:0 .45rem;white-space:nowrap}
 .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
 input[type=number]{width:4.5rem}
-@media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}
+@media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}.tabs{border-color:#333}
 .pick input:checked+svg{color:#111;background:#eee;box-shadow:0 0 0 4px #eee}
 button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}a{color:#9cf}}
 </style></head><body><h1>zvukopis</h1>
@@ -183,7 +187,12 @@ static const char PAGE_TAIL[] PROGMEM = R"(
 const $=id=>document.getElementById(id);
 async function post(u,body){const r=await fetch(u,{method:'POST',body:body});if(!r.ok)alert(await r.text());location.reload()}
 function setClock(){post('/time?ms='+Date.now())}
+function showTab(t){for(const n of ['live','settings']){$(n).classList.toggle('on',n===t);$('tab-'+n).classList.toggle('on',n===t)}
+ if(location.hash!=='#'+t)history.replaceState(null,'','#'+t)}
+showTab(location.hash==='#settings'||location.hash==='#live'?location.hash.slice(1):firstTab);
 function del(n){if(confirm('Delete Moment '+n+'? This can\'t be undone.'))post('/delete?n='+n)}
+function play(n){const p=$('player');p.src='/moment?n='+n+'&play=1';p.play()}
+async function setGain(){const r=await fetch('/gain?db='+$('gain').value,{method:'POST'});if(!r.ok)alert(await r.text());poll()}
 function addSchedule(){
  const d=$('date').value,t=$('time').value.trim();
  if(!d){alert('Choose a date');return}
@@ -225,11 +234,14 @@ async function poll(){
   $('recstatus').textContent=st.state=='recording'?'Recording '+t(st.seconds)+' of up to '+t(st.limit)
    :st.state=='saving'?'Saving...':st.state=='playing'?'Playing on zvukopis':'Ready to record';
   $('recstart').disabled=st.state=='recording'||st.state=='saving';$('recstop').disabled=st.state!='recording';
+  $('gainnow').textContent=st.gainSetting<0?'now '+st.gain+' dB':'';
   if(moments!==null&&st.moments!=moments)location.reload();moments=st.moments;
  }catch(e){}}
 setInterval(poll,1000);poll();
 if($('ssid'))scan();
 </script></body></html>)";
+
+static const int GAIN_STEPS[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 
 static void sendRecord(char *buf, size_t len) {
     int longest = (int)audioLongestRecording();
@@ -241,11 +253,20 @@ static void sendRecord(char *buf, size_t len) {
                        "Wi-Fi stays on meanwhile, which may add a little noise.</p>",
              longest / 60, longest % 60);
     server.sendContent(buf);
+
+    int setting = audioMicGainSetting();
+    server.sendContent("<div class=row>Mic gain <select id=gain onchange=setGain()>");
+    for (int db : GAIN_STEPS) {
+        if (db == GAIN_AUTO) snprintf(buf, len, "<option value=%d%s>Auto</option>", db, setting == db ? " selected" : "");
+        else snprintf(buf, len, "<option value=%d%s>%d dB</option>", db, setting == db ? " selected" : "", db);
+        server.sendContent(buf);
+    }
+    server.sendContent("</select> <span id=gainnow class=sub></span></div>");
 }
 
 static void sendMoments(char *buf, size_t len) {
     int count = momentCount();
-    server.sendContent("<h2>Moments</h2><table>");
+    server.sendContent("<h2>Moments</h2><audio id=player controls style=\"width:100%;margin:.3rem 0\"></audio><table>");
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
@@ -265,9 +286,10 @@ static void sendMoments(char *buf, size_t len) {
         }
         snprintf(buf, len,
                  "<tr><td><b>Moment %d</b>%s<br><small>%s</small></td><td class=r>%d:%02d</td>"
+                 "<td class=r><button onclick=play(%d)>Play</button></td>"
                  "<td class=r><a href=\"/moment?n=%d\" download=\"%s\">Download</a></td>"
                  "<td class=r><button onclick=del(%d)>Delete</button></td></tr>",
-                 moment.number, tag, when, seconds / 60, seconds % 60, moment.number, name, moment.number);
+                 moment.number, tag, when, seconds / 60, seconds % 60, moment.number, moment.number, name, moment.number);
         server.sendContent(buf);
     }
     if (count == 0) server.sendContent("<tr><td>No moments yet</td></tr>");
@@ -337,7 +359,8 @@ static void sendCategories(char *buf, size_t len) {
 static void sendTimeZone(char *buf, size_t len) {
     const char *current = clockTimeZone();
     bool known = false;
-    server.sendContent("<h2>Time zone</h2><div class=row><select id=tz onchange=zoneChanged()>");
+    server.sendContent("<h2>Time</h2><div class=row><button onclick=setClock()>Set the device clock to this device's time</button></div>"
+                       "<div class=row><select id=tz onchange=zoneChanged()>");
     for (const Zone &z : ZONES) {
         bool chosen = strcmp(z.posix, current) == 0 && !known;
         known |= chosen;
@@ -377,7 +400,7 @@ static void sendWifi(char *buf, size_t len) {
                        "<button onclick=scan()>Look again</button></div>"
                        "<div class=row><input id=pass type=password placeholder=Password autocomplete=off>"
                        "<button onclick=saveWifi()>Save network</button></div>"
-                       "<p class=note>zvukopis joins the strongest saved network in reach when you open the web page "
+                       "<p class=note>zvukopis joins the strongest saved network in reach when you open the web interface "
                        "or sync the clock (up to %d networks). Without one in reach it opens its own hotspot, "
                        "<b>%s</b>, with the password shown on its screen.</p>",
              MAX_NETWORKS, wifiHotspotName());
@@ -401,18 +424,24 @@ static void handleIndex() {
     int battery = batteryPercent();
     char batteryText[24] = "";
     if (battery >= 0) snprintf(batteryText, sizeof(batteryText), " &middot; battery %d%%", battery);
-    snprintf(buf, sizeof(buf), "<div class=sub>Device clock %s%s</div>"
-                               "<div class=row><button onclick=setClock()>Set the device clock to this device's time</button></div>",
-             clock, batteryText);
-    server.sendContent(buf);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
-    if (firstTime) sendWifi(buf, sizeof(buf)); // what someone setting it up came for
+    snprintf(buf, sizeof(buf), "<div class=sub>Device clock %s%s</div>"
+                               "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Live</button>"
+                               "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
+                               "<script>const firstTab='%s'</script><div id=live class=tab>",
+             clock, batteryText, firstTime ? "settings" : "live");
+    server.sendContent(buf);
+    // Live: recording and the moments
     sendRecord(buf, sizeof(buf));
     sendMoments(buf, sizeof(buf));
+    server.sendContent("</div><div id=settings class=tab>");
+    // Settings, most used first; Wi-Fi first only for someone setting the device up
+    if (firstTime) sendWifi(buf, sizeof(buf));
     sendSchedule(buf, sizeof(buf));
     sendCategories(buf, sizeof(buf));
     sendTimeZone(buf, sizeof(buf));
     if (!firstTime) sendWifi(buf, sizeof(buf));
+    server.sendContent("</div>");
     server.sendContent_P(PAGE_TAIL);
     server.sendContent("");
 }
@@ -499,6 +528,19 @@ static void handleRecordStart() {
     server.send(200, "text/plain", "ok");
 }
 
+static void handleGain() {
+    noteRequest();
+    int db = server.arg("db").toInt();
+    bool known = false;
+    for (int step : GAIN_STEPS) known |= step == db;
+    if (!known) {
+        server.send(400, "text/plain", "Bad gain");
+        return;
+    }
+    audioSetMicGain(db);
+    server.send(200, "text/plain", "ok");
+}
+
 static void handleRecordStop() {
     noteRequest();
     if (audioState() == AUDIO_RECORDING) audioStopRecording();
@@ -515,8 +557,8 @@ static void handleStatus() {
     default: break;
     }
     char json[128];
-    snprintf(json, sizeof(json), "{\"state\":\"%s\",\"seconds\":%.1f,\"limit\":%.0f,\"moments\":%d}", state,
-             audioRecordingSeconds(), audioRecordingLimitSeconds(), momentCount());
+    snprintf(json, sizeof(json), "{\"state\":\"%s\",\"seconds\":%.1f,\"limit\":%.0f,\"moments\":%d,\"gain\":%d,\"gainSetting\":%d}",
+             state, audioRecordingSeconds(), audioRecordingLimitSeconds(), momentCount(), audioMicGain(), audioMicGainSetting());
     server.send(200, "application/json", json);
 }
 
@@ -593,6 +635,7 @@ static void addRoutes() {
     server.on("/timezone", HTTP_POST, handleTimeZone);
     server.on("/record/start", HTTP_POST, handleRecordStart);
     server.on("/record/stop", HTTP_POST, handleRecordStop);
+    server.on("/gain", HTTP_POST, handleGain);
     server.on("/status", HTTP_GET, handleStatus);
     server.on("/wifi/scan", HTTP_GET, handleWifiScan);
     server.on("/wifi/save", HTTP_POST, handleWifiSave);
@@ -617,7 +660,7 @@ static void handleMoment() {
     }
     char name[40], disposition[64];
     downloadName(moment, name, sizeof(name));
-    snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", name);
+    snprintf(disposition, sizeof(disposition), "%s; filename=\"%s\"", server.hasArg("play") ? "inline" : "attachment", name);
     server.sendHeader("Content-Disposition", disposition);
 
     if (!moment.samples) {
