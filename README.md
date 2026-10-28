@@ -81,6 +81,11 @@ For development, `src/wifi_config.example.h` can be copied to
   USB for testing, `make_release.py` prepares the web flasher.
 - `docs/` the web flasher, served by GitHub Pages.
 
+## Licence
+
+MIT, see `LICENSE`. The third-party parts under `lib/` keep their own
+licences, listed below.
+
 ## Credits
 
 - Fonts: [Atkinson Hyperlegible Next and Mono](https://www.brailleinstitute.org/freefont/)
