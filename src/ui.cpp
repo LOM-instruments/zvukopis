@@ -1701,7 +1701,8 @@ static void drawFooter(const ViewState &v) {
         const char *what = rocker[i].label;
         if (strncmp(what, "Hold: ", 6) == 0) what += 6;
         else if (strncmp(what, "Up or down: ", 12) == 0) what += 12;
-        snprintf(labels[i], sizeof(labels[i]), "%s%c%s", prefix, tolower(what[0]), what + 1);
+        bool acronym = isupper((uint8_t)what[0]) && isupper((uint8_t)what[1]); // "FFT" stays as it is
+        snprintf(labels[i], sizeof(labels[i]), "%s%c%s", prefix, acronym ? what[0] : tolower((uint8_t)what[0]), what + 1);
         rocker[i].label = labels[i];
     }
     canvas->drawFastHLine(MARGIN, FOOTER_LINE_Y, SW - 2 * MARGIN, INK);
