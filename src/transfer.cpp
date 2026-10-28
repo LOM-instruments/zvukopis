@@ -165,7 +165,12 @@ h1{margin:.2rem 0}h2{margin:1.6rem 0 .4rem;font-size:1.15rem}.sub,small,.note{co
 .tabs{display:flex;gap:.3rem;margin:1rem 0 0;border-bottom:1px solid #ddd}
 .tabs button{border:none;border-bottom:3px solid transparent;border-radius:0;padding:.5rem 1rem;background:none;color:inherit;font-weight:600;opacity:.55}
 .tabs button.on{border-bottom-color:currentColor;opacity:1}.tab{display:none}.tab.on{display:block}
-#recstatus{font-size:1.2rem}
+.big{width:100%;padding:.85rem;font-size:1.25rem;font-weight:600;border-radius:.7rem;background:#111;color:#fff;border:1px solid #111;
+display:flex;justify-content:center;align-items:center;gap:.6rem}.big:disabled{opacity:.5;cursor:default}
+.big .dot{width:.9rem;height:.9rem;border-radius:50%;background:#e4312b;display:inline-block}.big.rec .dot{border-radius:2px;background:#fff}
+.mono{font-variant-numeric:tabular-nums}.opts{display:flex;gap:1.2rem;flex-wrap:wrap;margin:.7rem 0 .2rem}.opts label{display:inline-flex;gap:.4rem;align-items:center}
+.ic{border:1px solid #999;background:none;color:inherit;border-radius:.45rem;width:2.2rem;height:2.2rem;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
+.ic svg{width:1rem;height:1rem;fill:currentColor}td.c{width:2.4rem;padding-left:0;padding-right:.25rem}
 table{width:100%;border-collapse:collapse}td{padding:.55rem .3rem;border-top:1px solid #ddd;vertical-align:middle}
 td.r{text-align:right;white-space:nowrap}a,button,input,select{font:inherit}
 .icon{vertical-align:-4px}.pick{display:inline-flex;gap:2px;flex-wrap:wrap}
@@ -178,6 +183,7 @@ input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;back
 input[type=number]{width:4.5rem}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}.tabs{border-color:#333}
 .pick input:checked+svg{color:#111;background:#eee;box-shadow:0 0 0 4px #eee}
+.big{background:#eee;color:#111;border-color:#eee}.big.rec .dot{background:#111}
 button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}a{color:#9cf}}
 </style></head><body><h1>zvukopis</h1>
 )";
@@ -185,27 +191,35 @@ button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}
 static const char PAGE_TAIL[] PROGMEM = R"(
 <script>
 const $=id=>document.getElementById(id);
+const t=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+const PLAY='<svg viewBox="0 0 16 16"><path d="M3 1.5v13l11-6.5z"/></svg>',STOP='<svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/></svg>';
 async function post(u,body){const r=await fetch(u,{method:'POST',body:body});if(!r.ok)alert(await r.text());location.reload()}
 function setClock(){post('/time?ms='+Date.now())}
 function showTab(t){for(const n of ['live','settings']){$(n).classList.toggle('on',n===t);$('tab-'+n).classList.toggle('on',n===t)}
- if(location.hash!=='#'+t)history.replaceState(null,'','#'+t)}
-showTab(location.hash==='#settings'||location.hash==='#live'?location.hash.slice(1):firstTab);
+ const h=t==='live'?'#recording':'#settings';if(location.hash!==h)history.replaceState(null,'',h)}
+showTab(location.hash==='#settings'?'settings':location.hash==='#live'||location.hash==='#recording'?'live':firstTab);
 function del(n){if(confirm('Delete Moment '+n+'? This can\'t be undone.'))post('/delete?n='+n)}
-function play(n){const p=$('player');p.src='/moment?n='+n+'&play=1';p.play()}
+let playing=null;
+function stopped(){if(playing===null)return;$('pb-'+playing).innerHTML=PLAY;$('pb-'+playing).title='Play';
+ const d=$('dur-'+playing);d.textContent=d.dataset.len;playing=null}
+function togglePlay(n){const p=$('player');
+ if(playing===n){p.pause();p.currentTime=0;stopped();return}
+ if(playing!==null)stopped();
+ playing=n;p.src='/moment?n='+n+'&play=1';p.play();$('pb-'+n).innerHTML=STOP;$('pb-'+n).title='Stop';
+ p.ontimeupdate=()=>{if(playing===n)$('dur-'+n).textContent=t(p.currentTime)+' / '+t(p.duration||0)};
+ p.onended=stopped}
 async function setGain(){const r=await fetch('/gain?db='+$('gain').value,{method:'POST'});if(!r.ok)alert(await r.text());poll()}
 function addSchedule(){
- const d=$('date').value,t=$('time').value.trim();
+ const d=$('date').value,tm=$('time').value.trim();
  if(!d){alert('Choose a date');return}
- if(!/^([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(t)){alert('Write the time as 24-hour HH:MM or HH:MM:SS, for example 06:30');return}
- const s=(+$('min').value||0)*60+(+$('sec').value||0);
- if(s<1){alert('Choose how long to record');return}
- post('/schedule/add?date='+d+'&time='+t+'&seconds='+s+'&daily='+($('daily').checked?1:0))}
+ if(!/^([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(tm)){alert('Write the time as 24-hour HH:MM, for example 06:30');return}
+ post('/schedule/add?date='+d+'&time='+tm+'&seconds='+$('len').value+'&daily='+($('daily').checked?1:0))}
 function unschedule(s){post('/schedule/remove?start='+s)}
 function saveCategories(){
  const q=new URLSearchParams();
  for(let i=1;i<=5;i++){q.set('name'+i,$('name'+i).value);q.set('icon'+i,document.querySelector('input[name=icon'+i+']:checked').value)}
  post('/categories?'+q)}
-function zoneChanged(){$('customtz').style.display=$('tz').value==='custom'?'':'none'}
+function zoneChanged(){$('customtz').style.display=$('tz').value==='custom'?'':'none';$('savetz').disabled=false}
 function useBrowserZone(){
  const z=Intl.DateTimeFormat().resolvedOptions().timeZone;
  for(const o of $('tz').options)if((o.dataset.iana||'').split(' ').includes(z)){$('tz').value=o.value;zoneChanged();return}
@@ -223,50 +237,56 @@ function saveWifi(){const s=$('ssid').value||$('otherssid').value.trim();
  if(!s){alert('Choose or enter a network');return}
  post('/wifi/save',new URLSearchParams({ssid:s,password:$('pass').value}))}
 function forget(i,n){if(confirm('Forget '+n+'?'))post('/wifi/forget?i='+i)}
-async function record(start){
- const s=(+$('recmin').value||0)*60+(+$('recsec').value||0);
- const r=await fetch(start?'/record/start?seconds='+s:'/record/stop',{method:'POST'});
+let recState='idle',moments=null;
+async function toggleRecord(){
+ const r=await fetch(recState=='recording'?'/record/stop':'/record/start?seconds='+$('reclen').value,{method:'POST'});
  if(!r.ok)alert(await r.text());poll()}
-let moments=null;
 async function poll(){
  try{const st=await(await fetch('/status')).json();
-  const t=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
-  $('recstatus').textContent=st.state=='recording'?'Recording '+t(st.seconds)+' of up to '+t(st.limit)
-   :st.state=='saving'?'Saving...':st.state=='playing'?'Playing on zvukopis':'Ready to record';
-  $('recstart').disabled=st.state=='recording'||st.state=='saving';$('recstop').disabled=st.state!='recording';
-  $('gainnow').textContent=st.gainSetting<0?'now '+st.gain+' dB':'';
+  recState=st.state;const b=$('recbtn');b.disabled=st.state=='saving';b.classList.toggle('rec',st.state=='recording');
+  $('reclabel').textContent=st.state=='recording'?'Stop':st.state=='saving'?'Saving...':'Record';
+  $('rectime').textContent=st.state=='recording'?t(st.seconds)+(st.limit<86400?' / '+t(st.limit):''):'';
+  $('gainnow').textContent=st.gainSetting<0?'(now '+st.gain+' dB)':'';
   if(moments!==null&&st.moments!=moments)location.reload();moments=st.moments;
  }catch(e){}}
 setInterval(poll,1000);poll();
-if($('ssid'))scan();
+if($('ssid')&&firstTab==='settings')scan();else if($('ssid'))ssidChanged();
 </script></body></html>)";
 
 static const int GAIN_STEPS[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 
 static void sendRecord(char *buf, size_t len) {
+    // One button that records and stops, showing the time as it goes
+    server.sendContent("<h2>Record</h2><button id=recbtn class=big onclick=toggleRecord()>"
+                       "<span class=dot></span><span id=reclabel>Record</span><span id=rectime class=mono></span></button>"
+                       "<div class=opts><label>Stop after <select id=reclen><option value=0>when I say</option>");
     int longest = (int)audioLongestRecording();
-    snprintf(buf, len, "<h2>Record</h2><div class=row><b id=recstatus>&nbsp;</b></div>"
-                       "<div class=row><button id=recstart onclick=record(1)>Start recording</button>"
-                       "<button id=recstop onclick=record(0) disabled>Stop</button>"
-                       "<span>for <input type=number id=recmin min=0 value=0> min <input type=number id=recsec min=0 max=59 value=0> s"
-                       "</span></div><p class=note>Leave the length at 0 to record until you press Stop (up to %d:%02d). "
-                       "Wi-Fi stays on meanwhile, which may add a little noise.</p>",
-             longest / 60, longest % 60);
-    server.sendContent(buf);
-
+    const int lengths[] = {30, 60, 120, 300, 600, 1800, 3600};
+    for (int seconds : lengths) {
+        if (seconds > longest) break;
+        if (seconds < 60) snprintf(buf, len, "<option value=%d>%d s</option>", seconds, seconds);
+        else if (seconds < 3600) snprintf(buf, len, "<option value=%d>%d min</option>", seconds, seconds / 60);
+        else snprintf(buf, len, "<option value=%d>%d h</option>", seconds, seconds / 3600);
+        server.sendContent(buf);
+    }
     int setting = audioMicGainSetting();
-    server.sendContent("<div class=row>Mic gain <select id=gain onchange=setGain()>");
+    server.sendContent("</select></label><label>Mic gain <select id=gain onchange=setGain()>");
     for (int db : GAIN_STEPS) {
         if (db == GAIN_AUTO) snprintf(buf, len, "<option value=%d%s>Auto</option>", db, setting == db ? " selected" : "");
         else snprintf(buf, len, "<option value=%d%s>%d dB</option>", db, setting == db ? " selected" : "", db);
         server.sendContent(buf);
     }
-    server.sendContent("</select> <span id=gainnow class=sub></span></div>");
+    snprintf(buf, len, "</select><span id=gainnow class=sub></span></label></div>"
+                       "<p class=note>Up to %d:%02d at a time for now. Wi-Fi stays on while recording, which may add a little noise.</p>",
+             longest / 60, longest % 60);
+    server.sendContent(buf);
 }
 
 static void sendMoments(char *buf, size_t len) {
     int count = momentCount();
-    server.sendContent("<h2>Moments</h2><audio id=player controls style=\"width:100%;margin:.3rem 0\"></audio><table>");
+    if (count) snprintf(buf, len, "<h2>Moments (%d)</h2><audio id=player></audio><table>", count);
+    else snprintf(buf, len, "<h2>Moments</h2><audio id=player></audio><table>");
+    server.sendContent(buf);
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
@@ -285,64 +305,89 @@ static void sendMoments(char *buf, size_t len) {
             snprintf(tag, sizeof(tag), " <span class=tag>%s %s</span>", iconSvg(c.icon, 14).c_str(), escaped);
         }
         snprintf(buf, len,
-                 "<tr><td><b>Moment %d</b>%s<br><small>%s</small></td><td class=r>%d:%02d</td>"
-                 "<td class=r><button onclick=play(%d)>Play</button></td>"
-                 "<td class=r><a href=\"/moment?n=%d\" download=\"%s\">Download</a></td>"
-                 "<td class=r><button onclick=del(%d)>Delete</button></td></tr>",
-                 moment.number, tag, when, seconds / 60, seconds % 60, moment.number, moment.number, name, moment.number);
+                 "<tr><td class=c><button class=ic id=pb-%d title=Play onclick=togglePlay(%d)>"
+                 "<svg viewBox=\"0 0 16 16\"><path d=\"M3 1.5v13l11-6.5z\"/></svg></button></td>"
+                 "<td><b>Moment %d</b>%s<br><small>%s</small></td>"
+                 "<td class=\"r mono\" id=dur-%d data-len=\"%d:%02d\">%d:%02d</td>"
+                 "<td class=c><a class=ic href=\"/moment?n=%d\" download=\"%s\" title=Download>"
+                 "<svg viewBox=\"0 0 16 16\"><path d=\"M7 1h2v7.2l2.6-2.6 1.4 1.4L8 12 3 7l1.4-1.4L7 8.2zM2 12h12v2H2z\"/></svg></a></td>"
+                 "<td class=c><button class=ic title=Delete onclick=del(%d)>"
+                 "<svg viewBox=\"0 0 16 16\"><path d=\"M6 1h4l.5 1H14v2H2V2h3.5zM3 5h10l-.8 10H3.8z\"/></svg></button></td></tr>",
+                 moment.number, moment.number, moment.number, tag, when, moment.number, seconds / 60, seconds % 60,
+                 seconds / 60, seconds % 60, moment.number, name, moment.number);
         server.sendContent(buf);
     }
-    if (count == 0) server.sendContent("<tr><td>No moments yet</td></tr>");
+    if (count == 0) server.sendContent("<tr><td>No moments yet. Press Record to capture one.</td></tr>");
     server.sendContent("</table>");
 }
 
+static const char TRASH_SVG[] = "<svg viewBox=\"0 0 16 16\"><path d=\"M6 1h4l.5 1H14v2H2V2h3.5zM3 5h10l-.8 10H3.8z\"/></svg>";
+
 static void sendSchedule(char *buf, size_t len) {
-    server.sendContent("<h2>Scheduled recordings</h2>");
-    if (!clockValid()) server.sendContent("<p class=note>The device clock isn't set, so nothing will record on time. Set it above first.</p>");
+    int n = scheduleCount();
+    if (n) snprintf(buf, len, "<h2>Scheduled recordings (%d)</h2>", n);
+    else snprintf(buf, len, "<h2>Scheduled recordings</h2>");
+    server.sendContent(buf);
+    if (!clockValid()) server.sendContent("<p class=note>The device clock isn't set, so these can't run on time. Set it under Time first.</p>");
     server.sendContent("<table>");
     Schedule s;
     for (int i = 0; scheduleGet(i, s); i++) {
         time_t start = (time_t)s.start;
         tm local;
         localtime_r(&start, &local);
-        char when[40];
-        strftime(when, sizeof(when), s.daily ? "every day at %H:%M:%S<br><small>next %a %e %b</small>"
-                                              : "%a %e %b %Y, %H:%M:%S", &local);
-        snprintf(buf, len, "<tr><td>%s</td><td class=r>%lu:%02lu</td><td class=r><button onclick=unschedule(%lld)>Remove</button></td></tr>",
-                 when, (unsigned long)(s.seconds / 60), (unsigned long)(s.seconds % 60), (long long)s.start);
+        char when[40], length[16];
+        strftime(when, sizeof(when), "%a %e %b, %H:%M", &local);
+        if (s.seconds % 60 == 0) snprintf(length, sizeof(length), "%lu min", (unsigned long)(s.seconds / 60));
+        else snprintf(length, sizeof(length), "%lu:%02lu", (unsigned long)(s.seconds / 60), (unsigned long)(s.seconds % 60));
+        snprintf(buf, len, "<tr><td><b>%s</b>%s<br><small>%s%s</small></td>"
+                           "<td class=c><button class=ic title=Remove onclick=unschedule(%lld)>%s</button></td></tr>",
+                 s.daily ? "Every day" : when, s.daily ? "" : "", length, s.daily ? (strftime(when, sizeof(when), ", at %H:%M, next %a %e %b", &local), when) : "",
+                 (long long)s.start, TRASH_SVG);
         server.sendContent(buf);
     }
-    if (scheduleCount() == 0) server.sendContent("<tr><td>None yet</td></tr>");
-    int longest = (int)audioLongestRecording();
+    if (n == 0) server.sendContent("<tr><td>None yet. Add one below: zvukopis will wake up and record at that time, even from sleep.</td></tr>");
     // The form starts at the next whole minute, in zvukopis's local time
-    char today[12] = "", nextMinute[10] = "";
+    char today[12] = "", nextMinute[8] = "";
     if (clockValid()) {
         time_t t = time(nullptr) + 60;
         tm local;
         localtime_r(&t, &local);
         strftime(today, sizeof(today), "%Y-%m-%d", &local);
-        strftime(nextMinute, sizeof(nextMinute), "%H:%M:00", &local);
+        strftime(nextMinute, sizeof(nextMinute), "%H:%M", &local);
     }
-    snprintf(buf, len,
-             "</table><div class=row><input type=date id=date value=\"%s\">"
-             "<input id=time size=8 placeholder=HH:MM:SS value=\"%s\" inputmode=numeric> (24 h)</div>"
-             "<div class=row><input type=number id=min min=0 value=1> min <input type=number id=sec min=0 max=59 value=0> s"
-             "<label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
-             "<p class=note>Times are zvukopis's local time (see Time zone below). It wakes for them, also from "
-             "sleep (the screen stays as it is). A recording can last up to %d:%02d for now: it is held in memory "
-             "before being saved. Up to %d entries.</p>",
-             today, nextMinute, longest / 60, longest % 60, MAX_SCHEDULES);
+    snprintf(buf, len, "</table><div class=row><input type=date id=date value=\"%s\">"
+                       "<input id=time size=5 placeholder=HH:MM value=\"%s\" inputmode=numeric><span>for</span><select id=len>",
+             today, nextMinute);
+    server.sendContent(buf);
+    int longest = (int)audioLongestRecording();
+    const int lengths[] = {30, 60, 120, 300, 600, 1800, 3600};
+    bool any = false;
+    for (int seconds : lengths) {
+        if (seconds > longest) break;
+        if (seconds < 60) snprintf(buf, len, "<option value=%d>%d s</option>", seconds, seconds);
+        else if (seconds < 3600) snprintf(buf, len, "<option value=%d%s>%d min</option>", seconds, seconds == 60 ? " selected" : "", seconds / 60);
+        else snprintf(buf, len, "<option value=%d>%d h</option>", seconds, seconds / 3600);
+        server.sendContent(buf);
+        any = true;
+    }
+    if (!any) {
+        snprintf(buf, len, "<option value=%d>%d s</option>", max(1, longest), max(1, longest));
+        server.sendContent(buf);
+    }
+    snprintf(buf, len, "</select><label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
+                       "<p class=note>24-hour time, in zvukopis's own time zone. Up to %d:%02d per recording for now.</p>",
+             longest / 60, longest % 60);
     server.sendContent(buf);
 }
 
 static void sendCategories(char *buf, size_t len) {
-    server.sendContent("<h2>Categories</h2><p class=note>What a moment can be tagged as, from its long-press menu on "
-                       "zvukopis. Renaming one renames it for the moments already tagged with it.</p>");
+    server.sendContent("<h2>Categories</h2><p class=note>What a moment can be tagged as, with a long press on zvukopis. "
+                       "Renaming one renames it on the moments already tagged.</p>");
     for (int slot = 1; slot <= CATEGORY_COUNT; slot++) {
         Category c = configCategory(slot);
         char escaped[CATEGORY_NAME_LEN * 6];
         htmlEscape(c.name, escaped, sizeof(escaped));
-        snprintf(buf, len, "<div class=row><input id=name%d maxlength=%d value=\"%s\"><span class=pick>",
+        snprintf(buf, len, "<div class=row><input id=name%d maxlength=%d value=\"%s\" style=\"width:9rem\"><span class=pick>",
                  slot, CATEGORY_NAME_LEN - 1, escaped);
         server.sendContent(buf);
         for (int icon = 0; icon < ICON_COUNT; icon++) {
@@ -353,14 +398,23 @@ static void sendCategories(char *buf, size_t len) {
         }
         server.sendContent("</span></div>");
     }
-    server.sendContent("<div class=row><button onclick=saveCategories()>Save categories</button></div>");
+    server.sendContent("<div class=row><button onclick=saveCategories()>Save</button></div>");
 }
 
 static void sendTimeZone(char *buf, size_t len) {
     const char *current = clockTimeZone();
     bool known = false;
-    server.sendContent("<h2>Time</h2><div class=row><button onclick=setClock()>Set the device clock to this device's time</button></div>"
-                       "<div class=row><select id=tz onchange=zoneChanged()>");
+    char clock[40] = "not set";
+    if (clockValid()) {
+        time_t now = time(nullptr);
+        tm local;
+        localtime_r(&now, &local);
+        strftime(clock, sizeof(clock), "%a %e %b %Y, %H:%M:%S", &local);
+    }
+    snprintf(buf, len, "<h2>Time</h2><div class=row><span>Device clock: <b>%s</b></span>"
+                       "<button onclick=setClock()>Set from this browser</button></div>"
+                       "<div class=row><span>Time zone</span><select id=tz onchange=zoneChanged()>", clock);
+    server.sendContent(buf);
     for (const Zone &z : ZONES) {
         bool chosen = strcmp(z.posix, current) == 0 && !known;
         known |= chosen;
@@ -371,38 +425,42 @@ static void sendTimeZone(char *buf, size_t len) {
     char escaped[160];
     htmlEscape(current, escaped, sizeof(escaped));
     snprintf(buf, len, "<option value=custom%s>Custom POSIX rule</option></select>"
-                       "<input id=customtz size=28 value=\"%s\" style=\"%s\"></div>"
-                       "<div class=row><button onclick=useBrowserZone()>Use this browser's zone</button>"
-                       "<button onclick=saveZone()>Save time zone</button></div>"
-                       "<p class=note>Used for the clock, file names, the calendar and scheduled recordings. "
-                       "Daylight saving time follows by itself.</p>",
+                       "<input id=customtz size=24 value=\"%s\" style=\"%s\">"
+                       "<button id=savetz onclick=saveZone() disabled>Save</button></div>"
+                       "<div class=row><button onclick=useBrowserZone()>Use this browser's zone</button></div>"
+                       "<p class=note>Syncing the clock over the internet is in zvukopis's own Settings. Daylight saving follows the zone by itself.</p>",
              known ? "" : " selected", escaped, known ? "display:none" : "");
     server.sendContent(buf);
 }
 
 static void sendWifi(char *buf, size_t len) {
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
-    server.sendContent(firstTime ? "<h2>Connect zvukopis to your Wi-Fi</h2>" : "<h2>Wi-Fi networks</h2>");
+    int n = wifiNetworkCount();
+    if (firstTime) snprintf(buf, len, "<h2>Connect zvukopis to your Wi-Fi</h2>");
+    else if (n) snprintf(buf, len, "<h2>Wi-Fi networks (%d)</h2>", n);
+    else snprintf(buf, len, "<h2>Wi-Fi networks</h2>");
+    server.sendContent(buf);
     server.sendContent("<table>");
-    WifiNetwork n;
-    for (int i = 0; wifiNetworkGet(i, n); i++) {
+    WifiNetwork net;
+    for (int i = 0; wifiNetworkGet(i, net); i++) {
         char escaped[200];
-        htmlEscape(n.ssid, escaped, sizeof(escaped));
-        String js = jsonString(n.ssid);
+        htmlEscape(net.ssid, escaped, sizeof(escaped));
+        String js = jsonString(net.ssid);
         js.replace("\"", "&quot;");
-        snprintf(buf, len, "<tr><td>%s</td><td class=r><button onclick=\"forget(%d,%s)\">Forget</button></td></tr>",
-                 escaped, i, js.c_str());
+        snprintf(buf, len, "<tr><td>%s</td><td class=c><button class=ic title=Forget onclick=\"forget(%d,%s)\">%s</button></td></tr>",
+                 escaped, i, js.c_str(), TRASH_SVG);
         server.sendContent(buf);
     }
-    if (wifiNetworkCount() == 0) server.sendContent("<tr><td>None saved yet</td></tr>");
-    snprintf(buf, len, "</table><div class=row><select id=ssid onchange=ssidChanged()></select>"
-                       "<input id=otherssid placeholder=\"Network name\" style=display:none>"
-                       "<button onclick=scan()>Look again</button></div>"
+    if (n == 0) server.sendContent("<tr><td>None saved yet. Choose yours below and enter its password.</td></tr>");
+    // No scan on load: it blocks the server for seconds. The button runs one.
+    snprintf(buf, len, "</table><div class=row><select id=ssid onchange=ssidChanged()><option value=\"\">Type a name, or press the arrows to look</option></select>"
+                       "<button class=ic title=\"Look for networks again\" onclick=scan()>"
+                       "<svg viewBox=\"0 0 16 16\"><path d=\"M8 2a6 6 0 0 1 5.2 3H11v2h5V2h-2v1.7A8 8 0 0 0 8 0zM8 14a6 6 0 0 1-5.2-3H5V9H0v5h2v-1.7A8 8 0 0 0 8 16z\"/></svg></button>"
+                       "<input id=otherssid placeholder=\"Network name\" style=display:none></div>"
                        "<div class=row><input id=pass type=password placeholder=Password autocomplete=off>"
                        "<button onclick=saveWifi()>Save network</button></div>"
-                       "<p class=note>zvukopis joins the strongest saved network in reach when you open the web interface "
-                       "or sync the clock (up to %d networks). Without one in reach it opens its own hotspot, "
-                       "<b>%s</b>, with the password shown on its screen.</p>",
+                       "<p class=note>zvukopis joins the strongest saved network (up to %d) when you open the web interface "
+                       "or sync the clock. With none in reach it opens its own hotspot, <b>%s</b>; the password is on its screen.</p>",
              MAX_NETWORKS, wifiHotspotName());
     server.sendContent(buf);
 }
@@ -426,7 +484,7 @@ static void handleIndex() {
     if (battery >= 0) snprintf(batteryText, sizeof(batteryText), " &middot; battery %d%%", battery);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
     snprintf(buf, sizeof(buf), "<div class=sub>Device clock %s%s</div>"
-                               "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Live</button>"
+                               "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Recording</button>"
                                "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
                                "<script>const firstTab='%s'</script><div id=live class=tab>",
              clock, batteryText, firstTime ? "settings" : "live");

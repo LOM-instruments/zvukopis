@@ -34,7 +34,7 @@ static const int HEADER_LINE_Y = 90;
 static const int LIST_TOP = 106;
 static const int ROW_H = 96;
 static const int VISIBLE_ROWS = 6;
-static const int FOOTER_LINE_Y = 708;
+static const int FOOTER_LINE_Y = 690; // room for three lines of hints below
 static const int WAVE_X = MARGIN + 44;
 static const int WAVE_PITCH = 5; // bar width 3 + gap 2
 static const int WAVE_HALF_H = 15;
@@ -661,8 +661,18 @@ static void drawMainHeader(const ViewState &v) {
     int titleRight = MARGIN + textWidth(&Bold22, "zvukopis");
     drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
+    char buf[40];
+    if (v.momentCount == 0) {
+        // Nothing to count yet: point at the switch instead (top left of the
+        // device, about where this line is)
+        int ay = SECOND_BASELINE - 7;
+        canvas->fillTriangle(4, ay, 18, ay - 8, 18, ay + 8, INK);
+        canvas->fillRect(18, ay - 2, 14, 5, INK);
+        drawText(42, SECOND_BASELINE, &Text22, "Press in the switch here to record", INK);
+        canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
+        return;
+    }
     // "2 moments  •  3:04 left"
-    char buf[32];
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
     else snprintf(buf, sizeof(buf), "%d moments", v.momentCount);
     drawText(MARGIN, SECOND_BASELINE, &Text22, buf, INK);
@@ -833,13 +843,8 @@ static void drawList(const ViewState &v) {
     if (v.momentCount == 0) {
         int cx = SW / 2, y = LIST_TOP + first * ROW_H + 110;
         drawTextCentered(cx, y, &Bold22, "No moments yet", INK);
-        drawTextCentered(cx, y + 38, &Text22, "Press in the switch on the side", INK);
-        drawTextCentered(cx, y + 70, &Text22, "to capture the sound of this moment", INK);
-        // What the switch does, with the footer's own glyphs
-        int lx = cx - 114;
-        drawHint(lx, y + 128, HINT_UPDOWN, "Up or down: select");
-        drawHint(lx, y + 164, HINT_CLICK, "Press in: record, play");
-        drawHint(lx, y + 200, HINT_HOLD_CLICK, "Hold in: more options");
+        drawTextCentered(cx, y + 38, &Text22, "A moment is a recording:", INK);
+        drawTextCentered(cx, y + 70, &Text22, "the sound of here and now.", INK);
     }
 }
 
@@ -1631,6 +1636,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, press};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: cancel"};
+        menuKeys = false; // BOOT still closes it; the hold hint already says how to leave
     } else if (v.screen == SCREEN_TRANSFER) {
         rocker[nr++] = {HINT_CLICK, "Stop the web interface"};
         menuKeys = false;
@@ -1677,13 +1683,38 @@ static void drawFooter(const ViewState &v) {
         keys[nk++] = {HINT_PWR, "Hold 2 s to sleep"};
     }
 
+    // Rocker hints read "gesture: what happens", like the legend on the empty
+    // screen; they flow over up to two lines, the keys take the third
+    char labels[3][40];
+    for (int i = 0; i < nr; i++) {
+        const char *prefix = rocker[i].icon == HINT_UPDOWN ? "Up or down: " : rocker[i].icon == HINT_CLICK ? "Press in: " : "Hold in: ";
+        const char *what = rocker[i].label;
+        if (strncmp(what, "Hold: ", 6) == 0) what += 6;
+        else if (strncmp(what, "Up or down: ", 12) == 0) what += 12;
+        snprintf(labels[i], sizeof(labels[i]), "%s%c%s", prefix, tolower(what[0]), what + 1);
+        rocker[i].label = labels[i];
+    }
     canvas->drawFastHLine(MARGIN, FOOTER_LINE_Y, SW - 2 * MARGIN, INK);
-    const int gap = 22;
-    int x = MARGIN, cy = FOOTER_LINE_Y + 34;
-    for (int i = 0; i < nr; i++) x += drawHint(x, cy, rocker[i].icon, rocker[i].label) + gap;
-    x = MARGIN;
-    cy = nr > 0 ? cy + 40 : cy;
-    for (int i = 0; i < nk; i++) x += drawHint(x, cy, keys[i].icon, keys[i].label) + gap;
+    const int gap = 22, lineH = 34, maxLines = 3;
+    int x = MARGIN, line = 0;
+    auto place = [&](HintIcon icon, const char *label) {
+        int iconW = icon == HINT_UPDOWN ? 20 : icon == HINT_CLICK ? 26 : icon == HINT_HOLD_CLICK ? 40
+                    : textWidth(&Text17, icon == HINT_PWR ? "PWR" : "BOOT") + 12 + 8;
+        int w = iconW + textWidth(&Text22, label);
+        if (x > MARGIN && x + w > SW - MARGIN) {
+            x = MARGIN;
+            line++;
+        }
+        if (line >= maxLines) return;
+        drawHint(x, FOOTER_LINE_Y + 28 + line * lineH, icon, label);
+        x += w + gap;
+    };
+    for (int i = 0; i < nr; i++) place(rocker[i].icon, rocker[i].label);
+    if (nk > 0 && x > MARGIN) {
+        x = MARGIN;
+        line++;
+    }
+    for (int i = 0; i < nk; i++) place(keys[i].icon, keys[i].label);
 }
 
 static void render(const ViewState &v) {
