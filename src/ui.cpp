@@ -265,7 +265,7 @@ static ViewState currentView() {
     v.audio = audioState();
     v.playingIndex = audioPlayingIndex();
     v.playSeconds = (int)audioPlaybackSeconds();
-    v.speedTenths = (int)(audioPlaybackSpeed() * 10 + 0.5f);
+    v.speedTenths = (int)roundf(audioPlaybackSpeed() * 10);
     v.secondsLeft = (int)audioSecondsLeft();
     v.battery = battery;
     v.usb = usb;
@@ -774,7 +774,8 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
         char elapsed[12];
         formatTime(elapsed, sizeof(elapsed), v.playSeconds);
         if (v.speedTenths != 10) {
-            snprintf(buf, sizeof(buf), "%d.%dx  %s", v.speedTenths / 10, v.speedTenths % 10, elapsed);
+            int tenths = abs(v.speedTenths);
+            snprintf(buf, sizeof(buf), "%s%d.%dx  %s", v.speedTenths < 0 ? "-" : "", tenths / 10, tenths % 10, elapsed);
         } else {
             snprintf(buf, sizeof(buf), "%s / %s", elapsed, total);
         }

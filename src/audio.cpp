@@ -42,7 +42,10 @@ static const uint32_t STANDBY_AFTER_MS = 2000;               // idle time before
 static const float SPEED_STEP = 1.012f;  // 2x after ~1 s held, 8x after ~2.8 s
 static const float SPEED_RETURN = 0.93f; // fraction of the distance to 1x left after each chunk (~0.2 s)
 static const float MAX_SPEED = 8.0f;
-static const float MIN_SPEED = 0.125f;
+// Below this the speed stops shrinking by steps and slides straight through
+// zero: the tape stops, then runs backwards (and on up to -8x while held)
+static const float SCRUB_SPEED = 0.25f;
+static const float SCRUB_STEP = 0.02f; // per chunk: 0.4 s from +0.25 to -0.25
 
 enum CommandType : uint8_t {
     CMD_RECORD_START,
@@ -499,9 +502,11 @@ static void handleCommand(const Command &cmd) {
 static int16_t sampleAt(const Moment &moment, size_t i) {
     if (moment.samples) return moment.samples[i];
     if (i < playBufferStart || i >= playBufferStart + playBufferLength) {
-        size_t want = min(PLAY_BUFFER_SAMPLES, moment.length - i);
-        playFile.seek(moment.dataOffset + i * sizeof(int16_t));
-        playBufferStart = i;
+        // Load the window around i, so playing backwards stays inside it too
+        size_t start = i > PLAY_BUFFER_SAMPLES / 2 ? i - PLAY_BUFFER_SAMPLES / 2 : 0;
+        size_t want = min(PLAY_BUFFER_SAMPLES, moment.length - start);
+        playFile.seek(moment.dataOffset + start * sizeof(int16_t));
+        playBufferStart = start;
         playBufferLength = playFile.read((uint8_t *)playBuffer, want * sizeof(int16_t)) / sizeof(int16_t);
         if (playBufferLength == 0) {
             playFileEnded = true; // the file is shorter than its header says
@@ -514,10 +519,19 @@ static int16_t sampleAt(const Moment &moment, size_t i) {
 static void updateSpeed() {
     int direction = speedDirection;
     float s = speed;
-    if (direction > 0) s = min(MAX_SPEED, s * SPEED_STEP);
-    else if (direction < 0) s = max(MIN_SPEED, s / SPEED_STEP);
-    else if (fabsf(s - 1) > 0.01f) s = 1 + (s - 1) * SPEED_RETURN;
-    else s = 1;
+    if (direction != 0) {
+        // Towards the held direction: by steps away from zero, straight through
+        // zero inside the scrub band, like a reel slowed to a stop and turned
+        float towards = direction > 0 ? 1 : -1;
+        if (s * towards >= SCRUB_SPEED) s *= SPEED_STEP;          // same way: faster
+        else if (s * towards <= -SCRUB_SPEED) s /= SPEED_STEP;    // other way: slower
+        else s += towards * SCRUB_STEP;                           // through zero
+        s = constrain(s, -MAX_SPEED, MAX_SPEED);
+    } else if (fabsf(s - 1) > 0.01f) {
+        s = 1 + (s - 1) * SPEED_RETURN; // let go: back to normal, forward
+    } else {
+        s = 1;
+    }
     speed = s;
 }
 
@@ -529,8 +543,12 @@ static size_t playbackChunk(const Moment &moment, int16_t *out, size_t frames) {
     float step = speed;
     size_t n = 0;
     while (n < frames && !playFileEnded) {
+        if (pos < 0) pos = 0; // backwards to the start: wait there
         size_t i = (size_t)pos;
-        if (i + 1 >= moment.length) break;
+        if (i + 1 >= moment.length) {
+            if (step < 0) i = moment.length - 2; // at the end but running back: carry on from there
+            else break;
+        }
         float frac = (float)(pos - i);
         float s = (sampleAt(moment, i) * (1 - frac) + sampleAt(moment, i + 1) * frac) * moment.gain;
         out[2 * n] = out[2 * n + 1] = (int16_t)constrain(s, -32768.0f, 32767.0f);
