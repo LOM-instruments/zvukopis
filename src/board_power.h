@@ -13,7 +13,7 @@ void epdPowerOff();
 int batteryPercent(); // 0-100, or -1 without a battery
 bool usbPowered();
 
-// True once for each 2 s hold of PWR since the last call (it fires while
+// True once for each 1 s hold of PWR since the last call (it fires while
 // still held). Holding on to 10 s restarts the board in hardware.
 // Also clears the PMIC's other events (USB plugged in or out).
 bool powerKeyPressed();

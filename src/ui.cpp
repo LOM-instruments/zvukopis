@@ -589,11 +589,11 @@ static int drawHint(int x, int cy, HintIcon icon, const char *label) {
         iconHold(x + 4, cy);
         x += 40;
         break;
-    case HINT_PWR:
-        x += drawKeycap(x, cy, "PWR") + 8;
+    case HINT_PWR: // the board prints PWR and BOOT on these; people only need what they do
+        x += drawKeycap(x, cy, "Sleep") + 8;
         break;
     case HINT_BOOT:
-        x += drawKeycap(x, cy, "BOOT") + 8;
+        x += drawKeycap(x, cy, "Settings") + 8;
         break;
     }
     drawText(x, cy + 7, &Text22, label, INK);
@@ -1572,7 +1572,7 @@ static void drawSleepScreen(const ViewState &v) {
     const int py = LIST_TOP + 4;
     canvas->fillRect(SW - 30, py - 2, 16, 5, INK);
     canvas->fillTriangle(SW - 14, py - 8, SW - 14, py + 8, SW - 4, py, INK);
-    drawTextRight(SW - 42, py + 8, &Text22, "Hold 2 s to wake", INK);
+    drawTextRight(SW - 42, py + 8, &Text22, "Hold 1 s to wake", INK);
 
     // "Pauline Oliveros, Deep Listening" -> author, then the work below
     const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
@@ -1609,14 +1609,14 @@ static void drawSleepScreen(const ViewState &v) {
     if (work) drawText(MARGIN, y + 56, &Text17, work, INK);
 }
 
-// Context hints: what the rocker does on the first line, BOOT and PWR on the second
+// Context hints: what the rocker does on the first line, the Settings and Sleep buttons on the second
 static void drawFooter(const ViewState &v) {
     struct Hint {
         HintIcon icon;
         const char *label;
     } rocker[3], keys[2];
     int nr = 0, nk = 0;
-    bool menuKeys = true; // BOOT for the menu, PWR to sleep
+    bool menuKeys = true; // the Settings button for the menu, the Sleep button to sleep
     bool playing = v.audio == AUDIO_PLAYING;
     if (v.audio == AUDIO_SAVING || v.audio == AUDIO_FORMATTING) {
         menuKeys = false; // nothing to press meanwhile
@@ -1646,7 +1646,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, press};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: cancel"};
-        menuKeys = false; // BOOT still closes it; the hold hint already says how to leave
+        menuKeys = false; // the Settings button still closes it; the hold hint already says how to leave
     } else if (v.screen == SCREEN_TRANSFER) {
         rocker[nr++] = {HINT_CLICK, "Stop the web interface"};
         menuKeys = false;
@@ -1689,8 +1689,8 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: actions"};
     }
     if (menuKeys) {
-        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS || v.overlay != OVERLAY_NONE ? "Close" : "Settings"};
-        keys[nk++] = {HINT_PWR, "Hold 2 s to sleep"};
+        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS || v.overlay != OVERLAY_NONE ? "Close" : "Open"};
+        keys[nk++] = {HINT_PWR, "Hold 1 s"};
     }
 
     // Rocker hints read "gesture: what happens", like the legend on the empty
@@ -1710,7 +1710,7 @@ static void drawFooter(const ViewState &v) {
     int x = MARGIN, line = 0;
     auto place = [&](HintIcon icon, const char *label) {
         int iconW = icon == HINT_UPDOWN ? 20 : icon == HINT_CLICK ? 26 : icon == HINT_HOLD_CLICK ? 40
-                    : textWidth(&Text17, icon == HINT_PWR ? "PWR" : "BOOT") + 12 + 8;
+                    : textWidth(&Text17, icon == HINT_PWR ? "Sleep" : "Settings") + 12 + 8;
         int w = iconW + textWidth(&Text22, label);
         if (x > MARGIN && x + w > SW - MARGIN) {
             x = MARGIN;
@@ -2159,7 +2159,7 @@ static void handleEvent(ButtonEvent event) {
         return;
     }
     if (audio == AUDIO_FORMATTING) return;
-    // BOOT opens the menu from anywhere, and closes it again
+    // The Settings button (BOOT on the board) opens the menu from anywhere, and closes it again
     if (event == BTN_MENU) {
         if (screen == SCREEN_SETTINGS) closeSettings();
         else if (screen != SCREEN_TRANSFER) openSettings();

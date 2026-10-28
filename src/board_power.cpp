@@ -42,11 +42,11 @@ bool boardPowerInit() {
 
     // The PWR key belongs to the PMIC, which flags presses in its IRQ status
     // registers and pulls its IRQ line (GPIO38, 10k pull-up) low until they're
-    // cleared. Holding PWR 2 s raises the long-press IRQ (sleep / wake); 10 s
+    // cleared. Holding PWR 1 s raises the long-press IRQ (sleep / wake); 10 s
     // restarts the whole board in hardware. USB plugged in or out also raises
     // an IRQ, so it wakes the chip too.
     pinMode(PWR_IRQ_PIN, INPUT_PULLUP);
-    pmu.setIrqLevelTime(XPOWERS_AXP2101_IRQ_TIME_2S);
+    pmu.setIrqLevelTime(XPOWERS_AXP2101_IRQ_TIME_1S);
     pmu.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
     pmu.setLongPressRestart();
     pmu.enableLongPressShutdown();

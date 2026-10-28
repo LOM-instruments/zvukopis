@@ -17,9 +17,11 @@ spectrum), downloaded over Wi-Fi and recorded on a schedule.
   changes the speed, like a tape reel.
 - **Tag, analyse, delete:** hold the switch in on a moment.
 - **Calendar:** up from *New recording*, then press in.
-- **Settings:** the BOOT button. Mic gain (auto or fixed), scheduled recordings,
+- **Settings:** the small button next to the USB port (the board calls it BOOT).
+  Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader and formatting the card.
-- **Sleep and wake:** hold PWR for 2 seconds. Holding it for 10 seconds restarts
+- **Sleep and wake:** hold the sleep button (PWR on the board) for 1 second.
+  Holding it for 10 seconds restarts
   the device. It also goes to sleep by itself after 5 minutes, and wakes for
   scheduled recordings.
 
@@ -54,7 +56,7 @@ also works with it, so you can format it from a computer instead.
 **Without any tools:** open the project page,
 [lom-instruments.github.io/zvukopis](https://lom-instruments.github.io/zvukopis/),
 in Chrome or Edge, connect the board over USB and press *Install*. After flashing, unplug and replug the USB
-cable, or hold PWR for 10 seconds: the board stays in download mode after the
+cable, or hold the sleep button for 10 seconds: the board stays in download mode after the
 flasher's reset.
 
 **From source:** [PlatformIO](https://platformio.org) with the `espressif32`
