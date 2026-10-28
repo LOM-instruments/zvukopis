@@ -31,6 +31,7 @@ struct Spectrogram {
 void spectrumRequest(int momentNumber, int width, int height);
 // The finished spectrogram of that moment, or nullptr while it's being worked out
 const Spectrogram *spectrumResult(int momentNumber);
+int spectrumProgress(int momentNumber); // 0-100 while it's being worked out
 
 // Frequency at the middle of a row (linear)
 float spectrumRowHz(int row, int height);

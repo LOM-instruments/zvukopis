@@ -234,6 +234,7 @@ struct ViewState {
     int scheduleCount;
     int spectrumMoment;
     int spectrumReady;
+    int spectrumProgress; // in steps of 10%, so the screen isn't redrawn for every column
     int spectrumView;
     int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
@@ -290,6 +291,7 @@ static ViewState currentView() {
     v.scheduleCount = scheduleCount();
     v.spectrumMoment = spectrumMoment;
     v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
+    v.spectrumProgress = screen == SCREEN_SPECTRUM && !v.spectrumReady ? spectrumProgress(spectrumMoment) / 10 * 10 : 0;
     v.spectrumView = spectrumView;
     if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
     return v;
@@ -1350,7 +1352,13 @@ static void drawSpectrum(const ViewState &v) {
     const Spectrogram *sp = spectrumResult(v.spectrumMoment);
     if (!sp) {
         iconBars(SW / 2, 300, 30, INK);
-        drawTextCentered(SW / 2, 380, &Bold22, "Analysing...", INK);
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Analysing... %d%%", v.spectrumProgress);
+        drawTextCentered(SW / 2, 380, &Bold22, buf, INK);
+        const int bw = 300, bh = 18, bx = SW / 2 - bw / 2, by = 410;
+        canvas->drawRoundRect(bx, by, bw, bh, 6, INK);
+        canvas->drawRoundRect(bx + 1, by + 1, bw - 2, bh - 2, 5, INK);
+        if (v.spectrumProgress > 0) canvas->fillRoundRect(bx + 3, by + 3, (bw - 6) * v.spectrumProgress / 100, bh - 6, 4, INK);
         return;
     }
     if (v.spectrumView == VIEW_FFT) drawFftGraph(v, sp);
@@ -1863,7 +1871,7 @@ static void openOverlay(Overlay which, int choice) {
 
 static void showScreen(Screen which, int row) {
     screen = which;
-    selected = row;
+    selected = which == SCREEN_LIST ? 0 : row; // the main screen always opens on New recording, ready to record
 }
 
 static void openCalendar() {
@@ -2197,7 +2205,7 @@ void uiTick() {
     int first = firstMomentRow(scheduled);
     if (screen == SCREEN_LIST && scheduled != wasScheduled && selected >= 1) selected = selected + (scheduled ? 1 : -1);
     wasScheduled = scheduled;
-    if (count > lastMomentCount && screen == SCREEN_LIST) selected = first; // a recording just finished: select it so a click plays it
+    if (count > lastMomentCount && screen == SCREEN_LIST) selected = 0; // after a recording (or at boot): ready to record again
     lastMomentCount = count;
     if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
     if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty

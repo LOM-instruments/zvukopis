@@ -14,6 +14,7 @@ static Spectrogram result;
 static uint8_t *cells = nullptr;
 static float *averageDb = nullptr; // FFT_SIZE / 2
 static volatile int readyNumber = -1;   // moment whose spectrogram is in `result`
+static volatile int progress = 0;       // percent of the columns done
 static volatile int wantedNumber = -1;  // moment being worked out next
 static int wantedWidth = 0, wantedHeight = 0;
 static TaskHandle_t task = nullptr;
@@ -90,7 +91,9 @@ static bool compute(int number, int width, int height) {
 
         SampleSource source(moment);
         float loudest = -1000;
+        progress = 0;
         for (int c = 0; c < width && wantedNumber == number; c++) {
+            progress = c * 100 / width;
             long centre = (long)((c + 0.5) * moment.length / width);
             source.read(centre - FFT_SIZE / 2, FFT_SIZE, frame);
             for (int i = 0; i < FFT_SIZE; i++) {
@@ -191,6 +194,11 @@ void spectrumRequest(int momentNumber, int width, int height) {
     }
     wantedNumber = momentNumber;
     xTaskNotifyGive(task);
+}
+
+int spectrumProgress(int momentNumber) {
+    if (readyNumber == momentNumber) return 100;
+    return wantedNumber == momentNumber ? progress : 0;
 }
 
 const Spectrogram *spectrumResult(int momentNumber) {
