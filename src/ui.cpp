@@ -2,6 +2,7 @@
 
 #include <Adafruit_GFX.h>
 #include <Arduino.h>
+#include <Preferences.h>
 #include <mbedtls/base64.h>
 #include <qrcode.h>
 #include <sys/time.h>
@@ -77,7 +78,7 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
-enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_CARD_READER, SET_FORMAT, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
@@ -107,6 +108,7 @@ static volatile int spectrumMoment = 0; // number of the moment being analysed
 enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
 static volatile int spectrumView = VIEW_SPECTROGRAM;
 static volatile int spectrumContrast = 1; // index into CONTRAST_DB
+static volatile bool showGuide = true;     // the hints under the line at the bottom; NVS "guide"
 static const float CONTRAST_DB[] = {70, 55, 40, 28}; // dynamic range shown: less is more contrast
 static const int CONTRAST_LEVELS = 4;
 static Document readerDocument;      // the one open in the reader
@@ -246,6 +248,7 @@ struct ViewState {
     int spectrumProgress; // in steps of 10%, so the screen isn't redrawn for every column
     int spectrumView;
     int spectrumContrast;
+    bool guide;
     int libraryCount;
     int readerPage;
     int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
@@ -306,6 +309,7 @@ static ViewState currentView() {
     v.spectrumProgress = screen == SCREEN_SPECTRUM && !v.spectrumReady ? spectrumProgress(spectrumMoment) / 10 * 10 : 0;
     v.spectrumView = spectrumView;
     v.spectrumContrast = spectrumContrast;
+    v.guide = showGuide;
     v.libraryCount = libraryCount();
     v.readerPage = readerPage;
     if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
@@ -1050,6 +1054,10 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         title = "Web interface on own hotspot";
         snprintf(detail, len, "zvukopis makes its own Wi-Fi network");
         break;
+    case SET_GUIDE:
+        title = "Button guide";
+        snprintf(detail, len, v.guide ? "Shown at the bottom of every screen" : "Hidden; press in to show it again");
+        break;
     case SET_CARD_READER:
         title = "USB card reader";
         enabled = (v.sdCard || v.cardUnreadable) && v.usb;
@@ -1076,7 +1084,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
 
 static void drawSettings(const ViewState &v) {
     drawSubHeader(v, "Settings", nullptr);
-    const int rowH = 72;
+    const int rowH = 64;
     for (int r = 0; r < SET_ROWS; r++) {
         int y = LIST_TOP + r * rowH;
         bool isSelected = r == v.selected;
@@ -1087,12 +1095,12 @@ static void drawSettings(const ViewState &v) {
         char detail[48];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
-        drawText(MARGIN, y + 33, enabled ? &Bold22 : &Text22, title, fg);
-        drawText(MARGIN, y + 58, &Text17, detail, fg);
+        drawText(MARGIN, y + 29, enabled ? &Bold22 : &Text22, title, fg);
+        drawText(MARGIN, y + 52, &Text17, detail, fg);
     }
 
     // Card and memory
-    int y = LIST_TOP + SET_ROWS * rowH + 40;
+    int y = LIST_TOP + SET_ROWS * rowH + 36;
     char buf[64], total[16], free[16];
     if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
@@ -1433,7 +1441,8 @@ struct Line {
     uint8_t pad;
 };
 
-static const int READER_TOP = LIST_TOP + 10, READER_BOTTOM = FOOTER_LINE_Y - 14;
+static const int READER_TOP = LIST_TOP + 10;
+static int readerBottom() { return showGuide ? FOOTER_LINE_Y - 14 : SH - 24; }
 static const int READER_FULL_REFRESH_EVERY = 8; // page turns, against ghosting in the text
 
 static char *readerText = nullptr;
@@ -1542,7 +1551,7 @@ static void paginate() {
             pageOpen = true;
             y = READER_TOP;
         }
-        if (y + h > READER_BOTTOM) {
+        if (y + h > readerBottom()) {
             pageOpen = false;
             i--; // this line opens the next page
             continue;
@@ -1675,7 +1684,7 @@ static void drawReader(const ViewState &v) {
     for (uint32_t i = first; i < last; i++) {
         const Line &line = lines[i];
         int h = lineHeight(line.kind);
-        if (y + h > READER_BOTTOM) break;
+        if (y + h > readerBottom()) break;
         if (line.kind == LINE_RULE) {
             canvas->drawFastHLine(MARGIN + 40, y + h / 2, SW - 2 * MARGIN - 80, INK);
         } else if (line.kind != LINE_BLANK) {
@@ -1942,6 +1951,7 @@ static void drawSleepScreen(const ViewState &v) {
 
 // Context hints: what the rocker does on the first line, the Settings and Sleep buttons on the second
 static void drawFooter(const ViewState &v) {
+    if (!v.guide) return; // Settings > Button guide
     struct Hint {
         HintIcon icon;
         const char *label;
@@ -1985,7 +1995,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Change", "Open", "Start", "Start", "Sync now", "Start", "Format..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2186,6 +2196,12 @@ static void displayTask(void *) {
 }
 
 void uiStart() {
+    {
+        Preferences prefs;
+        prefs.begin("zvukopis", true);
+        showGuide = prefs.getBool("guide", true);
+        prefs.end();
+    }
     canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
     canvas->setRotation(SCREEN_ROTATION);
     loopDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
@@ -2491,6 +2507,14 @@ static void handleSettings(ButtonEvent event) {
         case SET_SYNC:
             clockSyncNow();
             break;
+        case SET_GUIDE: {
+            showGuide = !showGuide;
+            Preferences prefs;
+            prefs.begin("zvukopis", false);
+            prefs.putBool("guide", showGuide);
+            prefs.end();
+            break;
+        }
         case SET_SCHEDULE:
             openSchedule(SCREEN_SETTINGS);
             break;

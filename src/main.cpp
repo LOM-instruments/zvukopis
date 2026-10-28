@@ -13,6 +13,7 @@
 #include "config.h"
 #include "library.h"
 #include "networks.h"
+#include "storage.h"
 #include "ui.h"
 
 // How often the chip checks the PWR key while "asleep" on USB power
@@ -283,7 +284,7 @@ void setup() {
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "
-                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, "
+                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, f = list the card's files, "
                    "P = power stats, z = 3 s light sleep test (drops USB)");
 }
 
@@ -305,6 +306,7 @@ void loop() {
         case 's': uiRequestScreenshot(); break;
         case 'p': buttonsInject(BTN_POWER); break;
         case 'a': dumpNewestMoment(); break;
+        case 'f': storageListFiles(); break;
         case 'T': clockSet((time_t)Serial.parseInt()); break;
         case 'P': printPowerStats(); break;
         case 'z':

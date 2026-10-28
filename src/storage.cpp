@@ -553,3 +553,32 @@ bool storageFormat() {
     sdmmc_host_deinit();
     return storageInit() && ok;
 }
+
+static void listDir(const char *path, int depth) {
+    File dir = SD_MMC.open(path);
+    if (!dir) {
+        Serial.printf("%*s(can't open %s)\n", depth * 2, "", path);
+        return;
+    }
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+        if (f.isDirectory()) {
+            Serial.printf("%*s%s/\n", depth * 2, "", f.name());
+            char sub[128];
+            snprintf(sub, sizeof(sub), "%s/%s", strcmp(path, "/") == 0 ? "" : path, f.name());
+            if (depth < 4) listDir(sub, depth + 1);
+        } else {
+            Serial.printf("%*s%s  %lu bytes\n", depth * 2, "", f.name(), (unsigned long)f.size());
+        }
+        f.close();
+    }
+    dir.close();
+}
+
+void storageListFiles() {
+    if (!mounted) {
+        Serial.println("[storage] no card mounted");
+        return;
+    }
+    Serial.println("[storage] files on the card:");
+    listDir("/", 0);
+}

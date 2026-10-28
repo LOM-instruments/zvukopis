@@ -174,7 +174,7 @@ void librarySetLastPage(const char *fileName, int page) {
     pageKey(fileName, key, sizeof(key));
     Preferences prefs;
     prefs.begin("library", false);
-    if (page <= 0) prefs.remove(key);
+    if (page <= 0) { if (prefs.isKey(key)) prefs.remove(key); }
     else if (prefs.getInt(key, -1) != page) prefs.putInt(key, page);
     prefs.end();
 }
