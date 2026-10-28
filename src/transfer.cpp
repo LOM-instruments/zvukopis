@@ -247,6 +247,33 @@ if($('ssid')&&firstTab==='settings')scan();else if($('ssid'))ssidChanged();
 </script></body></html>)";
 
 static const int GAIN_STEPS[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
+static const int LENGTHS[] = {30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 28800, 43200};
+
+// "12 h", "1 h 30 min", "5 min", "45 s"
+static void lengthText(char *buf, size_t len, int seconds) {
+    if (seconds >= 3600 && seconds % 3600 >= 60) snprintf(buf, len, "%d h %d min", seconds / 3600, seconds % 3600 / 60);
+    else if (seconds >= 3600) snprintf(buf, len, "%d h", seconds / 3600);
+    else if (seconds >= 60 && seconds % 60) snprintf(buf, len, "%d min %d s", seconds / 60, seconds % 60);
+    else if (seconds >= 60) snprintf(buf, len, "%d min", seconds / 60);
+    else snprintf(buf, len, "%d s", seconds);
+}
+
+// The length presets up to `longest`, as <option>s
+static void sendLengthOptions(char *buf, size_t len, int longest, int selected) {
+    bool any = false;
+    for (int seconds : LENGTHS) {
+        if (seconds > longest) break;
+        char text[24];
+        lengthText(text, sizeof(text), seconds);
+        snprintf(buf, len, "<option value=%d%s>%s</option>", seconds, seconds == selected ? " selected" : "", text);
+        server.sendContent(buf);
+        any = true;
+    }
+    if (!any) {
+        snprintf(buf, len, "<option value=%d>%d s</option>", max(1, longest), max(1, longest));
+        server.sendContent(buf);
+    }
+}
 
 static void sendRecord(char *buf, size_t len) {
     // One button that records and stops, showing the time as it goes
@@ -254,14 +281,7 @@ static void sendRecord(char *buf, size_t len) {
                        "<span class=dot></span><span id=reclabel>Record</span><span id=rectime class=mono></span></button>"
                        "<div class=opts><label>Stop after <select id=reclen><option value=0>when I say</option>");
     int longest = (int)audioLongestRecording();
-    const int lengths[] = {30, 60, 120, 300, 600, 1800, 3600};
-    for (int seconds : lengths) {
-        if (seconds > longest) break;
-        if (seconds < 60) snprintf(buf, len, "<option value=%d>%d s</option>", seconds, seconds);
-        else if (seconds < 3600) snprintf(buf, len, "<option value=%d>%d min</option>", seconds, seconds / 60);
-        else snprintf(buf, len, "<option value=%d>%d h</option>", seconds, seconds / 3600);
-        server.sendContent(buf);
-    }
+    sendLengthOptions(buf, len, longest, 0);
     int setting = audioMicGainSetting();
     server.sendContent("</select></label><label>Mic gain <select id=gain onchange=setGain()>");
     for (int db : GAIN_STEPS) {
@@ -269,9 +289,11 @@ static void sendRecord(char *buf, size_t len) {
         else snprintf(buf, len, "<option value=%d%s>%d dB</option>", db, setting == db ? " selected" : "", db);
         server.sendContent(buf);
     }
+    char longestText[24];
+    lengthText(longestText, sizeof(longestText), longest);
     snprintf(buf, len, "</select><span id=gainnow class=sub></span></label></div>"
-                       "<p class=note>Up to %d:%02d at a time for now. Wi-Fi stays on while recording, which may add a little noise.</p>",
-             longest / 60, longest % 60);
+                       "<p class=note>Up to %s at a time%s. Wi-Fi stays on while recording, which may add a little noise.</p>",
+             longestText, audioUsingSdCard() ? " (the card's room)" : " (no SD card: held in memory)");
     server.sendContent(buf);
 }
 
@@ -353,23 +375,12 @@ static void sendSchedule(char *buf, size_t len) {
              today, nextMinute);
     server.sendContent(buf);
     int longest = (int)audioLongestRecording();
-    const int lengths[] = {30, 60, 120, 300, 600, 1800, 3600};
-    bool any = false;
-    for (int seconds : lengths) {
-        if (seconds > longest) break;
-        if (seconds < 60) snprintf(buf, len, "<option value=%d>%d s</option>", seconds, seconds);
-        else if (seconds < 3600) snprintf(buf, len, "<option value=%d%s>%d min</option>", seconds, seconds == 60 ? " selected" : "", seconds / 60);
-        else snprintf(buf, len, "<option value=%d>%d h</option>", seconds, seconds / 3600);
-        server.sendContent(buf);
-        any = true;
-    }
-    if (!any) {
-        snprintf(buf, len, "<option value=%d>%d s</option>", max(1, longest), max(1, longest));
-        server.sendContent(buf);
-    }
+    sendLengthOptions(buf, len, longest, 60);
+    char longestText[24];
+    lengthText(longestText, sizeof(longestText), longest);
     snprintf(buf, len, "</select><label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
-                       "<p class=note>24-hour time, in zvukopis's own time zone. Up to %d:%02d per recording for now.</p>",
-             longest / 60, longest % 60);
+                       "<p class=note>24-hour time, in zvukopis's own time zone. Up to %s per recording.</p>",
+             longestText);
     server.sendContent(buf);
 }
 

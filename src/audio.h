@@ -10,7 +10,7 @@
 // otherwise they live in PSRAM and are lost on reset.
 
 static const int SAMPLE_RATE = 48000;
-static const int MAX_MOMENT_SECONDS = 60;
+static const uint32_t MAX_RECORDING_SECONDS = 12 * 3600; // one WAV file can't pass 4 GB
 static const int MAX_MOMENTS = 500;
 static const int WAVEFORM_BINS = 77;
 
@@ -52,7 +52,7 @@ enum AudioState {
 bool audioInit();
 
 // Requests, carried out by the audio task within ~16 ms
-void audioStartRecording(uint32_t seconds = MAX_MOMENT_SECONDS); // up to what fits in memory
+void audioStartRecording(uint32_t seconds = MAX_RECORDING_SECONDS); // until stopped, or what fits
 void audioStopRecording();
 void audioPlay(int index);
 void audioStopPlayback();
@@ -85,7 +85,7 @@ void audioSetMicGain(int db);
 int audioMicGainSetting();
 int audioMicGain(); // in use now (with auto gain, where it last settled)
 float audioSecondsLeft(); // recording time that still fits on the SD card, or in memory
-float audioLongestRecording(); // seconds one recording can last (it's buffered in memory)
+float audioLongestRecording(); // seconds one recording can last: the card's room, or memory's without a card
 bool audioUsingSdCard();
 
 // Moments are ordered newest first. momentListVersion() changes whenever the list does.

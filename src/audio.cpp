@@ -30,7 +30,6 @@ static const int AGC_RELEASE_CHUNKS = 90; // ~1.5 s
 // Playback boosts each moment so its loudest moment is near full scale, up to this much
 static const float MAX_PLAYBACK_GAIN = 8.0f;
 
-static const size_t MAX_MOMENT_SAMPLES = (size_t)SAMPLE_RATE * MAX_MOMENT_SECONDS;
 static const size_t MIN_MOMENT_SAMPLES = SAMPLE_RATE / 4; // anything shorter is an accidental tap
 static const size_t PSRAM_RESERVE = 256 * 1024;         // left free for the rest of the app
 static const uint64_t SD_RESERVE = 1024 * 1024;         // for file system overhead
@@ -78,7 +77,14 @@ static int nextMomentNumber = 1;
 // then shrunk to the moment (in PSRAM) or written to the card and freed.
 // At 48 kHz a minute is 5.8 MB, too much to keep reserved.
 static int16_t *scratch = nullptr;
-static volatile size_t scratchLength = 0;
+static volatile size_t scratchLength = 0; // samples taken in so far
+// With a card in, the samples go straight onto it (see storage.h); the list
+// waveform and gain then come from a running envelope of chunk peaks
+static bool streamingRecord = false;
+static Moment streamMoment;
+static const size_t ENVELOPE_MAX = 450000; // entries (900 KB): one per 16 ms chunk up to 2 h, coarser beyond
+static uint16_t *envelope = nullptr;
+static size_t envelopeChunks = 1; // chunks per entry
 static volatile size_t recordLimit = 0;
 static time_t recordStartedAt = 0;
 static uint16_t recordStartedMs = 0;
@@ -172,13 +178,12 @@ static uint64_t samplesLeft() {
     uint64_t ramSamples = ramBytes > PSRAM_RESERVE ? (ramBytes - PSRAM_RESERVE) / sizeof(int16_t) : 0;
     if (!storageAvailable()) return ramSamples;
     uint64_t freeBytes = storageFreeBytes();
-    uint64_t cardSamples = freeBytes > SD_RESERVE ? (freeBytes - SD_RESERVE) / sizeof(int16_t) : 0;
-    // Saved moments only take room on the card; PSRAM just has to hold one recording
-    return ramSamples >= MAX_MOMENT_SAMPLES ? cardSamples : min(cardSamples, ramSamples);
+    return freeBytes > SD_RESERVE ? (freeBytes - SD_RESERVE) / sizeof(int16_t) : 0;
 }
 
 // Room for one recording: it's buffered in PSRAM, and has to fit on the card too
 static size_t recordableSamples() {
+    if (storageAvailable()) return (size_t)min((uint64_t)MAX_RECORDING_SECONDS * SAMPLE_RATE, samplesLeft());
     size_t ramBytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     size_t ram = ramBytes > PSRAM_RESERVE ? (ramBytes - PSRAM_RESERVE) / sizeof(int16_t) : 0;
     return (size_t)min((uint64_t)ram, samplesLeft());
@@ -190,10 +195,22 @@ static void startRecording(uint32_t seconds) {
         Serial.println("No room for another recording");
         return;
     }
-    scratch = (int16_t *)ps_malloc(recordLimit * sizeof(int16_t));
-    if (!scratch) {
-        Serial.println("Can't allocate the recording buffer");
-        return;
+    streamingRecord = storageAvailable();
+    if (streamingRecord) {
+        size_t chunks = recordLimit / CHUNK_FRAMES + 1;
+        envelopeChunks = (chunks + ENVELOPE_MAX - 1) / ENVELOPE_MAX;
+        free(envelope);
+        envelope = (uint16_t *)ps_calloc(chunks / envelopeChunks + 1, sizeof(uint16_t));
+        if (!envelope) {
+            Serial.println("Can't allocate the recording envelope");
+            return;
+        }
+    } else {
+        scratch = (int16_t *)ps_malloc(recordLimit * sizeof(int16_t));
+        if (!scratch) {
+            Serial.println("Can't allocate the recording buffer");
+            return;
+        }
     }
     scratchLength = 0;
     agcQuietChunks = agcChanges = 0;
@@ -218,8 +235,50 @@ static void analyse(Moment &moment, const int16_t *samples) {
     }
 }
 
+// Playback gain and list waveform from the envelope of a streamed recording
+static void analyseEnvelope(Moment &moment, size_t samples) {
+    size_t used = max((size_t)1, (samples / CHUNK_FRAMES + envelopeChunks - 1) / envelopeChunks);
+    int peak = 1;
+    for (size_t i = 0; i < used; i++) peak = max(peak, (int)envelope[i]);
+    moment.gain = min(MAX_PLAYBACK_GAIN, 29000.0f / peak);
+    for (int b = 0; b < WAVEFORM_BINS; b++) {
+        size_t from = used * b / WAVEFORM_BINS, to = max(from + 1, used * (b + 1) / WAVEFORM_BINS);
+        int binPeak = 0;
+        for (size_t i = from; i < to && i < used; i++) binPeak = max(binPeak, (int)envelope[i]);
+        moment.waveform[b] = (uint8_t)(255 * sqrtf((float)binPeak / peak));
+    }
+}
+
 static void finishRecording() {
     size_t length = scratchLength;
+    if (streamingRecord) {
+        state = AUDIO_SAVING;
+        uint32_t start = millis();
+        Moment moment = streamMoment;
+        analyseEnvelope(moment, length);
+        bool ok = storageStreamEnd(moment); // sets length and dataOffset
+        free(envelope);
+        envelope = nullptr;
+        streamingRecord = false;
+        if (!ok || moment.length < MIN_MOMENT_SAMPLES) {
+            if (moment.fileName[0]) storageDeleteMoment(moment);
+            state = AUDIO_IDLE;
+            Serial.println(ok ? "Recording too short, discarded" : "Recording lost: the SD card didn't take it");
+            return;
+        }
+        nextMomentNumber = moment.number + 1;
+        xSemaphoreTake(momentLock, portMAX_DELAY);
+        memmove(&moments[1], &moments[0], momentTotal * sizeof(Moment));
+        moments[0] = moment;
+        momentTotal++;
+        listVersion++;
+        xSemaphoreGive(momentLock);
+        state = AUDIO_IDLE;
+        Serial.printf("Saved Moment %d to SD card as %s/%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s\n",
+                      moment.number, moment.folder, moment.fileName, millis() - start, (float)moment.length / SAMPLE_RATE,
+                      moment.gain, gainNow, gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "");
+        return;
+    }
     if (length < MIN_MOMENT_SAMPLES) {
         free(scratch);
         scratch = nullptr;
@@ -390,7 +449,7 @@ static void handleCommand(const Command &cmd) {
         if (state == AUDIO_PLAYING) stopPlayback();
         if (state == AUDIO_IDLE) {
             audioWake();
-            startRecording(cmd.arg > 0 ? cmd.arg : MAX_MOMENT_SECONDS);
+            startRecording(cmd.arg > 0 ? cmd.arg : MAX_RECORDING_SECONDS);
         }
         break;
     case CMD_RECORD_STOP:
@@ -513,8 +572,32 @@ static void audioTask(void *) {
                 recordStartedAt = us / 1000000;
                 recordStartedMs = us / 1000 % 1000;
             }
-            for (size_t i = 0; i < n; i++) {
-                scratch[scratchLength + i] = in[2 * (skip + i)]; // ES8311 ADC is on the left slot
+            if (streamingRecord) {
+                if (scratchLength == 0 && n > 0) {
+                    streamMoment = {};
+                    streamMoment.number = nextMomentNumber;
+                    streamMoment.recordedAt = recordStartedAt;
+                    streamMoment.startMs = recordStartedMs;
+                    if (!storageStreamBegin(streamMoment)) {
+                        Serial.println("Can't record onto the SD card");
+                        streamMoment.fileName[0] = 0;
+                        finishRecording(); // discards it
+                        continue;
+                    }
+                }
+                static int16_t mono[CHUNK_FRAMES];
+                int chunkPeak = 0;
+                for (size_t i = 0; i < n; i++) {
+                    mono[i] = in[2 * (skip + i)]; // ES8311 ADC is on the left slot
+                    chunkPeak = max(chunkPeak, abs((int)mono[i]));
+                }
+                storageStreamWrite(mono, n);
+                size_t entry = scratchLength / CHUNK_FRAMES / envelopeChunks;
+                envelope[entry] = max(envelope[entry], (uint16_t)chunkPeak);
+            } else {
+                for (size_t i = 0; i < n; i++) {
+                    scratch[scratchLength + i] = in[2 * (skip + i)]; // ES8311 ADC is on the left slot
+                }
             }
             scratchLength += n;
             if (gainSetting == GAIN_AUTO) autoGain(in, skip + n, skip);

@@ -250,6 +250,105 @@ bool storageSaveMoment(Moment &moment, const int16_t *samples) {
     return true;
 }
 
+// --- Recording straight onto the card ---
+
+static const size_t RING_SAMPLES = 4 * SAMPLE_RATE; // 4 s of slack for the card's pauses
+static const size_t WRITE_SAMPLES = 12 * 1024;      // 24 KB per card write
+static int16_t *ring = nullptr;                     // PSRAM
+static int16_t *writeBuffer = nullptr;              // internal RAM, which the card driver can DMA from
+static volatile size_t ringHead = 0, ringTail = 0;  // in samples: head moved by the audio task, tail by the writer
+static File streamFile;
+static volatile bool streaming = false, drainWanted = false, streamFailed = false;
+static volatile size_t streamWritten = 0, streamDropped = 0;
+static TaskHandle_t writerTask = nullptr;
+static SemaphoreHandle_t streamDrained;
+
+static size_t ringAvailable() {
+    size_t h = ringHead, t = ringTail;
+    return h >= t ? h - t : RING_SAMPLES - t + h;
+}
+
+static void writerLoop(void *) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        bool finishing = !streaming;
+        while (streamFile && !streamFailed) {
+            size_t available = ringAvailable();
+            if (available == 0 || (available < WRITE_SAMPLES && !finishing)) break;
+            size_t n = min(available, WRITE_SAMPLES), tail = ringTail;
+            for (size_t i = 0; i < n; i++) writeBuffer[i] = ring[(tail + i) % RING_SAMPLES];
+            size_t wrote = streamFile.write((const uint8_t *)writeBuffer, n * sizeof(int16_t)) / sizeof(int16_t);
+            ringTail = (tail + wrote) % RING_SAMPLES;
+            streamWritten += wrote;
+            if (wrote < n) {
+                Serial.println("Writing to the SD card failed; the recording stops here");
+                streamFailed = true;
+            }
+        }
+        if (finishing && drainWanted && (ringAvailable() == 0 || streamFailed)) {
+            drainWanted = false;
+            xSemaphoreGive(streamDrained);
+        }
+    }
+}
+
+bool storageStreamBegin(Moment &moment) {
+    if (!mounted) return false;
+    if (!ring) ring = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
+    if (!writeBuffer) writeBuffer = (int16_t *)heap_caps_malloc(WRITE_SAMPLES * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!streamDrained) streamDrained = xSemaphoreCreateBinary();
+    if (!ring || !writeBuffer || !streamDrained) return false;
+    chooseFileName(moment);
+    char path[96];
+    momentPath(path, sizeof(path), moment);
+    streamFile = SD_MMC.open(path, FILE_WRITE);
+    if (!streamFile) {
+        Serial.printf("Can't create %s\n", path);
+        return false;
+    }
+    uint8_t blank[WAV_HEADER_BYTES] = {}; // the real header goes in at the end, once the sizes are known
+    streamFile.write(blank, sizeof(blank));
+    ringHead = ringTail = 0;
+    streamWritten = streamDropped = 0;
+    streamFailed = drainWanted = false;
+    streaming = true;
+    if (!writerTask) xTaskCreatePinnedToCore(writerLoop, "sdwriter", 4096, NULL, 2, &writerTask, 0);
+    return true;
+}
+
+size_t storageStreamWrite(const int16_t *samples, size_t n) {
+    if (!streaming) return 0;
+    size_t room = RING_SAMPLES - 1 - ringAvailable();
+    size_t take = min(n, room);
+    size_t head = ringHead;
+    for (size_t i = 0; i < take; i++) ring[(head + i) % RING_SAMPLES] = samples[i];
+    ringHead = (head + take) % RING_SAMPLES;
+    streamDropped += n - take;
+    if (writerTask) xTaskNotifyGive(writerTask);
+    return take;
+}
+
+bool storageStreamEnd(Moment &moment) {
+    if (!streaming) return false;
+    streaming = false;
+    drainWanted = true;
+    xTaskNotifyGive(writerTask);
+    if (xSemaphoreTake(streamDrained, pdMS_TO_TICKS(10000)) != pdTRUE) Serial.println("The SD card writer didn't finish in time");
+    moment.length = streamWritten;
+    moment.dataOffset = WAV_HEADER_BYTES;
+    bool ok = !streamFailed && streamWritten > 0;
+    if (ok) {
+        uint8_t header[WAV_HEADER_BYTES];
+        size_t headerSize = storageWavHeader(moment, header);
+        ok = streamFile.seek(0) && streamFile.write(header, headerSize) == headerSize;
+    }
+    size_t fileSize = streamFile.size();
+    streamFile.close();
+    freeBytes -= min((uint64_t)fileSize, freeBytes);
+    if (streamDropped) Serial.printf("The SD card fell behind: %u samples lost\n", streamDropped);
+    return ok;
+}
+
 // Walks the chunks of an open moment file, calling `found` with each chunk's
 // id, size and payload position until it returns true
 template <typename F>

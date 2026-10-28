@@ -42,6 +42,14 @@ File storageOpenMoment(const Moment &moment);   // positioned at the first sampl
 // moments held in memory as files
 size_t storageWavHeader(const Moment &moment, uint8_t *buf);
 
+// Recording straight onto the card: the audio task pushes samples into a ring
+// buffer and a writer task puts them in the file, so a recording can run for
+// hours. Begin needs the moment's time and number (for the name) and opens
+// the file; End finishes the header and sets length and dataOffset.
+bool storageStreamBegin(Moment &moment);
+size_t storageStreamWrite(const int16_t *samples, size_t n); // taken; fewer when the card falls behind
+bool storageStreamEnd(Moment &moment);                        // false if nothing usable was written
+
 uint64_t storageFreeBytes(); // estimate, kept current as moments are saved and deleted
 uint64_t storageTotalBytes();
 
