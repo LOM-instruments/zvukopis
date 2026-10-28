@@ -10,7 +10,7 @@
 #include "audio.h"
 #include "networks.h"
 
-#if __has_include("wifi_config.h")
+#if !defined(NO_WIFI_CONFIG) && __has_include("wifi_config.h")
 #include "wifi_config.h"
 #endif
 #ifndef TIME_ZONE
