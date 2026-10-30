@@ -1532,6 +1532,12 @@ static void layoutBlock(const char *start, const char *end, uint8_t kind) {
             Line probe = {0, 0, kind, 0};
             const GFXfont *font = lineFont(probe, word);
             int ww = wordWidth(font, word), space = measureWidth(font, "n") * 3 / 5;
+            // A word wider than the line (a file name, a URL) breaks where it must
+            while (ww > maxWidth && word.length > 1) {
+                word.length--;
+                ww = wordWidth(font, word);
+            }
+            len = word.length;
             if (wordTotal > lineStart && width + space + ww > maxWidth) {
                 addLine(lineStart, wordTotal - lineStart, kind);
                 lineStart = wordTotal;
