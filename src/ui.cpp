@@ -1913,6 +1913,11 @@ static void drawSleepScreen(const ViewState &v) {
     canvas->fillRect(SW - 30, py - 2, 16, 5, INK);
     canvas->fillTriangle(SW - 14, py - 8, SW - 14, py + 8, SW - 4, py, INK);
     drawTextRight(SW - 42, py + 8, &Text22, "Hold 1 s to wake", INK);
+    // ... and the rocker, beside the first row: holding it in records at once
+    const int ry = LIST_TOP + 48;
+    canvas->fillRect(14, ry - 2, 16, 5, INK);
+    canvas->fillTriangle(14, ry - 8, 14, ry + 8, 4, ry, INK);
+    drawText(42, ry + 8, &Text22, "Hold in to record", INK);
 
     // "Pauline Oliveros, Deep Listening" -> author, then the work below
     const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
@@ -2729,6 +2734,11 @@ bool uiTakeSleepRequest() {
     bool requested = sleepRequested;
     sleepRequested = false;
     return requested;
+}
+
+void uiQuickRecord() {
+    overlay = OVERLAY_NONE;
+    showScreen(SCREEN_LIST, 0);
 }
 
 void uiShowSleepScreen(bool on) {

@@ -1,6 +1,7 @@
 #include "transfer.h"
 
 #include <Arduino.h>
+#include <esp_rom_crc.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <SD_MMC.h>
@@ -174,6 +175,13 @@ button{border:1px solid #111;background:#fff;color:#111;border-radius:.4rem;padd
 input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;background:inherit;color:inherit;max-width:100%}
 .tag{font-size:.85rem;border:1px solid #888;border-radius:1rem;padding:0 .45rem;white-space:nowrap}
 .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
+.cal{margin:.6rem 0 .2rem;max-width:22rem}.cal .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem}
+.cal .head b{font-size:1.05rem}.cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal .wd{text-align:center;font-size:.75rem;color:#777;padding:.2rem 0}
+.cal .day{aspect-ratio:1;border:1px solid transparent;border-radius:.45rem;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default}
+.cal .day.has{border-color:#999;cursor:pointer}.cal .day.has small{font-size:.7rem;color:#555}.cal .day.on{background:#111;color:#fff}
+.cal .day.on small{color:#ccc}.cal .day.off{opacity:.35}
+@media (prefers-color-scheme:dark){.cal .day.on{background:#eee;color:#111}.cal .day.on small{color:#444}.cal .day.has small{color:#aaa}}
 input[type=number]{width:4.5rem}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}.tabs{border-color:#333}
 .pick input:checked+svg{color:#111;background:#eee;box-shadow:0 0 0 4px #eee}
@@ -193,6 +201,30 @@ function showTab(t){for(const n of ['live','settings']){$(n).classList.toggle('o
  const h=t==='live'?'#recording':'#settings';if(location.hash!==h)history.replaceState(null,'',h)}
 showTab(location.hash==='#settings'?'settings':location.hash==='#live'||location.hash==='#recording'?'live':firstTab);
 function del(n){if(confirm('Delete Moment '+n+'? This can\'t be undone.'))post('/delete?n='+n)}
+// Calendar of the days with moments; a day filters the list and can be downloaded on its own
+const DAYS={};for(const r of document.querySelectorAll('#moments tr[data-day]')){const d=r.dataset.day;if(/^\d{4}-\d\d-\d\d$/.test(d))DAYS[d]=(DAYS[d]||0)+1}
+let calMonth=null,calDay=null;
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function calInit(){const c=$('cal');if(!c)return;const ds=Object.keys(DAYS).sort();if(!ds.length){c.style.display='none';return}
+ let keep=null;try{keep=sessionStorage.getItem('calDay')}catch(e){}
+ calMonth=ds[ds.length-1].slice(0,7);if(keep&&DAYS[keep]){calPick(keep)}else calDraw()}
+function calMove(n){const [y,m]=calMonth.split('-').map(Number);const d=new Date(y,m-1+n,1);
+ calMonth=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');calDraw()}
+function calDraw(){const [y,m]=calMonth.split('-').map(Number);const first=new Date(y,m-1,1),days=new Date(y,m,0).getDate();
+ let h='<div class=head><button onclick=calMove(-1)>&#8249;</button><b>'+MONTHS[m-1]+' '+y+'</b><button onclick=calMove(1)>&#8250;</button></div><div class=grid>';
+ for(const w of ['Mo','Tu','We','Th','Fr','Sa','Su'])h+='<div class=wd>'+w+'</div>';
+ for(let i=0;i<(first.getDay()+6)%7;i++)h+='<div></div>';
+ for(let d=1;d<=days;d++){const k=calMonth+'-'+String(d).padStart(2,'0'),n=DAYS[k];
+  h+=n?'<button class="day has'+(k===calDay?' on':'')+'" data-k='+k+'>'+d+'<small>'+n+'</small></button>':'<div class="day off">'+d+'</div>'}
+ $('cal').innerHTML=h+'</div>';$('cal').onclick=e=>{const b=e.target.closest('.has');if(b)calPick(b.dataset.k)}}
+function calPick(k){calDay=calDay===k?null:k;try{if(calDay)sessionStorage.setItem('calDay',calDay);else sessionStorage.removeItem('calDay')}catch(e){}
+ calMonth=calDay?calDay.slice(0,7):calMonth;calDraw();
+ for(const r of document.querySelectorAll('#moments tr[data-day]'))r.style.display=!calDay||r.dataset.day===calDay?'':'none';
+ const row=$('dayrow');if(!calDay){row.style.display='none';return}
+ const [y,m,d]=calDay.split('-');const n=DAYS[calDay];
+ row.style.display='';row.innerHTML='<b>'+Number(d)+' '+MONTHS[m-1]+' '+y+'</b><span class=sub>'+n+' moment'+(n==1?'':'s')+'</span>'+
+  '<a href="/backup?day='+calDay+'" download><button>Download this day</button></a><button onclick=calPick(calDay)>Show all days</button>'}
+calInit();
 let playing=null;
 function stopped(){if(playing===null)return;$('pb-'+playing).innerHTML=PLAY;$('pb-'+playing).title='Play';
  const d=$('dur-'+playing);d.textContent=d.dataset.len;playing=null}
@@ -302,15 +334,47 @@ static void sendRecord(char *buf, size_t len) {
     server.sendContent(buf);
 }
 
+// The day a moment belongs to, as in its folder on the card: "2026-10-28",
+// or "undated" without a clock
+static void momentDay(const Moment &moment, char *buf, size_t len) {
+    if (moment.folder[0]) strlcpy(buf, moment.folder, len);
+    else if (moment.recordedAt) {
+        tm local;
+        localtime_r(&moment.recordedAt, &local);
+        strftime(buf, len, "%Y-%m-%d", &local);
+    } else strlcpy(buf, "undated", len);
+}
+
 static void sendMoments(char *buf, size_t len) {
     int count = momentCount();
-    if (count) snprintf(buf, len, "<h2>Moments (%d)</h2><audio id=player></audio><table>", count);
-    else snprintf(buf, len, "<h2>Moments</h2><audio id=player></audio><table>");
+    uint64_t bytes = 0;
+    for (int i = 0; i < count; i++) {
+        Moment moment;
+        if (momentGet(i, moment)) bytes += WAV_HEADER_BYTES + moment.length * sizeof(int16_t);
+    }
+    if (count) snprintf(buf, len, "<h2>Moments (%d)</h2>", count);
+    else snprintf(buf, len, "<h2>Moments</h2>");
     server.sendContent(buf);
+    if (count) {
+        // A calendar of the days with moments (built by the script from the
+        // rows below), and the whole lot as one ZIP
+        char size[16];
+        if (bytes >= 1000000000ull) snprintf(size, sizeof(size), "%.1f GB", bytes / 1e9);
+        else snprintf(size, sizeof(size), "%lu MB", (unsigned long)((bytes + 500000) / 1000000));
+        bool fits = bytes + (uint64_t)count * 300 < 0xFFFF0000ull; // the ZIP's own headers; ZIP64 isn't done
+        if (fits) snprintf(buf, len, "<div id=cal class=cal></div><div id=dayrow class=row style=\"display:none\"></div>"
+                                     "<div class=row><a href=\"/backup\" download><button>Download all</button></a>"
+                                     "<span class=note>Every moment as WAV files in one ZIP, about %s, in day folders</span></div>", size);
+        else snprintf(buf, len, "<div id=cal class=cal></div><div id=dayrow class=row style=\"display:none\"></div>"
+                                "<p class=note>About %s of moments: more than one ZIP can hold, so download a day at a time from the calendar.</p>", size);
+        server.sendContent(buf);
+    }
+    server.sendContent("<audio id=player></audio><table id=moments>");
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
-        char when[32] = "", name[48], tag[1024] = "";
+        char when[32] = "", name[48], tag[1024] = "", day[12];
+        momentDay(moment, day, sizeof(day));
         if (moment.recordedAt) {
             tm local;
             localtime_r(&moment.recordedAt, &local);
@@ -325,7 +389,7 @@ static void sendMoments(char *buf, size_t len) {
             snprintf(tag, sizeof(tag), " <span class=tag>%s %s</span>", iconSvg(c.icon, 14).c_str(), escaped);
         }
         snprintf(buf, len,
-                 "<tr><td class=c><button class=ic id=pb-%d title=Play onclick=togglePlay(%d)>"
+                 "<tr data-day=\"%s\"><td class=c><button class=ic id=pb-%d title=Play onclick=togglePlay(%d)>"
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M3 1.5v13l11-6.5z\"/></svg></button></td>"
                  "<td><b>Moment %d</b>%s<br><small>%s</small></td>"
                  "<td class=\"r mono\" id=dur-%d data-len=\"%d:%02d\">%d:%02d</td>"
@@ -333,7 +397,7 @@ static void sendMoments(char *buf, size_t len) {
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M7 1h2v7.2l2.6-2.6 1.4 1.4L8 12 3 7l1.4-1.4L7 8.2zM2 12h12v2H2z\"/></svg></a></td>"
                  "<td class=c><button class=ic title=Delete onclick=del(%d)>"
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M6 1h4l.5 1H14v2H2V2h3.5zM3 5h10l-.8 10H3.8z\"/></svg></button></td></tr>",
-                 moment.number, moment.number, moment.number, tag, when, moment.number, seconds / 60, seconds % 60,
+                 day, moment.number, moment.number, moment.number, tag, when, moment.number, seconds / 60, seconds % 60,
                  seconds / 60, seconds % 60, moment.number, name, moment.number);
         server.sendContent(buf);
     }
@@ -803,10 +867,12 @@ static void redirectToPage() {
 static void handleMoment();
 static void handleTime();
 static void handleDelete();
+static void handleBackup();
 
 static void addRoutes() {
     server.on("/", HTTP_GET, handleIndex);
     server.on("/moment", HTTP_GET, handleMoment);
+    server.on("/backup", HTTP_GET, handleBackup);
     server.on("/time", HTTP_POST, handleTime);
     server.on("/delete", HTTP_POST, handleDelete);
     server.on("/schedule/add", HTTP_POST, handleScheduleAdd);
@@ -873,6 +939,226 @@ static void handleMoment() {
         sent += n;
         lastRequestAt = millis();
     }
+}
+
+// --- Backup: every moment (or one day's) as WAV files in one ZIP ---
+// Stored, not compressed (WAV doesn't shrink), streamed straight from the
+// card. Each entry's CRC is known only after its data, so the local headers
+// carry a data descriptor (flag bit 3) and the central directory at the end
+// has the real numbers. ZIP64 isn't done: over 4 GB the page says to go by day.
+
+struct ZipEntry {
+    int number; // the moment's; the list may shift while the ZIP streams
+    uint32_t size, crc, offset;
+    uint16_t nameLen, dosTime, dosDate;
+};
+
+static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
+static void put32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+
+// "moments/2026-10-28/2026-10-28T14-01-47_nature.wav", padded with '_' to
+// `fixedLen` when given: the name's length was counted into Content-Length
+// and a re-tag meanwhile could have changed it
+static void zipEntryName(const Moment &moment, char *buf, size_t len, size_t fixedLen = 0) {
+    char day[12], name[48];
+    momentDay(moment, day, sizeof(day));
+    downloadName(moment, name, sizeof(name));
+    snprintf(buf, len, "moments/%s/%s", day, name);
+    if (fixedLen) {
+        size_t have = strlen(buf);
+        if (have < fixedLen && fixedLen < len) memset(buf + have, '_', fixedLen - have);
+        if (fixedLen < len) buf[fixedLen] = 0;
+    }
+}
+
+static bool sendAll(WiFiClient &client, const uint8_t *data, size_t len) {
+    for (size_t sent = 0; sent < len;) {
+        if (!client.connected()) return false;
+        size_t n = client.write(data + sent, len - sent);
+        if (n == 0) return false;
+        sent += n;
+        lastRequestAt = millis();
+    }
+    return true;
+}
+
+static void handleBackup() {
+    noteRequest();
+    String day = server.arg("day");
+    int count = momentCount();
+    ZipEntry *entries = (ZipEntry *)ps_calloc(max(count, 1), sizeof(ZipEntry));
+    if (!entries) {
+        server.send(500, "text/plain", "Out of memory");
+        return;
+    }
+    uint64_t total = 22; // end of central directory
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        Moment moment;
+        if (!momentGet(i, moment)) continue;
+        char entryDay[12], name[80];
+        momentDay(moment, entryDay, sizeof(entryDay));
+        if (day.length() && day != entryDay) continue;
+        zipEntryName(moment, name, sizeof(name));
+        ZipEntry &e = entries[n++];
+        e.number = moment.number;
+        e.nameLen = strlen(name);
+        if (moment.samples) {
+            e.size = WAV_HEADER_BYTES + moment.length * sizeof(int16_t);
+        } else {
+            File f = storageOpenMoment(moment);
+            e.size = f ? f.size() : 0;
+            f.close();
+        }
+        tm local = {};
+        if (moment.recordedAt) localtime_r(&moment.recordedAt, &local);
+        else local.tm_year = 80; // 1980, the earliest ZIP date
+        e.dosDate = ((max(local.tm_year - 80, 0)) << 9) | ((local.tm_mon + 1) << 5) | max(local.tm_mday, 1);
+        e.dosTime = (local.tm_hour << 11) | (local.tm_min << 5) | (local.tm_sec / 2);
+        total += 30 + e.nameLen + e.size + 16 + 46 + e.nameLen;
+    }
+    if (n == 0) {
+        free(entries);
+        server.send(404, "text/plain", "Nothing to download");
+        return;
+    }
+    if (total >= 0xFFFF0000ull) { // ZIP64 isn't done, and the server's length sentinels sit just below 2^32
+        free(entries);
+        server.send(413, "text/plain", "Over 4 GB, too much for one ZIP: download the days one at a time");
+        return;
+    }
+
+    char fileName[48], disposition[80];
+    if (day.length()) snprintf(fileName, sizeof(fileName), "zvukopis-%s.zip", day.c_str());
+    else {
+        time_t now = time(nullptr);
+        tm local;
+        localtime_r(&now, &local);
+        strftime(fileName, sizeof(fileName), "zvukopis-backup-%Y-%m-%d.zip", &local);
+    }
+    snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", fileName);
+    server.sendHeader("Content-Disposition", disposition);
+    server.setContentLength(total);
+    server.send(200, "application/zip", "");
+    WiFiClient client = server.client();
+    Serial.printf("[transfer] backup of %d moment%s, %llu bytes%s\n", n, n == 1 ? "" : "s", total, day.length() ? " (one day)" : "");
+
+    uint8_t *chunk = (uint8_t *)ps_malloc(SEND_CHUNK);
+    uint8_t head[46 + 80], wav[WAV_HEADER_BYTES];
+    uint32_t offset = 0;
+    bool ok = chunk != nullptr;
+    for (int k = 0; ok && k < n; k++) {
+        ZipEntry &e = entries[k];
+        Moment moment;
+        int index;
+        if (!findMoment(e.number, index, moment)) { ok = false; break; } // deleted meanwhile
+        char name[80];
+        zipEntryName(moment, name, sizeof(name), e.nameLen);
+        e.offset = offset;
+        // Local file header
+        put32(head, 0x04034b50);
+        put16(head + 4, 20);     // version needed
+        put16(head + 6, 0x0008); // data descriptor follows
+        put16(head + 8, 0);      // stored
+        put16(head + 10, e.dosTime);
+        put16(head + 12, e.dosDate);
+        put32(head + 14, 0);     // crc, sizes: in the descriptor
+        put32(head + 18, 0);
+        put32(head + 22, 0);
+        put16(head + 26, e.nameLen);
+        put16(head + 28, 0);
+        memcpy(head + 30, name, e.nameLen);
+        ok = sendAll(client, head, 30 + e.nameLen);
+        // The WAV itself, exactly e.size bytes (short reads are padded so the ZIP stays well-formed)
+        uint32_t crc = 0, sent = 0;
+        if (ok && moment.samples) {
+            size_t headerSize = min(storageWavHeader(moment, wav), (size_t)e.size);
+            crc = esp_rom_crc32_le(crc, wav, headerSize);
+            ok = sendAll(client, wav, headerSize);
+            sent = headerSize;
+            const uint8_t *data = (const uint8_t *)moment.samples;
+            size_t dataSize = moment.length * sizeof(int16_t);
+            for (size_t at = 0; ok && at < dataSize && sent < e.size; at += SEND_CHUNK) {
+                size_t len = min(min(SEND_CHUNK, dataSize - at), (size_t)(e.size - sent));
+                crc = esp_rom_crc32_le(crc, data + at, len);
+                ok = sendAll(client, data + at, len);
+                sent += len;
+            }
+        } else if (ok) {
+            File f = storageOpenMoment(moment);
+            if (f) f.seek(0);
+            while (ok && f && sent < e.size) {
+                size_t len = f.read(chunk, min(SEND_CHUNK, (size_t)(e.size - sent)));
+                if (len == 0) break;
+                crc = esp_rom_crc32_le(crc, chunk, len);
+                ok = sendAll(client, chunk, len);
+                sent += len;
+            }
+            if (f) f.close();
+        }
+        if (ok && sent < e.size) {
+            memset(chunk, 0, SEND_CHUNK);
+            Serial.printf("[transfer] %s came up %lu bytes short\n", name, (unsigned long)(e.size - sent));
+            while (ok && sent < e.size) {
+                size_t len = min(SEND_CHUNK, (size_t)(e.size - sent));
+                crc = esp_rom_crc32_le(crc, chunk, len);
+                ok = sendAll(client, chunk, len);
+                sent += len;
+            }
+        }
+        e.crc = crc;
+        // Data descriptor
+        put32(head, 0x08074b50);
+        put32(head + 4, crc);
+        put32(head + 8, e.size);
+        put32(head + 12, e.size);
+        if (ok) ok = sendAll(client, head, 16);
+        offset += 30 + e.nameLen + e.size + 16;
+    }
+    // Central directory
+    uint32_t centralStart = offset, centralSize = 0;
+    for (int k = 0; ok && k < n; k++) {
+        ZipEntry &e = entries[k];
+        Moment moment;
+        int index;
+        char name[80];
+        memset(name, '_', sizeof(name));
+        if (findMoment(e.number, index, moment)) zipEntryName(moment, name, sizeof(name), e.nameLen);
+        put32(head, 0x02014b50);
+        put16(head + 4, 20);
+        put16(head + 6, 20);
+        put16(head + 8, 0x0008);
+        put16(head + 10, 0);
+        put16(head + 12, e.dosTime);
+        put16(head + 14, e.dosDate);
+        put32(head + 16, e.crc);
+        put32(head + 20, e.size);
+        put32(head + 24, e.size);
+        put16(head + 28, e.nameLen);
+        put16(head + 30, 0); // extra
+        put16(head + 32, 0); // comment
+        put16(head + 34, 0); // disk
+        put16(head + 36, 0); // internal attributes
+        put32(head + 38, 0); // external attributes
+        put32(head + 42, e.offset);
+        memcpy(head + 46, name, e.nameLen);
+        ok = sendAll(client, head, 46 + e.nameLen);
+        centralSize += 46 + e.nameLen;
+    }
+    if (ok) {
+        put32(head, 0x06054b50);
+        put16(head + 4, 0);
+        put16(head + 6, 0);
+        put16(head + 8, n);
+        put16(head + 10, n);
+        put32(head + 12, centralSize);
+        put32(head + 16, centralStart);
+        put16(head + 20, 0);
+        ok = sendAll(client, head, 22);
+    }
+    if (!ok) Serial.println("[transfer] backup cut off");
+    free(chunk);
+    free(entries);
 }
 
 static void handleTime() {

@@ -22,3 +22,4 @@ uint32_t uiMsUntilNextChange(); // until the screen next changes on its own (clo
 // Off: wakes the panel and redraws, in the background.
 void uiShowSleepScreen(bool on);
 bool uiCanRecord(); // not while the SD card is open as a USB drive
+void uiQuickRecord(); // woken by a hold of the rocker: show the recording on the main screen

@@ -50,6 +50,7 @@ static const float SCRUB_STEP = 0.05f; // per chunk: 0.16 s from +0.25 to -0.25
 enum CommandType : uint8_t {
     CMD_RECORD_START,
     CMD_RECORD_STOP,
+    CMD_RECORD_CANCEL,
     CMD_PLAY,
     CMD_STOP_PLAYBACK,
     CMD_DELETE,
@@ -199,6 +200,8 @@ static void startRecording(uint32_t seconds) {
         return;
     }
     streamingRecord = storageAvailable();
+    streamMoment = {}; // the previous recording's file name must not linger: a stop before the
+                       // first sample arrives would otherwise delete that file
     if (streamingRecord) {
         size_t chunks = recordLimit / CHUNK_FRAMES + 1;
         envelopeChunks = (chunks + ENVELOPE_MAX - 1) / ENVELOPE_MAX;
@@ -252,8 +255,11 @@ static void analyseEnvelope(Moment &moment, size_t samples) {
     }
 }
 
+static bool cancelWanted = false; // discard what was recorded
+
 static void finishRecording() {
     size_t length = scratchLength;
+    if (cancelWanted) length = 0; // too short to keep, below
     if (streamingRecord) {
         state = AUDIO_SAVING;
         uint32_t start = millis();
@@ -263,10 +269,10 @@ static void finishRecording() {
         free(envelope);
         envelope = nullptr;
         streamingRecord = false;
-        if (!ok || moment.length < MIN_MOMENT_SAMPLES) {
+        if (!ok || moment.length < MIN_MOMENT_SAMPLES || cancelWanted) {
             if (moment.fileName[0]) storageDeleteMoment(moment);
             state = AUDIO_IDLE;
-            Serial.println(ok ? "Recording too short, discarded" : "Recording lost: the SD card didn't take it");
+            Serial.println(cancelWanted ? "Recording cancelled" : ok ? "Recording too short, discarded" : "Recording lost: the SD card didn't take it");
             return;
         }
         nextMomentNumber = moment.number + 1;
@@ -457,6 +463,13 @@ static void handleCommand(const Command &cmd) {
         break;
     case CMD_RECORD_STOP:
         if (state == AUDIO_RECORDING) finishRecording();
+        break;
+    case CMD_RECORD_CANCEL:
+        if (state == AUDIO_RECORDING) {
+            cancelWanted = true;
+            finishRecording();
+            cancelWanted = false;
+        }
         break;
     case CMD_PLAY:
         if (state == AUDIO_PLAYING) stopPlayback();
@@ -730,6 +743,7 @@ static void sendCommand(CommandType type, int arg = 0, int arg2 = 0) {
 
 void audioStartRecording(uint32_t seconds) { sendCommand(CMD_RECORD_START, seconds); }
 void audioStopRecording() { sendCommand(CMD_RECORD_STOP); }
+void audioCancelRecording() { sendCommand(CMD_RECORD_CANCEL); }
 void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
 void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
 void audioDelete(int index) { sendCommand(CMD_DELETE, index); }

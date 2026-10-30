@@ -25,3 +25,6 @@ void buttonsPause(bool paused);
 // No key or PWR held and nothing queued, so light sleep won't drop a press
 bool buttonsIdle();
 void buttonsWakeup(bool enable); // a press wakes the chip from light sleep
+// The rocker's press-in alone, for the sleep code: quick record
+void buttonsClickWakeup(bool enable);
+bool buttonsClickHeld();

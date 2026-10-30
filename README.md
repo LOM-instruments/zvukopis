@@ -25,6 +25,10 @@ small library: Markdown or text files on the card can be read on the screen.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader and formatting the card.
+- **Quick record:** while asleep, hold the side switch in. Recording starts
+  the moment it's pressed (a short knock is dropped again) and the screen stays
+  as it is, so no refresh noise gets into the sound; press in again, or the
+  sleep button, to stop, and the device wakes with the new moment on the list.
 - **Sleep and wake:** hold the sleep button (PWR on the board) for 1 second.
   Holding it for 10 seconds restarts
   the device. It also goes to sleep by itself after 5 minutes, and wakes for
@@ -38,9 +42,12 @@ scan it with a phone camera to join, and the page opens by itself so you can
 save your Wi-Fi network. From then on it joins that network and is at
 `http://zvukopis.local` (or the address shown on the screen).
 
-The page has a *Recording* tab (record and stop, mic gain, the moments with
-playback, download and delete) and a *Settings* tab (scheduled recordings,
-categories, time and time zone, library, Wi-Fi networks).
+The page has a *Recording* tab (record and stop, mic gain, a calendar of the
+days with moments, the moments with playback, download and delete) and a
+*Settings* tab (scheduled recordings, categories, time and time zone, library,
+Wi-Fi networks). *Download all* saves every moment as one ZIP of WAV files in
+day folders (a backup); a day picked in the calendar can be downloaded on its
+own. ZIPs stay under 4 GB, so a bigger collection goes day by day.
 
 ### Library
 

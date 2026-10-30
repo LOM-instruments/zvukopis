@@ -17,7 +17,8 @@
 #include "ui.h"
 
 // How often the chip checks the PWR key while "asleep" on USB power
-static const uint32_t USB_POLL_MS = 200;
+static const uint32_t USB_POLL_MS = 50;
+static const uint32_t QUICK_RECORD_HOLD_MS = 800; // the rocker held in while asleep: record
 // Plenty for this app (16 kHz audio, a 1 bpp screen); 240 MHz draws more for nothing
 static const uint32_t CPU_MHZ = 80;
 static const uint32_t MIN_NAP_MS = 20; // shorter naps aren't worth the wake-up
@@ -146,7 +147,58 @@ static void printPowerStats() {
 // power isn't scarce then. A 'p' over serial also wakes it in that case.
 static const uint32_t SLEEP_RECHECK_MS = 60 * 1000;
 
-enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE };
+enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE, WAKE_QUICK_RECORD };
+
+// The rocker was pressed in while asleep. Recording starts at once, so the
+// moment isn't missed; a release before the hold time was a knock, and the
+// recording is dropped again.
+static uint32_t fakeClickUntil = 0; // serial 'q'/'Q' while asleep: pretend the rocker is held
+static bool clickHeld() {
+    if (fakeClickUntil && (int32_t)(fakeClickUntil - millis()) <= 0) fakeClickUntil = 0;
+    return buttonsClickHeld() || fakeClickUntil != 0;
+}
+
+// A quick recording runs with the screen left as it is: a panel refresh
+// couples into the microphone (about half a second of static), and the point
+// is to catch the moment cleanly. Pressing the rocker in again, or PWR, stops
+// it; then the device wakes up as usual, with the new moment on the list.
+static void quickRecordWhileAsleep() {
+    Serial.println("[sleep] quick record: recording until the rocker or PWR is pressed");
+    while (clickHeld()) delay(10); // the hold that started it
+    for (;;) {
+        AudioState a = audioState();
+        if (a != AUDIO_RECORDING) break; // hit the limit, or couldn't start
+        if (clickHeld() || powerKeyPressed()) {
+            audioStopRecording();
+            break;
+        }
+        if (usbPowered()) {
+            while (Serial.available()) {
+                int c = Serial.read();
+                if (c == 'c' || c == 'p' || c == 'r') audioStopRecording();
+            }
+        }
+        delay(10);
+    }
+    uint32_t start = millis();
+    while (audioState() == AUDIO_SAVING && millis() - start < 15000) delay(20);
+    while (clickHeld()) delay(10);
+}
+
+static bool quickPressHeld() {
+    uint32_t pressed = millis();
+    audioStartRecording();
+    while (clickHeld()) {
+        if (millis() - pressed >= QUICK_RECORD_HOLD_MS) {
+            Serial.println("[sleep] rocker held: quick record");
+            return true;
+        }
+        delay(10);
+    }
+    audioCancelRecording();
+    audioSuspend(); // back to the codec being off, as light sleep needs
+    return false;
+}
 
 static Wake sleepUntilWake() {
     if (usbPowered()) {
@@ -154,16 +206,20 @@ static Wake sleepUntilWake() {
         for (;;) {
             delay(USB_POLL_MS);
             if (powerKeyPressed()) return WAKE_KEY;
+            if (clickHeld() && quickPressHeld()) return WAKE_QUICK_RECORD;
             while (Serial.available()) {
                 int c = Serial.read();
                 if (c == 'p') return WAKE_KEY;
                 if (c == 's') uiRequestScreenshot(); // of the sleep screen
+                if (c == 'q') fakeClickUntil = millis() + 1500; // a hold: quick record
+                if (c == 'Q') fakeClickUntil = millis() + 300;  // a tap: dropped
             }
             if (msUntilSchedule() == 0) return WAKE_SCHEDULE;
             if (!usbPowered()) return WAKE_POWER_SOURCE; // unplugged: continue in light sleep
         }
     }
     powerKeyWakeup(true);
+    buttonsClickWakeup(true);
     uint32_t start = millis();
     Wake wake;
     for (;;) {
@@ -178,12 +234,20 @@ static Wake sleepUntilWake() {
             wake = WAKE_KEY;
             break;
         }
+        if (buttonsClickHeld()) {
+            if (quickPressHeld()) {
+                wake = WAKE_QUICK_RECORD;
+                break;
+            }
+            continue;
+        }
         if (usbPowered()) {
             wake = WAKE_POWER_SOURCE;
             break;
         }
     }
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    buttonsClickWakeup(false);
     powerKeyWakeup(false);
     sleepTotalMs += millis() - start;
     lastUpMs = millis();
@@ -223,16 +287,25 @@ static void goToSleep() {
     Serial.flush();
 
     powerKeyPressed(); // drop a press made while the sleep screen was drawn
+    bool quickRecord = false;
     for (;;) {
         Wake wake = sleepUntilWake();
         if (wake == WAKE_KEY) break;
+        if (wake == WAKE_QUICK_RECORD) {
+            quickRecord = true;
+            break;
+        }
         if (wake == WAKE_SCHEDULE && recordWhileAsleep()) break;
         if (wake == WAKE_POWER_SOURCE) Serial.printf("[sleep] now on %s\n", usbPowered() ? "USB" : "battery");
     }
 
+    if (quickRecord) {
+        quickRecordWhileAsleep();
+        uiQuickRecord(); // the main screen, with the new moment under New recording
+    }
     Serial.println("[sleep] woke up");
     uiShowSleepScreen(false);
-    buttonsPause(false);
+    buttonsPause(false); // the rocker still held from the wake-up press is not a click
     clockPauseSync(false);
 }
 
@@ -285,7 +358,7 @@ void setup() {
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "
                    "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, f = list the card's files, "
-                   "P = power stats, z = 3 s light sleep test (drops USB)");
+                   "P = power stats, z = 3 s light sleep test (drops USB); while asleep: q/Q = rocker held 1.5 s / tapped");
 }
 
 void loop() {

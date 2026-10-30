@@ -47,6 +47,8 @@ static int updateKey(Key &key) {
     return -1;
 }
 
+static volatile bool adoptHeld = false; // keys down when polling resumes count as already handled
+
 static void buttonTask(void *) {
     Key boot = {BOOT_PIN}, up = {UP_PIN}, click = {CLICK_PIN}, down = {DOWN_PIN};
     int polls = 0;
@@ -55,6 +57,19 @@ static void buttonTask(void *) {
         if (paused) {
             vTaskDelay(pdMS_TO_TICKS(POLL_MS));
             continue;
+        }
+        if (adoptHeld) {
+            // A key still held from before the pause (the press that woke the
+            // device) gives no press, long press or click; only its release
+            for (Key *key : {&boot, &up, &click, &down}) {
+                if (digitalRead(key->pin) == LOW) {
+                    key->down = true;
+                    key->held = true;
+                    key->pressedAt = millis();
+                    key->disagreeing = 0;
+                }
+            }
+            adoptHeld = false;
         }
         int upChange = updateKey(up), downChange = updateKey(down);
         if (upChange) buttonsInject(upChange == 1 ? BTN_UP : BTN_UP_RELEASE);
@@ -107,8 +122,22 @@ void buttonsWakeup(bool enable) {
     if (enable) esp_sleep_enable_gpio_wakeup();
 }
 
+void buttonsClickWakeup(bool enable) {
+    if (enable) {
+        gpio_wakeup_enable((gpio_num_t)CLICK_PIN, GPIO_INTR_LOW_LEVEL);
+        esp_sleep_enable_gpio_wakeup();
+    } else {
+        gpio_wakeup_disable((gpio_num_t)CLICK_PIN);
+    }
+}
+
+bool buttonsClickHeld() { return digitalRead(CLICK_PIN) == LOW; }
+
 void buttonsPause(bool pause) {
-    if (!pause) xQueueReset(eventQueue);
+    if (!pause) {
+        xQueueReset(eventQueue);
+        adoptHeld = true;
+    }
     paused = pause;
     if (pause) vTaskDelay(pdMS_TO_TICKS(2 * POLL_MS)); // let a poll in progress finish
 }

@@ -54,6 +54,7 @@ bool audioInit();
 // Requests, carried out by the audio task within ~16 ms
 void audioStartRecording(uint32_t seconds = MAX_RECORDING_SECONDS); // until stopped, or what fits
 void audioStopRecording();
+void audioCancelRecording(); // stops and discards it
 void audioPlay(int index);
 void audioStopPlayback();
 void audioDelete(int index);
