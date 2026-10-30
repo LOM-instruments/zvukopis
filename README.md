@@ -77,14 +77,6 @@ Cards over 32 GB come formatted as exFAT, which the firmware can't read; it
 offers to format such a card (FAT32) in Settings, and the USB card reader
 also works with it, so you can format it from a computer instead.
 
-## Measuring the microphone
-
-[docs/measuring.md](docs/measuring.md) is the protocol: a calibrator tone,
-the room's silence and a reference microphone give sensitivity, THD, the
-noise floor and equivalent input noise, and the frequency response, through
-`scripts/measure_mic.py`. The `measure96k` build samples at 96 kHz for a
-look above 20 kHz.
-
 ## Flashing
 
 **Without any tools:** open the project page,
