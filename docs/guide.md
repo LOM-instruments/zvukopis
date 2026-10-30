@@ -87,7 +87,7 @@ Moments are ordinary WAV files (48 kHz, mono, 16-bit) in a folder per day:
 
 The time uses dashes, because FAT names cannot hold colons, and the tag goes at the end. Each file carries a Broadcast Wave timecode of when it started, so an audio editor can place it on the timeline at the right time of day.
 
-**USB card reader.** With the USB cable in a computer, Settings > *USB card reader* turns zvukopis into a card reader: the card appears on the computer, and you can copy moments off or documents on. Press the side switch in to finish; if the computer does not see zvukopis again afterwards, unplug the cable and plug it back in.
+**USB card reader.** With the USB cable in a computer, Settings > *USB card reader* turns zvukopis into a card reader: the card appears on the computer, and you can copy moments off or documents on. Eject the drive on the computer when you are done and zvukopis restarts into its main screen by itself (pressing the side switch in does the same).
 
 **Formatting.** Cards over 32 GB come formatted as exFAT, which zvukopis cannot read. It says so and offers Settings > *Format SD card*, which makes it FAT32. Formatting erases the card.
 

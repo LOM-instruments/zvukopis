@@ -1714,14 +1714,14 @@ static void drawCardReader(const ViewState &v) {
     iconSdCard(cx + 24, 260, 3);
     if (v.cardEjected) {
         drawTextCentered(cx, 380, &Bold32, "Ejected", INK);
-        drawTextCentered(cx, 418, &Text22, "Safe to leave", INK);
+        drawTextCentered(cx, 418, &Text22, "Back to the moments in a moment", INK);
     } else {
         drawTextCentered(cx, 380, &Bold32, "Connected", INK);
         drawTextCentered(cx, 418, &Text22, "Eject the drive on the computer", INK);
         drawTextCentered(cx, 446, &Text22, "before leaving", INK);
     }
-    drawTextCentered(cx, 520, &Text17, "Leaving restarts zvukopis, which reads", INK);
-    drawTextCentered(cx, 542, &Text17, "the card's moments again", INK);
+    drawTextCentered(cx, 520, &Text17, "Ejecting (or pressing in) restarts zvukopis,", INK);
+    drawTextCentered(cx, 542, &Text17, "which reads the card's moments again", INK);
 }
 
 // Drawn once when recording starts and left alone until it stops: the panel's
@@ -2650,6 +2650,13 @@ void uiTick() {
     lastMomentCount = count;
     if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
     if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty
+    // Ejected on the computer: back to the main screen by itself (a restart),
+    // once the screen has had a moment to say so
+    static uint32_t ejectedAt = 0;
+    if (screen == SCREEN_CARD_READER && cardReaderEjected()) {
+        if (!ejectedAt) ejectedAt = millis();
+        else if (millis() - ejectedAt > 1500) cardReaderLeave();
+    } else ejectedAt = 0;
     if (screen == SCREEN_LIBRARY && selected >= libraryCount()) selected = libraryCount() - 1;   // after an upload or delete on the web
     static uint32_t spectrumCheckedVersion = UINT32_MAX;
     if (screen == SCREEN_SPECTRUM && momentListVersion() != spectrumCheckedVersion) {
