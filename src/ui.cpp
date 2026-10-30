@@ -748,7 +748,10 @@ static void drawSubHeader(const ViewState &v, const char *title, const char *sub
     drawText(x, TITLE_BASELINE, &Bold22, title, INK);
     drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     if (subtitle) drawText(MARGIN, SECOND_BASELINE, &Text22, subtitle, INK);
-    drawDateTime(v);
+    // The clock shares the line with the subtitle; a long subtitle wins
+    char clock[24];
+    formatDateTime(clock, sizeof(clock), v);
+    if (!subtitle || textWidth(&Text22, subtitle) + 16 + textWidth(STATUS_FONT, clock) <= SW - 2 * MARGIN) drawDateTime(v);
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
@@ -1709,7 +1712,7 @@ static void drawReader(const ViewState &v) {
 }
 
 static void drawCardReader(const ViewState &v) {
-    drawSubHeader(v, "USB card reader", "The SD card is open on the computer", false);
+    drawSubHeader(v, "USB card reader", "Open on the computer", false);
     int cx = SW / 2;
     iconSdCard(cx + 24, 260, 3);
     if (v.cardEjected) {
