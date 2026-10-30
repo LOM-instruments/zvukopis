@@ -19,7 +19,8 @@ is also on the project page, and it reads on the device (a copy sits in
 - **Record:** press the side switch in on *New recording*. Press again to stop.
   With an SD card in, a recording can run for up to 6 hours.
 - **Listen:** move to a moment and press in. Holding up or down while it plays
-  changes the speed, like a tape reel.
+  changes the speed, like a tape reel; the top speed and the ramp are in
+  Settings > Varispeed.
 - **Tag, analyse, delete:** hold the switch in on a moment.
 - **Calendar:** up from *New recording*, then press in.
 - **Library:** the book button next to the calendar, shown once the card has
@@ -51,8 +52,8 @@ save your Wi-Fi network. From then on it joins that network and is at
 
 The page has a *Recording* tab (record and stop, mic gain, a calendar of the
 days with moments, the moments with playback, download and delete) and a
-*Settings* tab (scheduled recordings, categories, time and time zone, library,
-Wi-Fi networks). *Download all* saves every moment as one ZIP of WAV files in
+*Settings* tab (scheduled recordings, categories, varispeed, time and time
+zone, library, Wi-Fi networks). *Download all* saves every moment as one ZIP of WAV files in
 day folders (a backup); a day picked in the calendar can be downloaded on its
 own. ZIPs stay under 4 GB, so a bigger collection goes day by day.
 

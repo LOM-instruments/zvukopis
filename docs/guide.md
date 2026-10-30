@@ -36,7 +36,7 @@ Asleep in your pocket and something is happening? Hold the side switch in. The r
 
 Move to a moment and press in. It plays through the small speaker, and a playhead runs along the waveform. Press in again to stop.
 
-While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal. Three times, forwards or backwards, is as far as it goes.
+While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal. How far it goes (two to six times) and how quickly is *Varispeed* in Settings, on the device or on the web interface.
 
 ## What else you can do with a moment
 
@@ -75,7 +75,7 @@ The page has two tabs.
 
 **Recording.** A big Record button, a length to stop after, mic gain. Below it the calendar of days with moments and the moments themselves, each with play, download and delete. *Download all* saves every moment as WAV files in one ZIP, in a folder per day, which is the way to back zvukopis up; a day chosen in the calendar can be downloaded on its own.
 
-**Settings.** Scheduled recordings (a date, a time and a length; zvukopis wakes up for them), the five tags with their names and icons, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
+**Settings.** Scheduled recordings (a date, a time and a length; zvukopis wakes up for them), the five tags with their names and icons, varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
 
 The web interface stays on until you leave the screen on the device. Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
 
@@ -94,6 +94,7 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 ## Settings, in order
 
 - **Mic gain.** Auto, or a fixed value.
+- **Varispeed.** The top speed and the ramp.
 - **Scheduled recordings.** The list of what is planned; they are set up on the web interface.
 - **Web interface.** On your Wi-Fi.
 - **Web interface on own hotspot.** zvukopis makes its own network.

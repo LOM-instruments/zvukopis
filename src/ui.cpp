@@ -75,6 +75,7 @@ enum Overlay {
     OVERLAY_CONFIRM_FORMAT, // Cancel / Format
     OVERLAY_GAIN,           // mic gain choices
     OVERLAY_VIEW,           // analysis: spectrogram, spectrum, or back
+    OVERLAY_VARISPEED,      // top speed and ramp
     OVERLAY_CONFIRM_UNSCHEDULE, // Cancel / Remove a scheduled recording
 };
 
@@ -83,7 +84,7 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
-enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
@@ -261,6 +262,7 @@ struct ViewState {
     uint32_t transferRequests;
     int cardEjected;
     int gainSetting;
+    int varispeedMax, varispeedRamp;
     int gainNow;
     uint32_t configVersion; // categories or schedule edited on the web interface
     int scheduleCount;
@@ -320,6 +322,8 @@ static ViewState currentView() {
     v.transferRequests = transfer.requests;
     v.cardEjected = screen == SCREEN_CARD_READER && cardReaderEjected();
     v.gainSetting = audioMicGainSetting();
+    v.varispeedMax = audioVarispeedMax();
+    v.varispeedRamp = audioVarispeedRamp();
     v.gainNow = audioMicGain();
     v.configVersion = configVersion();
     Schedule next;
@@ -1060,6 +1064,10 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         if (v.gainSetting == GAIN_AUTO) snprintf(detail, len, "Auto, now %d dB", v.gainNow);
         else snprintf(detail, len, "%d dB", v.gainSetting);
         break;
+    case SET_VARISPEED:
+        title = "Varispeed";
+        snprintf(detail, len, "Up to %dx, %s ramp", v.varispeedMax, varispeedRampName(v.varispeedRamp));
+        break;
     case SET_SCHEDULE:
         title = "Scheduled recordings";
         if (v.nextScheduleMinute >= 0) {
@@ -1109,8 +1117,8 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
 }
 
 static void drawSettings(const ViewState &v) {
-    drawSubHeader(v, "Settings", nullptr);
-    const int rowH = 62;
+    drawSubHeader(v, "Settings", FIRMWARE_VERSION); // the firmware's version, with the date and time at the right
+    const int rowH = 60;
     for (int r = 0; r < SET_ROWS; r++) {
         int y = LIST_TOP + r * rowH;
         bool isSelected = r == v.selected;
@@ -1121,13 +1129,12 @@ static void drawSettings(const ViewState &v) {
         char detail[48];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
-        drawText(MARGIN, y + 28, enabled ? &Bold22 : &Text22, title, fg);
-        drawText(MARGIN, y + 50, &Text17, detail, fg);
+        drawText(MARGIN, y + 27, enabled ? &Bold22 : &Text22, title, fg);
+        drawText(MARGIN, y + 48, &Text17, detail, fg);
     }
 
-    // Card and memory, and the firmware's version
-    int y = LIST_TOP + SET_ROWS * rowH + 34;
-    drawText(MARGIN, y + 26, &Text17, "zvukopis firmware " FIRMWARE_VERSION, INK);
+    // Card and memory
+    int y = LIST_TOP + SET_ROWS * rowH + 30;
     char buf[64], total[16], free[16];
     if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
@@ -1897,6 +1904,40 @@ static void drawGainPicker(const ViewState &v) {
     }
 }
 
+// Varispeed: the top speed, then the ramp; both are set in the same dialog,
+// which stays open until it's left (hold in, or the Settings button)
+static const int VARISPEED_ITEMS = VARISPEED_MAX_CHOICE_COUNT + RAMP_COUNT;
+
+static void drawVarispeedPicker(const ViewState &v) {
+    shadeBehindDialog();
+    const int itemH = 40, y = 150, h = 70 + VARISPEED_ITEMS * itemH + 30;
+    const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
+    dialogBox(y, h);
+    drawText(x + 24, y + 44, &Bold32, "Varispeed", INK);
+    for (int i = 0; i < VARISPEED_ITEMS; i++) {
+        bool isRamp = i >= VARISPEED_MAX_CHOICE_COUNT;
+        int iy = y + 62 + i * itemH + (isRamp ? 18 : 0);
+        bool chosen = i == v.overlayChoice;
+        uint16_t fg = chosen ? PAPER : INK;
+        if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
+        char label[48];
+        bool current;
+        if (!isRamp) {
+            int top = VARISPEED_MAX_CHOICES[i];
+            snprintf(label, sizeof(label), "Up to %dx%s", top, top == 2 ? "  (tape-like)" : top == 6 ? "  (wild)" : "");
+            current = top == v.varispeedMax;
+        } else {
+            int ramp = i - VARISPEED_MAX_CHOICE_COUNT;
+            const char *name = varispeedRampName(ramp);
+            snprintf(label, sizeof(label), "%c%s ramp", toupper((uint8_t)name[0]), name + 1);
+            current = ramp == v.varispeedRamp;
+        }
+        if (i == VARISPEED_MAX_CHOICE_COUNT) dottedLine(x + 24, x + w - 24, iy - 10);
+        drawText(x + 56, iy + 26, &Text22, label, fg);
+        if (current) canvas->fillCircle(x + 34, iy + 18, 5, fg);
+    }
+}
+
 // Analysis: which view, or back to the list
 static const char *const VIEW_CHOICES[] = {"Spectrogram", "Spectrum (FFT)", "Back to the moments"};
 static const int VIEW_CHOICE_COUNT = 3;
@@ -2078,6 +2119,8 @@ static void drawFooter(const ViewState &v) {
             press = "Use";
         } else if (v.overlay == OVERLAY_VIEW) {
             press = v.overlayChoice == VIEW_CHOICE_COUNT - 1 ? "Back" : "Show";
+        } else if (v.overlay == OVERLAY_VARISPEED) {
+            press = "Use";
         } else if (v.overlayChoice == 0) {
             press = "Cancel";
         } else {
@@ -2085,7 +2128,7 @@ static void drawFooter(const ViewState &v) {
         }
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, press};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: cancel"};
+        rocker[nr++] = {HINT_HOLD_CLICK, v.overlay == OVERLAY_VARISPEED ? "Hold: done" : "Hold: cancel"};
         menuKeys = false; // the Settings button still closes it; the hold hint already says how to leave
     } else if (v.screen == SCREEN_TRANSFER) {
         rocker[nr++] = {HINT_CLICK, "Stop the web interface"};
@@ -2094,7 +2137,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2203,6 +2246,7 @@ static void render(const ViewState &v) {
         case OVERLAY_CONFIRM_FORMAT: drawFormatDialog(v); break;
         case OVERLAY_GAIN: drawGainPicker(v); break;
         case OVERLAY_VIEW: drawViewPicker(v); break;
+        case OVERLAY_VARISPEED: drawVarispeedPicker(v); break;
         case OVERLAY_CONFIRM_UNSCHEDULE: drawUnscheduleDialog(v); break;
         }
     }
@@ -2359,7 +2403,8 @@ static void openMenu(int index) {
 }
 
 static void handleOverlay(ButtonEvent event) {
-    int choices = overlay == OVERLAY_MENU ? MENU_ITEMS : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : overlay == OVERLAY_VIEW ? VIEW_CHOICE_COUNT : 2;
+    int choices = overlay == OVERLAY_MENU ? MENU_ITEMS : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : overlay == OVERLAY_VIEW ? VIEW_CHOICE_COUNT
+                : overlay == OVERLAY_VARISPEED ? VARISPEED_ITEMS : 2;
     switch (event) {
     case BTN_UP:
         overlayChoice = (overlayChoice + choices - 1) % choices;
@@ -2399,6 +2444,11 @@ static void handleOverlay(ButtonEvent event) {
         } else if (overlay == OVERLAY_GAIN) {
             audioSetMicGain(GAIN_CHOICES[overlayChoice]);
             overlay = OVERLAY_NONE;
+        } else if (overlay == OVERLAY_VARISPEED) {
+            // Sets one of the two and stays open for the other
+            if (overlayChoice < VARISPEED_MAX_CHOICE_COUNT) audioSetVarispeed(VARISPEED_MAX_CHOICES[overlayChoice], -1);
+            else audioSetVarispeed(-1, overlayChoice - VARISPEED_MAX_CHOICE_COUNT);
+            overlaySince = millis();
         } else if (overlay == OVERLAY_VIEW) {
             overlay = OVERLAY_NONE;
             if (overlayChoice == VIEW_CHOICE_COUNT - 1) {
@@ -2626,6 +2676,14 @@ static void handleSettings(ButtonEvent event) {
         case SET_SCHEDULE:
             openSchedule(SCREEN_SETTINGS);
             break;
+        case SET_VARISPEED: {
+            int current = 0;
+            for (int i = 0; i < VARISPEED_MAX_CHOICE_COUNT; i++) {
+                if (VARISPEED_MAX_CHOICES[i] == audioVarispeedMax()) current = i;
+            }
+            openOverlay(OVERLAY_VARISPEED, current);
+            break;
+        }
         case SET_GAIN: {
             int current = 0;
             for (int i = 0; i < GAIN_CHOICE_COUNT; i++) {
@@ -2779,7 +2837,7 @@ void uiTick() {
     }
 
     if (overlay != OVERLAY_NONE) {
-        uint32_t timeout = overlay == OVERLAY_MENU ? MENU_TIMEOUT_MS : CONFIRM_TIMEOUT_MS;
+        uint32_t timeout = overlay == OVERLAY_MENU || overlay == OVERLAY_VARISPEED ? MENU_TIMEOUT_MS : CONFIRM_TIMEOUT_MS;
         if (millis() - overlaySince > timeout) overlay = OVERLAY_NONE;
         bool aboutMoment = overlay == OVERLAY_MENU || overlay == OVERLAY_CONFIRM_DELETE;
         if (aboutMoment && momentIndexByNumber(menuMoment) < 0) overlay = OVERLAY_NONE; // deleted meanwhile

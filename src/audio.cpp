@@ -40,13 +40,16 @@ static const uint32_t STANDBY_AFTER_MS = 2000;               // idle time before
 // Varispeed, per 16 ms chunk: holding a key multiplies or divides the speed by
 // SPEED_STEP (so it keeps accelerating, like a tape reel), and on release it
 // eases back to normal
-static const float SPEED_STEP = 1.04f;   // 2x after ~0.3 s held, 3x after ~0.45 s; 1x to -3x in ~1.9 s
-static const float SPEED_RETURN = 0.85f; // fraction of the distance to 1x left after each chunk (~0.1 s)
-static const float MAX_SPEED = 3.0f;
+// Settings (Settings > Varispeed, or the web interface): the top speed and the
+// ramp, which picks a column below
+static volatile int maxSpeedSetting = 3;
+static volatile int rampSetting = RAMP_NORMAL;
+static const float SPEED_STEP[RAMP_COUNT] = {1.02f, 1.04f, 1.08f};   // normal: 2x after ~0.3 s held, 3x after ~0.45 s
+static const float SPEED_RETURN[RAMP_COUNT] = {0.92f, 0.85f, 0.75f}; // fraction of the distance to 1x left after each chunk
 // Below this the speed stops shrinking by steps and slides straight through
-// zero: the tape stops, then runs backwards (and on up to -3x while held)
+// zero: the tape stops, then runs backwards (and on up to the top speed while held)
 static const float SCRUB_SPEED = 0.25f;
-static const float SCRUB_STEP = 0.05f; // per chunk: 0.16 s from +0.25 to -0.25
+static const float SCRUB_STEP[RAMP_COUNT] = {0.03f, 0.05f, 0.09f}; // per chunk: normal is 0.16 s from +0.25 to -0.25
 
 enum CommandType : uint8_t {
     CMD_RECORD_START,
@@ -542,12 +545,14 @@ static void updateSpeed() {
         // Towards the held direction: by steps away from zero, straight through
         // zero inside the scrub band, like a reel slowed to a stop and turned
         float towards = direction > 0 ? 1 : -1;
-        if (s * towards >= SCRUB_SPEED) s *= SPEED_STEP;          // same way: faster
-        else if (s * towards <= -SCRUB_SPEED) s /= SPEED_STEP;    // other way: slower
-        else s += towards * SCRUB_STEP;                           // through zero
-        s = constrain(s, -MAX_SPEED, MAX_SPEED);
+        int ramp = constrain((int)rampSetting, 0, RAMP_COUNT - 1);
+        float top = maxSpeedSetting;
+        if (s * towards >= SCRUB_SPEED) s *= SPEED_STEP[ramp];          // same way: faster
+        else if (s * towards <= -SCRUB_SPEED) s /= SPEED_STEP[ramp];    // other way: slower
+        else s += towards * SCRUB_STEP[ramp];                           // through zero
+        s = constrain(s, -top, top);
     } else if (fabsf(s - 1) > 0.01f) {
-        s = 1 + (s - 1) * SPEED_RETURN; // let go: back to normal, forward
+        s = 1 + (s - 1) * SPEED_RETURN[constrain((int)rampSetting, 0, RAMP_COUNT - 1)]; // let go: back to normal, forward
     } else {
         s = 1;
     }
@@ -717,6 +722,8 @@ bool audioInit() {
     Preferences prefs;
     prefs.begin("zvukopis", true);
     gainSetting = prefs.getInt("gain", GAIN_AUTO);
+    maxSpeedSetting = prefs.getInt("vmax", 3);
+    rampSetting = constrain(prefs.getInt("vramp", RAMP_NORMAL), 0, RAMP_COUNT - 1);
     if (gainSetting != GAIN_AUTO && gainSetting < MIN_GAIN_DB) gainSetting = MIN_GAIN_DB; // saved by a firmware that allowed less
     prefs.end();
 
@@ -778,6 +785,24 @@ void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioSetTag(int index, MomentTag tag) { sendCommand(CMD_TAG, index, tag); }
 void audioSpeedHold(int direction) { speedDirection = direction; }
+
+void audioSetVarispeed(int maxSpeed, int ramp) {
+    if (maxSpeed > 0) maxSpeedSetting = constrain(maxSpeed, 1, 8);
+    if (ramp >= 0) rampSetting = constrain(ramp, 0, RAMP_COUNT - 1);
+    Preferences prefs;
+    prefs.begin("zvukopis", false);
+    prefs.putInt("vmax", maxSpeedSetting);
+    prefs.putInt("vramp", rampSetting);
+    prefs.end();
+}
+
+int audioVarispeedMax() { return maxSpeedSetting; }
+int audioVarispeedRamp() { return rampSetting; }
+
+const char *varispeedRampName(int ramp) {
+    static const char *const names[RAMP_COUNT] = {"gentle", "normal", "quick"};
+    return names[constrain(ramp, 0, RAMP_COUNT - 1)];
+}
 
 void audioSetMicGain(int db) {
     gainSetting = db;

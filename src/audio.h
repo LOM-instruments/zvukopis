@@ -96,6 +96,16 @@ float audioPlaybackSpeed(); // 1 = normal
 static const int GAIN_AUTO = -1;
 void audioSetMicGain(int db);
 int audioMicGainSetting();
+
+// Varispeed (holding up or down while a moment plays): the top speed, in
+// times normal (2, 3, 4 or 6), and how quickly the speed moves
+enum VarispeedRamp { RAMP_GENTLE, RAMP_NORMAL, RAMP_QUICK, RAMP_COUNT };
+static const int VARISPEED_MAX_CHOICES[] = {2, 3, 4, 6};
+static const int VARISPEED_MAX_CHOICE_COUNT = 4;
+void audioSetVarispeed(int maxSpeed, int ramp); // kept in settings; -1 leaves that one as it is
+int audioVarispeedMax();
+int audioVarispeedRamp();
+const char *varispeedRampName(int ramp); // "gentle", "normal", "quick"
 int audioMicGain(); // in use now (with auto gain, where it last settled)
 float audioSecondsLeft(); // recording time that still fits on the SD card, or in memory
 float audioLongestRecording(); // seconds one recording can last: the card's room, or memory's without a card

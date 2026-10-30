@@ -238,6 +238,8 @@ function togglePlay(n){const p=$('player');
  playing=n;p.src='/moment?n='+n+'&play=1';p.play();$('pb-'+n).innerHTML=STOP;$('pb-'+n).title='Stop';
  p.ontimeupdate=()=>{if(playing===n)$('dur-'+n).textContent=t(p.currentTime)+' / '+t(p.duration||0)};
  p.onended=stopped}
+async function saveVarispeed(which){const v=which==='max'?$('vmax').value:$('vramp').value;
+ const r=await fetch('/varispeed?'+which+'='+v,{method:'POST'});if(!r.ok)alert(await r.text())}
 async function setGain(){const r=await fetch('/gain?db='+$('gain').value,{method:'POST'});if(!r.ok)alert(await r.text());poll()}
 function addSchedule(){
  const d=$('date').value,tm=$('time').value.trim();
@@ -479,6 +481,23 @@ static void sendCategories(char *buf, size_t len) {
     server.sendContent("<div class=row><button onclick=saveCategories()>Save</button></div>");
 }
 
+static void sendVarispeed(char *buf, size_t len) {
+    server.sendContent("<h2>Varispeed</h2><div class=row><label>Top speed <select id=vmax onchange=\"saveVarispeed('max')\">");
+    for (int top : VARISPEED_MAX_CHOICES) {
+        snprintf(buf, len, "<option value=%d%s>%dx</option>", top, top == audioVarispeedMax() ? " selected" : "", top);
+        server.sendContent(buf);
+    }
+    server.sendContent("</select></label><label>Ramp <select id=vramp onchange=\"saveVarispeed('ramp')\">");
+    for (int ramp = 0; ramp < RAMP_COUNT; ramp++) {
+        const char *name = varispeedRampName(ramp);
+        snprintf(buf, len, "<option value=%d%s>%c%s</option>", ramp, ramp == audioVarispeedRamp() ? " selected" : "", toupper((uint8_t)name[0]), name + 1);
+        server.sendContent(buf);
+    }
+    server.sendContent("</select></label></div>"
+                       "<p class=note>Holding the switch up or down while a moment plays changes the speed like a tape reel, "
+                       "through standstill into reverse. The ramp is how quickly it gets there.</p>");
+}
+
 static void sendTimeZone(char *buf, size_t len) {
     const char *current = clockTimeZone();
     bool known = false;
@@ -607,6 +626,7 @@ static void handleIndex() {
     if (firstTime) sendWifi(buf, sizeof(buf));
     sendSchedule(buf, sizeof(buf));
     sendCategories(buf, sizeof(buf));
+    sendVarispeed(buf, sizeof(buf));
     sendTimeZone(buf, sizeof(buf));
     sendLibrary(buf, sizeof(buf));
     if (!firstTime) sendWifi(buf, sizeof(buf));
@@ -694,6 +714,36 @@ static void handleRecordStart() {
     if (a == AUDIO_PLAYING) audioStopPlayback();
     uint32_t seconds = server.arg("seconds").toInt();
     audioStartRecording(seconds > 0 ? seconds : 24 * 3600); // otherwise until stopped or memory runs out
+    server.send(200, "text/plain", "ok");
+}
+
+// One field at a time, so a page that was loaded a while ago can't put the
+// other one back
+static void handleVarispeed() {
+    noteRequest();
+    int top = -1, ramp = -1;
+    if (server.hasArg("max")) {
+        top = server.arg("max").toInt();
+        bool known = false;
+        for (int choice : VARISPEED_MAX_CHOICES) known |= choice == top;
+        if (!known) {
+            server.send(400, "text/plain", "Bad top speed");
+            return;
+        }
+    }
+    if (server.hasArg("ramp")) {
+        const String &arg = server.arg("ramp");
+        ramp = arg.toInt();
+        if (arg.length() != 1 || !isdigit((uint8_t)arg[0]) || ramp >= RAMP_COUNT) {
+            server.send(400, "text/plain", "Bad ramp");
+            return;
+        }
+    }
+    if (top < 0 && ramp < 0) {
+        server.send(400, "text/plain", "Nothing to set");
+        return;
+    }
+    audioSetVarispeed(top, ramp);
     server.send(200, "text/plain", "ok");
 }
 
@@ -887,6 +937,7 @@ static void addRoutes() {
     server.on("/record/start", HTTP_POST, handleRecordStart);
     server.on("/record/stop", HTTP_POST, handleRecordStop);
     server.on("/gain", HTTP_POST, handleGain);
+    server.on("/varispeed", HTTP_POST, handleVarispeed);
     server.on("/library/upload", HTTP_POST, handleLibraryUpload, handleLibraryUploadPiece);
     server.on("/library/delete", HTTP_POST, handleLibraryDelete);
     server.on("/status", HTTP_GET, handleStatus);
