@@ -15,6 +15,10 @@
 #include "config.h"
 #include "fonts.h"
 #include "library.h"
+
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev" // scripts/version_flag.py sets it at build time
+#endif
 #include "networks.h"
 #include "quotes.h"
 #include "spectrum.h"
@@ -1106,7 +1110,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
 
 static void drawSettings(const ViewState &v) {
     drawSubHeader(v, "Settings", nullptr);
-    const int rowH = 64;
+    const int rowH = 62;
     for (int r = 0; r < SET_ROWS; r++) {
         int y = LIST_TOP + r * rowH;
         bool isSelected = r == v.selected;
@@ -1117,12 +1121,13 @@ static void drawSettings(const ViewState &v) {
         char detail[48];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
-        drawText(MARGIN, y + 29, enabled ? &Bold22 : &Text22, title, fg);
-        drawText(MARGIN, y + 52, &Text17, detail, fg);
+        drawText(MARGIN, y + 28, enabled ? &Bold22 : &Text22, title, fg);
+        drawText(MARGIN, y + 50, &Text17, detail, fg);
     }
 
-    // Card and memory
-    int y = LIST_TOP + SET_ROWS * rowH + 36;
+    // Card and memory, and the firmware's version
+    int y = LIST_TOP + SET_ROWS * rowH + 34;
+    drawText(MARGIN, y + 26, &Text17, "zvukopis firmware " FIRMWARE_VERSION, INK);
     char buf[64], total[16], free[16];
     if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());

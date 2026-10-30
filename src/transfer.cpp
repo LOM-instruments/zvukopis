@@ -2,6 +2,10 @@
 
 #include <Arduino.h>
 #include <esp_rom_crc.h>
+
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "dev"
+#endif
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <SD_MMC.h>
@@ -589,7 +593,7 @@ static void handleIndex() {
     char batteryText[24] = "";
     if (battery >= 0) snprintf(batteryText, sizeof(batteryText), " &middot; battery %d%%", battery);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
-    snprintf(buf, sizeof(buf), "<div class=sub>Device clock %s%s</div>"
+    snprintf(buf, sizeof(buf), "<div class=sub>Device clock %s%s &middot; firmware " FIRMWARE_VERSION "</div>"
                                "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Recording</button>"
                                "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
                                "<script>const firstTab='%s'</script><div id=live class=tab>",

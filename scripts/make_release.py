@@ -43,6 +43,9 @@ def main():
     if len(sys.argv) > 1:
         version = sys.argv[1]
     else:
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
+        if dirty:
+            sys.exit("Commit first: the firmware's version stamp must match a commit\n" + dirty)
         rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
         version = datetime.date.today().isoformat() + (f"-{rev}" if rev else "")
     if subprocess.run(["pio", "run", "-e", "release"], cwd=ROOT).returncode != 0:
