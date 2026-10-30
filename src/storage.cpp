@@ -186,7 +186,8 @@ size_t storageWavHeader(const Moment &moment, uint8_t *buf) {
     p += sizeof(fmt);
 
     BextChunk bext = {};
-    snprintf(bext.description, sizeof(bext.description), "zvukopis Moment %d", moment.number);
+    snprintf(bext.description, sizeof(bext.description), "zvukopis Moment %d; mic gain %d dB%s; %d Hz 16-bit", moment.number,
+             moment.micGainDb, moment.micGainAuto ? " (auto)" : "", SAMPLE_RATE);
     strncpy(bext.originator, "zvukopis", sizeof(bext.originator));
     snprintf(bext.originatorReference, sizeof(bext.originatorReference), "zvukopis-%04d", moment.number);
     if (moment.recordedAt) {

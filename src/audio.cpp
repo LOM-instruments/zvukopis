@@ -16,7 +16,8 @@ static const int I2S_DOUT_PIN = 48; // to codec DAC (speaker)
 static const int I2S_DIN_PIN = 21;  // from codec ADC (mic)
 static const int PA_ENABLE_PIN = 39; // speaker amplifier
 
-static const int MCLK_MULTIPLE = 256;
+// The codec's clock table has 96 kHz only with a 12.288 MHz master clock
+static const int MCLK_MULTIPLE = SAMPLE_RATE >= 96000 ? 128 : 256;
 static const int SPEAKER_VOLUME = 80; // 0-100
 // Mic gain: the analog preamp (0-30 dB in 3 dB steps), then digital scaling
 // after the ADC (6 dB steps). Only the preamp changes what clips.
@@ -264,6 +265,8 @@ static void finishRecording() {
         state = AUDIO_SAVING;
         uint32_t start = millis();
         Moment moment = streamMoment;
+        moment.micGainDb = gainNow;
+        moment.micGainAuto = gainSetting == GAIN_AUTO;
         analyseEnvelope(moment, length);
         bool ok = storageStreamEnd(moment); // sets length and dataOffset
         free(envelope);
@@ -300,6 +303,8 @@ static void finishRecording() {
     moment.recordedAt = recordStartedAt;
     moment.startMs = recordStartedMs;
     moment.length = length;
+    moment.micGainDb = gainNow;
+    moment.micGainAuto = gainSetting == GAIN_AUTO;
     analyse(moment, scratch);
 
     // On the card if possible, else (no card, or the write failed) in PSRAM
@@ -676,10 +681,11 @@ static bool i2sInit() {
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-    cfg.dma_buf_count = 8;
-    cfg.dma_buf_len = CHUNK_FRAMES;
+    // A DMA buffer holds 1024 frames at most; at 96 kHz a chunk is two of them
+    cfg.dma_buf_count = CHUNK_FRAMES > 1024 ? 16 : 8;
+    cfg.dma_buf_len = CHUNK_FRAMES > 1024 ? CHUNK_FRAMES / 2 : CHUNK_FRAMES;
     cfg.tx_desc_auto_clear = true; // output silence when nothing is being played
-    cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    cfg.mclk_multiple = MCLK_MULTIPLE == 128 ? I2S_MCLK_MULTIPLE_128 : I2S_MCLK_MULTIPLE_256;
 
     i2s_pin_config_t pins = {};
     pins.mck_io_num = I2S_MCK_PIN;

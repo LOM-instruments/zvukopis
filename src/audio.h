@@ -9,7 +9,12 @@
 // With an SD card in at startup, moments are saved to it and played back from it;
 // otherwise they live in PSRAM and are lost on reset.
 
-static const int SAMPLE_RATE = 48000;
+// 48 kHz; the measure96k build (platformio.ini) doubles it for looking above
+// 20 kHz. Files from one rate don't load in the other.
+#ifndef SAMPLE_RATE_HZ
+#define SAMPLE_RATE_HZ 48000
+#endif
+static const int SAMPLE_RATE = SAMPLE_RATE_HZ;
 static const uint32_t MAX_RECORDING_SECONDS = 12 * 3600; // one WAV file can't pass 4 GB
 static const int MAX_MOMENTS = 500;
 static const int WAVEFORM_BINS = 77;
@@ -37,6 +42,8 @@ struct Moment {
     uint32_t dataOffset;             // where the samples start in the moment's file on the SD card
     float gain;                      // playback boost so the loudest moment is near full scale
     uint8_t waveform[WAVEFORM_BINS]; // loudness overview for the list, 0-255
+    uint8_t micGainDb;               // the codec's gain when the recording ended (for the file's bext description)
+    uint8_t micGainAuto;             // ... and whether that was auto gain
 };
 
 enum AudioState {
