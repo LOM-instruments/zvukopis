@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zvukopis technical specification</title>
+<meta name="description" content="The audio chain, measured levels and limits of zvukopis on the Waveshare ESP32-S3-ePaper-3.97 board.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light dark; --ink: #111; --paper: #fff; --dim: #555; --rule: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #eee; --paper: #111; --dim: #aaa; --rule: #333; } }
+  body { font-family: "Atkinson Hyperlegible", -apple-system, system-ui, sans-serif; max-width: 40rem; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.55; color: var(--ink); background: var(--paper); }
+  h1 { font-size: 2.2rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  h1 + p em { font-size: 1.15rem; color: var(--dim); font-style: normal; }
+  h2 { font-size: 1.3rem; margin: 2.4rem 0 .6rem; }
+  p, li { margin: .4rem 0; }
+  ul, ol { padding-left: 1.3rem; }
+  a { color: inherit; }
+  blockquote { margin: .8rem 0; padding: .2rem 1rem; border-left: 3px solid var(--ink); font-family: ui-monospace, Menlo, monospace; font-size: .9rem; }
+  table { border-collapse: collapse; margin: .6rem 0; width: 100%; }
+  th, td { border: 1px solid var(--rule); padding: .35rem .6rem; text-align: left; vertical-align: top; }
+  th:empty { display: none; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0 1rem; }
+  hr + p { font-size: .9rem; color: var(--dim); }
+  .top { font-size: .9rem; color: var(--dim); margin-bottom: 1.5rem; }
+  .note { font-size: .9rem; color: var(--dim); border-top: 1px solid var(--rule); padding-top: 1rem; margin-top: 2.5rem; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+</head>
+<body>
+<p class="top"><a href="index.html">zvukopis</a> &rsaquo; technical specification</p>
+<div id="guide"><p>Loading the guide&hellip;</p></div>
+<div class="note">This page is <a href="tech-spec.md">tech-spec.md</a> in the repository.</div>
+<script>
+  fetch('tech-spec.md').then(r => r.text()).then(md => {
+    document.getElementById('guide').innerHTML = marked.parse(md);
+  }).catch(() => {
+    document.getElementById('guide').innerHTML = '<p>The guide could not be loaded. It is at <a href="tech-spec.md">tech-spec.md</a>.</p>';
+  });
+</script>
+</body>
+</html>
