@@ -274,6 +274,10 @@ static void goToSleep() {
         uint32_t start = millis();
         uiQuickRecordScreen();
         audioStartRecording();
+        // Keep that screen until the audio task is recording, or the main
+        // screen would show for a moment in between
+        uint32_t t = millis();
+        while (audioState() != AUDIO_RECORDING && millis() - t < 2000) delay(10);
         uiQuickRecordStarted();
         Serial.printf("[sleep] quick record: screen in %lu ms, recording\n", millis() - start);
     }

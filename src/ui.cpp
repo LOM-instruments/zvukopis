@@ -1934,7 +1934,7 @@ static void drawSleepScreen(const ViewState &v) {
         while (*work == ' ') work++;
     }
 
-    const int top = LIST_TOP + 36, bottom = SH - 36, width = SW - 2 * MARGIN;
+    const int top = ry + 30, bottom = SH - 36, width = SW - 2 * MARGIN; // below both pointers
     struct Size {
         const GFXfont *font;
         int lineHeight;
