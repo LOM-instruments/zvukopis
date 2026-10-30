@@ -12,6 +12,10 @@ small library: Markdown or text files on the card can be read on the screen.
 
 ## Using it
 
+The [user guide](docs/guide.md) covers everything below screen by screen; it
+is also on the project page, and it reads on the device (a copy sits in
+`library/` next to the sample document). In short:
+
 - **Record:** press the side switch in on *New recording*. Press again to stop.
   With an SD card in, a recording can run for up to 12 hours.
 - **Listen:** move to a moment and press in. Holding up or down while it plays
