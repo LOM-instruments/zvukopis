@@ -108,7 +108,8 @@ static volatile int spectrumMoment = 0; // number of the moment being analysed
 enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
 static volatile int spectrumView = VIEW_SPECTROGRAM;
 static volatile int spectrumContrast = 1; // index into CONTRAST_DB
-static volatile bool showGuide = true;     // the hints under the line at the bottom; NVS "guide"
+static volatile bool showGuide = true;
+static volatile bool quickRecordScreen = false; // see uiQuickRecordScreen     // the hints under the line at the bottom; NVS "guide"
 static const float CONTRAST_DB[] = {70, 55, 40, 28}; // dynamic range shown: less is more contrast
 static const int CONTRAST_LEVELS = 4;
 static Document readerDocument;      // the one open in the reader
@@ -249,6 +250,7 @@ struct ViewState {
     int spectrumView;
     int spectrumContrast;
     bool guide;
+    bool quickRecord; // the recording screen shown ahead of a quick recording
     int libraryCount;
     int readerPage;
     int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
@@ -310,6 +312,7 @@ static ViewState currentView() {
     v.spectrumView = spectrumView;
     v.spectrumContrast = spectrumContrast;
     v.guide = showGuide;
+    v.quickRecord = quickRecordScreen;
     v.libraryCount = libraryCount();
     v.readerPage = readerPage;
     if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
@@ -1733,7 +1736,7 @@ static void drawRecordingView(const ViewState &v) {
     drawTextCentered(cx, 368, &Bold44, saving ? "Saving" : "Recording", INK);
 
     char limit[16], started[12], buf[48];
-    formatTimeLeft(limit, sizeof(limit), max(1, (int)audioRecordingLimitSeconds()));
+    formatTimeLeft(limit, sizeof(limit), max(1, (int)(v.audio == AUDIO_IDLE ? audioLongestRecording() : audioRecordingLimitSeconds())));
     if (v.clockMinute >= 0) {
         formatLocal(started, sizeof(started), "%H:%M", (time_t)v.clockMinute * 60);
         snprintf(buf, sizeof(buf), "started %s  -  up to %s", started, limit);
@@ -2088,7 +2091,7 @@ static void render(const ViewState &v) {
         drawSleepScreen(v); // its own pointer says how to wake, so no footer
         return;
     }
-    if (v.audio == AUDIO_RECORDING || v.audio == AUDIO_SAVING) {
+    if (v.audio == AUDIO_RECORDING || v.audio == AUDIO_SAVING || v.quickRecord) {
         drawRecordingView(v);
     } else {
         switch (v.screen) {
@@ -2168,7 +2171,7 @@ static void displayTask(void *) {
             partials = 0;
         } else if (v.sleeping) {
             pushed = false; // leave the sleeping panel alone
-        } else if (v.audio == AUDIO_RECORDING && shown.audio == AUDIO_RECORDING) {
+        } else if ((v.audio == AUDIO_RECORDING || v.quickRecord) && (shown.audio == AUDIO_RECORDING || shown.quickRecord)) {
             pushed = false; // keep the panel still while recording; see drawRecordingView
         } else if (memcmp(&v, &shown, sizeof(v)) != 0 && v.screen == SCREEN_READER && v.readerPage != shown.readerPage &&
                    partials >= READER_FULL_REFRESH_EVERY) {
@@ -2736,10 +2739,18 @@ bool uiTakeSleepRequest() {
     return requested;
 }
 
-void uiQuickRecord() {
+void uiQuickRecordScreen() {
     overlay = OVERLAY_NONE;
+    quickRecordScreen = true;
     showScreen(SCREEN_LIST, 0);
+    sleeping = false;
+    lastActivity = millis();
+    if (displayTaskHandle) xTaskNotifyGive(displayTaskHandle);
+    uint32_t start = millis();
+    while (panelAsleep && millis() - start < 6000) delay(10); // the full refresh that wakes the panel
 }
+
+void uiQuickRecordStarted() { quickRecordScreen = false; }
 
 void uiShowSleepScreen(bool on) {
     if (on) quoteIndex = esp_random() % QUOTE_COUNT;

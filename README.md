@@ -25,10 +25,10 @@ small library: Markdown or text files on the card can be read on the screen.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader and formatting the card.
-- **Quick record:** while asleep, hold the side switch in. Recording starts
-  the moment it's pressed (a short knock is dropped again) and the screen stays
-  as it is, so no refresh noise gets into the sound; press in again, or the
-  sleep button, to stop, and the device wakes with the new moment on the list.
+- **Quick record:** while asleep, hold the side switch in. The recording
+  screen comes up and the recording starts right after it (the panel's
+  refresh is audible to the mic, so it goes first; about 3 s from the press).
+  A short knock is ignored. Press in again to stop.
 - **Sleep and wake:** hold the sleep button (PWR on the board) for 1 second.
   Holding it for 10 seconds restarts
   the device. It also goes to sleep by itself after 5 minutes, and wakes for

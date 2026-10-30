@@ -149,45 +149,16 @@ static const uint32_t SLEEP_RECHECK_MS = 60 * 1000;
 
 enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE, WAKE_QUICK_RECORD };
 
-// The rocker was pressed in while asleep. Recording starts at once, so the
-// moment isn't missed; a release before the hold time was a knock, and the
-// recording is dropped again.
+// The rocker was pressed in while asleep: held for the hold time, it's a
+// quick record; released before that, a knock.
 static uint32_t fakeClickUntil = 0; // serial 'q'/'Q' while asleep: pretend the rocker is held
 static bool clickHeld() {
     if (fakeClickUntil && (int32_t)(fakeClickUntil - millis()) <= 0) fakeClickUntil = 0;
     return buttonsClickHeld() || fakeClickUntil != 0;
 }
 
-// A quick recording runs with the screen left as it is: a panel refresh
-// couples into the microphone (about half a second of static), and the point
-// is to catch the moment cleanly. Pressing the rocker in again, or PWR, stops
-// it; then the device wakes up as usual, with the new moment on the list.
-static void quickRecordWhileAsleep() {
-    Serial.println("[sleep] quick record: recording until the rocker or PWR is pressed");
-    while (clickHeld()) delay(10); // the hold that started it
-    for (;;) {
-        AudioState a = audioState();
-        if (a != AUDIO_RECORDING) break; // hit the limit, or couldn't start
-        if (clickHeld() || powerKeyPressed()) {
-            audioStopRecording();
-            break;
-        }
-        if (usbPowered()) {
-            while (Serial.available()) {
-                int c = Serial.read();
-                if (c == 'c' || c == 'p' || c == 'r') audioStopRecording();
-            }
-        }
-        delay(10);
-    }
-    uint32_t start = millis();
-    while (audioState() == AUDIO_SAVING && millis() - start < 15000) delay(20);
-    while (clickHeld()) delay(10);
-}
-
 static bool quickPressHeld() {
     uint32_t pressed = millis();
-    audioStartRecording();
     while (clickHeld()) {
         if (millis() - pressed >= QUICK_RECORD_HOLD_MS) {
             Serial.println("[sleep] rocker held: quick record");
@@ -195,9 +166,7 @@ static bool quickPressHeld() {
         }
         delay(10);
     }
-    audioCancelRecording();
-    audioSuspend(); // back to the codec being off, as light sleep needs
-    return false;
+    return false; // a knock
 }
 
 static Wake sleepUntilWake() {
@@ -300,8 +269,13 @@ static void goToSleep() {
     }
 
     if (quickRecord) {
-        quickRecordWhileAsleep();
-        uiQuickRecord(); // the main screen, with the new moment under New recording
+        // The recording screen first, so the panel refresh (which the mic
+        // hears) is over before the recording starts
+        uint32_t start = millis();
+        uiQuickRecordScreen();
+        audioStartRecording();
+        uiQuickRecordStarted();
+        Serial.printf("[sleep] quick record: screen in %lu ms, recording\n", millis() - start);
     }
     Serial.println("[sleep] woke up");
     uiShowSleepScreen(false);
