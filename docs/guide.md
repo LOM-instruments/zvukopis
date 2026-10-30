@@ -102,6 +102,7 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 - **Button guide.** The hints at the bottom of the screens, on or off.
 - **USB card reader.** The card on a computer.
 - **Format SD card.** Erases it.
+- **Reset settings.** Forgets the Wi-Fi networks, tags, schedule, gain and the rest; the moments on the card stay. For handing zvukopis on.
 
 Hold the side switch in, or press the Settings button again, to leave.
 

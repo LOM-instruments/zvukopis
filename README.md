@@ -29,7 +29,8 @@ is also on the project page, and it reads on the device (a copy sits in
   through four contrast levels.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
-  the web interface, clock sync, the USB card reader and formatting the card.
+  the web interface, clock sync, the USB card reader, formatting the card
+  and resetting the settings (for handing the device on; the card stays).
 - **Quick record:** while asleep, hold the side switch in. The recording
   screen comes up and the recording starts right after it (the panel's
   refresh is audible to the mic, so it goes first; about 3 s from the press).

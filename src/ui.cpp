@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <mbedtls/base64.h>
+#include <nvs_flash.h>
 #include <qrcode.h>
 #include <sys/time.h>
 
@@ -73,6 +74,7 @@ enum Overlay {
     OVERLAY_MENU,           // tag / delete, on a long press of a moment
     OVERLAY_CONFIRM_DELETE, // Cancel / Delete
     OVERLAY_CONFIRM_FORMAT, // Cancel / Format
+    OVERLAY_CONFIRM_RESET,  // Cancel / Reset: the settings store
     OVERLAY_GAIN,           // mic gain choices
     OVERLAY_VIEW,           // analysis: spectrogram, spectrum, or back
     OVERLAY_VARISPEED,      // top speed and ramp
@@ -84,7 +86,7 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
-enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_RESET, SET_ROWS };
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
@@ -1109,6 +1111,10 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         else if (!v.sdCard) snprintf(detail, len, "No SD card");
         else snprintf(detail, len, "Erases everything on the card");
         break;
+    case SET_RESET:
+        title = "Reset settings";
+        snprintf(detail, len, "Forgets Wi-Fi, tags, schedule, gain; moments stay");
+        break;
     default:
         title = "";
         detail[0] = 0;
@@ -1118,23 +1124,36 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
 
 static void drawSettings(const ViewState &v) {
     drawSubHeader(v, "Settings", FIRMWARE_VERSION); // the firmware's version, with the date and time at the right
-    const int rowH = 60;
-    for (int r = 0; r < SET_ROWS; r++) {
-        int y = LIST_TOP + r * rowH;
+    const int rowH = 60, cardLine = 34;
+    int visible = min((int)SET_ROWS, (listBottom() - LIST_TOP - cardLine) / rowH);
+    static int scrollTop = 0;
+    int sel = max(0, v.selected);
+    if (sel < scrollTop) scrollTop = sel;
+    if (sel >= scrollTop + visible) scrollTop = sel - visible + 1;
+    scrollTop = constrain(scrollTop, 0, max(0, SET_ROWS - visible));
+    for (int i = 0; i < visible; i++) {
+        int r = scrollTop + i, y = LIST_TOP + i * rowH;
         bool isSelected = r == v.selected;
         uint16_t fg = isSelected ? PAPER : INK;
         if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, rowH - 8, 12, INK);
-        else if (r > 0 && r - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
+        else if (i > 0 && r - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
         const char *title;
-        char detail[48];
+        char detail[56];
         bool enabled;
         settingsRowText((SettingsRow)r, v, title, detail, sizeof(detail), enabled);
         drawText(MARGIN, y + 27, enabled ? &Bold22 : &Text22, title, fg);
         drawText(MARGIN, y + 48, &Text17, detail, fg);
     }
 
+    // More rows below: a small arrow at the right edge
+    if (scrollTop + visible < SET_ROWS) {
+        int ay = LIST_TOP + visible * rowH - 6;
+        canvas->fillTriangle(SW - MARGIN - 16, ay - 8, SW - MARGIN, ay - 8, SW - MARGIN - 8, ay, INK);
+    }
+    if (scrollTop > 0) canvas->fillTriangle(SW - MARGIN - 16, LIST_TOP + 2, SW - MARGIN, LIST_TOP + 2, SW - MARGIN - 8, LIST_TOP - 6, INK);
+
     // Card and memory
-    int y = LIST_TOP + SET_ROWS * rowH + 30;
+    int y = LIST_TOP + visible * rowH + 30;
     char buf[64], total[16], free[16];
     if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
@@ -1884,6 +1903,15 @@ static void drawFormatDialog(const ViewState &v) {
     drawConfirm(v, [] { iconSdCard(SW / 2 + 24, CONFIRM_Y + 62, 3); }, "Format SD card?", detail, "Format");
 }
 
+static void drawResetDialog(const ViewState &v) {
+    drawConfirm(v, [] {
+        // A circular arrow: start over
+        int cx = SW / 2 + 24, cy = CONFIRM_Y + 62;
+        drawArc(cx, cy, 16, 30, 330, 4, INK);
+        canvas->fillTriangle(cx + 6, cy - 22, cx + 20, cy - 14, cx + 8, cy - 4, INK);
+    }, "Reset settings?", "Wi-Fi, tags, schedule, gain; not the card", "Reset");
+}
+
 // Auto, or a fixed gain
 static void drawGainPicker(const ViewState &v) {
     shadeBehindDialog();
@@ -2124,7 +2152,8 @@ static void drawFooter(const ViewState &v) {
         } else if (v.overlayChoice == 0) {
             press = "Cancel";
         } else {
-            press = v.overlay == OVERLAY_CONFIRM_DELETE ? "Delete" : v.overlay == OVERLAY_CONFIRM_FORMAT ? "Format" : "Remove";
+            press = v.overlay == OVERLAY_CONFIRM_DELETE ? "Delete" : v.overlay == OVERLAY_CONFIRM_FORMAT ? "Format"
+                  : v.overlay == OVERLAY_CONFIRM_RESET ? "Reset" : "Remove";
         }
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, press};
@@ -2137,7 +2166,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format...", "Reset..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2244,6 +2273,7 @@ static void render(const ViewState &v) {
         case OVERLAY_MENU: drawMenu(v); break;
         case OVERLAY_CONFIRM_DELETE: drawDeleteDialog(v); break;
         case OVERLAY_CONFIRM_FORMAT: drawFormatDialog(v); break;
+        case OVERLAY_CONFIRM_RESET: drawResetDialog(v); break;
         case OVERLAY_GAIN: drawGainPicker(v); break;
         case OVERLAY_VIEW: drawViewPicker(v); break;
         case OVERLAY_VARISPEED: drawVarispeedPicker(v); break;
@@ -2441,6 +2471,16 @@ static void handleOverlay(ButtonEvent event) {
         } else if (overlay == OVERLAY_CONFIRM_FORMAT) {
             if (overlayChoice == 1) audioFormatCard();
             overlay = OVERLAY_NONE;
+        } else if (overlay == OVERLAY_CONFIRM_RESET) {
+            overlay = OVERLAY_NONE;
+            if (overlayChoice == 1) {
+                // The whole settings store (every namespace), then a fresh start;
+                // the card isn't touched
+                Serial.println("[settings] reset: erasing the settings store and restarting");
+                Serial.flush();
+                nvs_flash_erase();
+                esp_restart();
+            }
         } else if (overlay == OVERLAY_GAIN) {
             audioSetMicGain(GAIN_CHOICES[overlayChoice]);
             overlay = OVERLAY_NONE;
@@ -2706,6 +2746,9 @@ static void handleSettings(ButtonEvent event) {
             break;
         case SET_FORMAT:
             if (storageCardState() != SD_ABSENT && audioState() != AUDIO_FORMATTING) openOverlay(OVERLAY_CONFIRM_FORMAT, 0);
+            break;
+        case SET_RESET:
+            openOverlay(OVERLAY_CONFIRM_RESET, 0);
             break;
         }
         break;
