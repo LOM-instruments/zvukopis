@@ -1,16 +1,18 @@
 # Measuring the microphone
 
-What zvukopis can tell you about its own microphone and gain chain, given an
-anechoic room, a calibrator and a reference microphone. The analysis is
-`scripts/measure_mic.py` (Python 3 with numpy); it reads the WAV files the
-device writes and knows the mic gain from each file's `bext` description.
+A session plan for an anechoic room with a 94 dB SPL calibrator and a
+reference microphone. It gives sensitivity, distortion, the noise floor and
+equivalent input noise, the frequency response, and a look above 20 kHz.
+The analysis is `scripts/measure_mic.py` (Python 3 with numpy); it reads the
+WAV files the device writes and learns the mic gain from each file.
 
-## The chain
+## What is being measured
 
-Analog MEMS microphone, the ES8311 codec's analog preamp (0 to 30 dB in 3 dB
-steps), its ADC, then digital gain in the codec (0 to 24 dB in 6 dB steps):
+Analog MEMS microphone, the ES8311 codec's analog preamp (0 to 30 dB in
+3 dB steps), its ADC, then digital gain in the codec (0 to 24 dB in 6 dB
+steps). The mic gain setting maps like this:
 
-| Mic gain setting | Analog | Digital |
+| Setting | Analog | Digital |
 |---|---|---|
 | 0 to 30 dB | that | 0 dB |
 | 36 dB | 30 dB | 6 dB |
@@ -18,75 +20,137 @@ steps), its ADC, then digital gain in the codec (0 to 24 dB in 6 dB steps):
 | 48 dB | 30 dB | 18 dB |
 | 54 dB | 30 dB | 24 dB |
 
-The WAV holds the ADC's samples as they are (16-bit, 48 kHz). The "playback
-gain" in the file's `zvkp` chunk is a normalisation the device applies when
-it plays; it does not touch the data. Each file's `bext` description says
-`mic gain N dB`, with `(auto)` when auto gain was on (then N is the gain at
-the end, and it may have changed meanwhile), so measurements need a fixed
-gain: set it on the device (Settings > Mic gain) or on the web interface.
+The WAV holds the ADC's samples as they are (16-bit, 48 kHz; nothing is
+normalised in the data). Each file's `bext` description says
+`mic gain N dB`, and `(auto)` if auto gain was on, which must not be the
+case for a measurement.
 
-## Measurements
+## Before entering the room
 
-Record each with a fixed gain and download the files from the web interface
-(a day's ZIP is convenient). Keep the first second quiet: the script skips
-half a second, and the hand on the switch is in the recording.
+1. Charge zvukopis. Measure on battery, USB unplugged: the cable and the
+   charger add noise.
+2. Firmware 2026-10-30-4e2595c or newer (the project page installs it). It
+   is what writes the gain into the files.
+3. Check the clock on the screen. The files are named by time, which is how
+   you tell them apart afterwards.
+4. A laptop with the repository and PlatformIO, for the 96 kHz build at the
+   end (step 11), and to copy the files off (step 13). No Wi-Fi is needed
+   for any of this.
+5. Find the microphone: a pinhole in the board, by the audio codec. Start a
+   recording and brush a finger near the candidates; the one that roars is
+   it. Note where it is; the calibrator and the reference microphone both
+   go there.
+6. Decide how the 94 dB gets to that pinhole. A calibrator's coupler won't
+   seal on a bare board. Either make a soft adapter (a short rubber tube or
+   a cup with putty around the pinhole), or do what works in an anechoic
+   room anyway: play 1 kHz from the room's speaker, measure the SPL at the
+   spot with the reference microphone, then put zvukopis's pinhole at that
+   spot and use that SPL with `--spl`. The second way also gives distortion
+   at higher levels.
 
-1. **Sensitivity and distortion.** The calibrator at 94 dB SPL on the
-   microphone (it sits behind the small hole on the board's edge; a cup with
-   a soft seal works), 10 s, at 0, 12 and 24 dB gain. Expect clipping above
-   that: 94 dB SPL is about 12 mV at the microphone, and 30 dB of analog gain
-   puts it near the ADC's full scale.
+## Setting the gain on the device
 
-       python3 scripts/measure_mic.py tone cal-0dB.wav --spl 94
+Settings button (next to the USB port) > *Mic gain* > press in, choose with
+up and down, press in. The choices are Auto, then 0 to 54 dB in 6 dB steps.
+Never Auto for a measurement. The gain stays until you change it, and goes
+into every file.
 
-   Gives the level in dBFS, the sensitivity in dBFS/Pa at that gain and
-   referred to 0 dB, THD and THD+N, the harmonics, and the SPL at which a
-   sine would clip at that gain.
+## Recording in the room
 
-2. **Noise floor and equivalent input noise.** The room, nothing happening,
-   20 s at the same gains, plus 42 dB (the usual auto gain indoors).
+Each recording: press in on *New recording*, keep still, press in again.
+The analysis skips the first second (the press, the screen's refresh), so
+hands off straight away and give it the full time. Write down the time of
+day and what it was; the file name has the time and the gain is inside.
 
-       python3 scripts/measure_mic.py noise room-0dB.wav --tone cal-0dB.wav --spl 94
+7. **Calibrator tone, three gains.** The tone on the pinhole, 15 s each, at
+   **0 dB**, **12 dB** and **24 dB**. Don't go higher: 94 dB SPL is about
+   12 mV at the microphone, and 30 dB of gain puts it near the ADC's full
+   scale. If you can play louder tones through the speaker (104, 114 dB SPL,
+   measured with the reference mic), record those too at 0 dB: they give
+   distortion at level and the clipping point directly.
+8. **Silence, four gains.** The room, nobody moving, 30 s each, at **0 dB**,
+   **12 dB**, **24 dB** and **42 dB** (42 is what auto gain settles to
+   indoors; the comparison between gains shows what sets the floor).
+9. **Pink noise (or a slow sweep) for the response.** From the room's
+   speaker, zvukopis at a marked spot facing it, **12 dB**, 30 s. Then the
+   reference microphone at the same spot, same source, exported as WAV
+   (any rate or bit depth; 48 kHz is simplest). If the reference system
+   gives you the speaker's own response instead, that works too: what the
+   script computes is zvukopis relative to whatever `--ref` is.
+10. **Orientation, optional.** The same pink noise with zvukopis turned
+    90 and 180 degrees from the speaker, 20 s each, to see how much the
+    board and case shade the microphone.
 
-   Gives the floor in dBFS (unweighted and A-weighted), how far above 16-bit
-   quantisation it sits (the answer to "would 24 bits help"), the equivalent
-   input noise in dB SPL(A), the signal-to-noise ratio at 94 dB SPL and the
-   dynamic range to clipping at that gain.
+## Above 20 kHz
 
-3. **Frequency response.** Pink noise or a long sweep from a speaker in the
-   room, recorded by zvukopis and by a reference microphone at the same spot
-   (one after the other is fine; 30 s each), at 12 dB gain or whatever stays
-   well below clipping.
+11. On the laptop, in the repository:
 
-       python3 scripts/measure_mic.py spectrum pink-zvukopis.wav --ref pink-reference.wav --svg response.svg --csv response.csv
+        pio run -e measure96k -t upload
 
-   Prints 1/3-octave band levels for both and the difference, normalised to
-   0 dB at 1 kHz: that is zvukopis's response relative to the reference. The
-   SVG is a plot of it; `--bands 12` gives 1/12-octave resolution.
+    The device restarts sampling at 96 kHz. It shows 0 moments (the 48 kHz
+    files are skipped, not touched). Set the gain again if it asks; it is
+    kept in settings, so it should still be what you chose.
+12. Record, at **12 dB**, 20 s each: the air compressor (or any broadband
+    ultrasonic source: compressed air from a nozzle, keys jangling), the
+    same source with the reference microphone if it runs at 96 kHz, and
+    30 s of the room's silence (the floor above 20 kHz). Then put the
+    normal firmware back:
 
-4. **Above 20 kHz.** The normal firmware samples at 48 kHz, so the recording
-   ends at 24 kHz, and the codec's filter rolls off just below that. For a
-   look further up there is a 96 kHz build:
+        pio run -e esp32s3-epaper -t upload
 
-       pio run -e measure96k -t upload
+    The 96 kHz files stay on the card, in the day's folder with the others;
+    the normal firmware lists only the 48 kHz ones.
 
-   It records 96 kHz WAVs (48 kHz bandwidth) and skips the 48 kHz moments
-   already on the card (they are left alone; put in a spare card to be safe),
-   and the 48 kHz firmware skips its files in turn. Record the air compressor,
-   then `spectrum` as above: the bands run to 48 kHz. What you see is the
-   microphone and the codec together; a MEMS microphone typically has a
-   resonance peak somewhere between 15 and 30 kHz and still responds beyond.
-   Put the normal firmware back afterwards (`pio run -e esp32s3-epaper -t
-   upload`, or the web flasher).
+## Getting the files
 
-## What to expect
+13. Settings > *USB card reader* with the cable in the laptop. Copy the
+    day's folder from `moments/`. Eject; the device restarts by itself.
+    (The web interface's ZIP works too for the 48 kHz files, but it needs
+    Wi-Fi.)
 
-- The microphone's self-noise, not the ADC, sets the floor at every gain
-  above about 6 dB: the floor rises with the gain. A typical analog MEMS
-  capsule has 60 to 65 dB of signal-to-noise at 94 dB SPL, so the equivalent
-  input noise should come out around 30 dB SPL(A).
-- At 0 dB gain the floor should land within a few dB of 16-bit quantisation,
-  which is where 24 bits would start to matter, and only there.
-- Wi-Fi, the e-paper refresh and the USB cable all add noise; measure with
-  the web interface off (download afterwards), the screen still (it is,
-  while recording) and on battery.
+## The analysis
+
+With the files in one folder, from the repository:
+
+    python3 scripts/measure_mic.py info *.wav
+
+lists each file's time, length, gain and peak, so you can match them to
+your notes. Then:
+
+    python3 scripts/measure_mic.py tone tone-0dB.wav --spl 94
+    python3 scripts/measure_mic.py tone tone-12dB.wav --spl 94
+    python3 scripts/measure_mic.py tone tone-24dB.wav --spl 94
+
+Level in dBFS, sensitivity in dBFS/Pa at that gain and referred to 0 dB
+(the three should agree; the gain steps should be 12 dB apart), THD, THD+N,
+the harmonics, and the SPL at which a sine clips at that gain. A louder
+tone from the speaker: `--spl 104`.
+
+    python3 scripts/measure_mic.py noise silence-0dB.wav --tone tone-0dB.wav --spl 94
+    python3 scripts/measure_mic.py noise silence-42dB.wav
+
+The floor in dBFS unweighted and A-weighted, how far it sits above 16-bit
+quantisation, and with the tone of the same gain: the equivalent input
+noise in dB SPL(A), signal-to-noise at 94 dB SPL, and the dynamic range to
+clipping. The 0 dB figure is the one that answers "would 24 bits help".
+
+    python3 scripts/measure_mic.py spectrum pink-zvukopis.wav --ref pink-reference.wav --svg response.svg --csv response.csv
+
+1/3-octave levels for both and zvukopis relative to the reference,
+normalised to 0 dB at 1 kHz; the SVG plots it. `--bands 12` for
+1/12-octave.
+
+    python3 scripts/measure_mic.py spectrum compressor-96k.wav --svg ultrasonic.svg
+    python3 scripts/measure_mic.py spectrum silence-96k.wav --svg floor-96k.svg
+
+The bands run to 48 kHz. Where the compressor's spectrum stays well above
+the silence's, the microphone and codec are still delivering. A MEMS
+capsule usually shows a resonance peak somewhere between 15 and 30 kHz and
+a response that carries on above it; the codec's filter at 96 kHz rolls off
+near 48 kHz.
+
+## Then
+
+Whether the main firmware moves to 96 kHz is decided on that last plot. It
+would halve the recording time per card and make the files twice the size,
+so it needs the microphone to deliver something real up there.

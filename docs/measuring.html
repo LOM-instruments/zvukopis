@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Measuring the microphone</title>
+<meta name="description" content="A session plan for measuring zvukopis's microphone in an anechoic room: sensitivity, distortion, noise floor, frequency response, and above 20 kHz.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light dark; --ink: #111; --paper: #fff; --dim: #555; --rule: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #eee; --paper: #111; --dim: #aaa; --rule: #333; } }
+  body { font-family: "Atkinson Hyperlegible", -apple-system, system-ui, sans-serif; max-width: 40rem; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.55; color: var(--ink); background: var(--paper); }
+  h1 { font-size: 2.2rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.3rem; margin: 2.4rem 0 .6rem; }
+  p, li { margin: .4rem 0; }
+  ul, ol { padding-left: 1.3rem; }
+  li { margin: .6rem 0; }
+  a { color: inherit; }
+  code { background: rgba(127,127,127,.15); padding: 0 .3rem; border-radius: .3rem; }
+  pre { background: rgba(127,127,127,.15); padding: .6rem .8rem; border-radius: .5rem; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: .6rem 0; }
+  th, td { border: 1px solid var(--rule); padding: .3rem .6rem; text-align: left; }
+  .top { font-size: .9rem; color: var(--dim); margin-bottom: 1.5rem; }
+  .note { font-size: .9rem; color: var(--dim); border-top: 1px solid var(--rule); padding-top: 1rem; margin-top: 2.5rem; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+</head>
+<body>
+<p class="top"><a href="index.html">zvukopis</a> &rsaquo; measuring the microphone</p>
+<div id="doc"><p>Loading&hellip;</p></div>
+<div class="note">This page is <a href="measuring.md">measuring.md</a> in the repository; the analysis script is
+<a href="https://github.com/LOM-instruments/zvukopis/blob/main/scripts/measure_mic.py">scripts/measure_mic.py</a>.</div>
+<script>
+  fetch('measuring.md').then(r => r.text()).then(md => {
+    document.getElementById('doc').innerHTML = marked.parse(md);
+  }).catch(() => {
+    document.getElementById('doc').innerHTML = '<p>Could not load it; it is at <a href="measuring.md">measuring.md</a>.</p>';
+  });
+</script>
+</body>
+</html>

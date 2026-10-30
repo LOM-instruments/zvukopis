@@ -22,8 +22,8 @@ the Recording tab of the web interface; not Auto), download the WAV files, then:
     python3 scripts/measure_mic.py info *.wav
 
 Levels are dBFS with a full-scale sine at 0 dBFS (AES17), so a full-scale square
-wave reads +3 dBFS. The first half second of every file is skipped (the codec
-settling, the hand on the switch). Needs numpy only.
+wave reads +3 dBFS. The first second of every file is skipped (the codec
+settling, the hand on the switch, the screen's refresh). Needs numpy only.
 """
 
 import argparse
@@ -34,7 +34,7 @@ import sys
 
 import numpy as np
 
-SKIP_SECONDS = 0.5
+SKIP_SECONDS = 1.0
 LOW_HZ, HIGH_HZ = 20.0, 20000.0
 
 
