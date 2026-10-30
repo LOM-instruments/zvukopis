@@ -31,7 +31,7 @@ coupler), the relative ones are solid.
 | Sample rate | 96 kHz (firmware from 2026-10-30; files from the 48 kHz firmware still load and play) |
 | Sample format | 16-bit PCM, mono, samples as the ADC delivers them (no normalisation in the data) |
 | Settling | The first 100 ms after the codec wakes are dropped |
-| Output | Codec DAC into the on-board speaker; playback with varispeed from -2x to +2x through zero |
+| Output | Codec DAC into the on-board speaker; playback with varispeed from -3x to +3x through zero |
 
 ## Levels, measured
 

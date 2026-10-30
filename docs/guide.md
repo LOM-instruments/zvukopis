@@ -36,7 +36,7 @@ Asleep in your pocket and something is happening? Hold the side switch in. The r
 
 Move to a moment and press in. It plays through the small speaker, and a playhead runs along the waveform. Press in again to stop.
 
-While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal. Two times, forwards or backwards, is as far as it goes.
+While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal. Three times, forwards or backwards, is as far as it goes.
 
 ## What else you can do with a moment
 
