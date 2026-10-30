@@ -2,12 +2,15 @@
 
 #include <stdint.h>
 
+#include "audio.h"
+
 // Frequency analysis of one moment, worked out in a background task since it
 // takes a couple of seconds: a spectrogram (loudness over a linear frequency
 // by time grid; rows top = highest) and the moment's average spectrum.
 // 2048-point FFTs with a Hann window.
 
-static const float SPECTRUM_HIGH_HZ = 20000; // both views run from 0 Hz to this
+static const float SPECTRUM_HIGH_HZ = SAMPLE_RATE / 2.0f; // both views run from 0 Hz to this (48 kHz)
+static const float PEAK_MIN_HZ = 40; // the loudest point, and the level everything is shown against, from here up
 
 struct Spectrogram {
     int momentNumber;

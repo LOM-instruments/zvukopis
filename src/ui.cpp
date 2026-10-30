@@ -35,7 +35,7 @@ static const int MARGIN = 24;
 static const int HEADER_LINE_Y = 90;
 static const int LIST_TOP = 106;
 static const int ROW_H = 96;
-static const int VISIBLE_ROWS = 6;
+// VISIBLE_ROWS: visibleRows(), below the guide setting
 static const int FOOTER_LINE_Y = 690; // room for three lines of hints below
 static const int WAVE_X = MARGIN + 44;
 static const int WAVE_PITCH = 5; // bar width 3 + gap 2
@@ -70,6 +70,7 @@ enum Overlay {
     OVERLAY_CONFIRM_DELETE, // Cancel / Delete
     OVERLAY_CONFIRM_FORMAT, // Cancel / Format
     OVERLAY_GAIN,           // mic gain choices
+    OVERLAY_VIEW,           // analysis: spectrogram, spectrum, or back
     OVERLAY_CONFIRM_UNSCHEDULE, // Cancel / Remove a scheduled recording
 };
 
@@ -79,7 +80,7 @@ static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
 enum SettingsRow { SET_GAIN, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_ROWS };
-static const int GAIN_CHOICES[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
+static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
 static const int MENU_DELETE = TAG_COUNT;
@@ -88,7 +89,7 @@ static const int MENU_ITEMS = TAG_COUNT + 2;
 
 // Frequency analysis plot; labels go left of and below it
 static const int PLOT_X = MARGIN + 46, PLOT_Y = 116;
-static const int PLOT_W = SW - MARGIN - PLOT_X, PLOT_H = 436;
+static const int PLOT_W = SW - MARGIN - PLOT_X; // PLOT_H: plotHeight(), below
 
 
 // UI state: written by loop(), read by the display task
@@ -112,6 +113,20 @@ static volatile bool showGuide = true;
 static volatile bool quickRecordScreen = false; // see uiQuickRecordScreen     // the hints under the line at the bottom; NVS "guide"
 static const float CONTRAST_DB[] = {70, 55, 40, 28}; // dynamic range shown: less is more contrast
 static const int CONTRAST_LEVELS = 4;
+// The loudest point (a ring on the plot and a "Loudest: ..." line) was found
+// not useful; the analysis still computes it. 1 brings it back.
+#define SPECTRUM_PEAK_MARK 0
+// The "80% of the sound: x to y" line under the plot, likewise
+#define SPECTRUM_BAND_LINE 0
+
+// The plot takes the height there is: down to the button guide, or nearly
+// the bottom of the screen without it, leaving room for the time scale
+static int plotHeight() { return (showGuide ? FOOTER_LINE_Y - 10 : SH - 22) - PLOT_Y - 36; }
+#define PLOT_H plotHeight()
+// Lists likewise: down to the guide, or nearly the bottom of the screen
+static int listBottom() { return showGuide ? FOOTER_LINE_Y - 4 : SH - 14; }
+static int visibleRows() { return (listBottom() - LIST_TOP) / ROW_H; }
+#define VISIBLE_ROWS visibleRows()
 static Document readerDocument;      // the one open in the reader
 static volatile int readerPage = 0;
 static Screen spectrumFrom = SCREEN_LIST;
@@ -155,7 +170,8 @@ static int dayKey(time_t t) {
 }
 
 static int momentSeconds(const Moment &moment) {
-    return max(1, (int)((moment.length + SAMPLE_RATE / 2) / SAMPLE_RATE));
+    uint32_t rate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
+    return max(1, (int)((moment.length + rate / 2) / rate));
 }
 
 static const DayIndex &daysWithMoments(DayIndex &index) {
@@ -837,7 +853,7 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     int waveY = y + 68;
     int progressBin = WAVEFORM_BINS;
     if (playing && moment.length > 0) {
-        progressBin = constrain((int)(v.playTicks / 8.0f * SAMPLE_RATE / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
+        progressBin = constrain((int)(v.playTicks / 8.0f * (moment.sampleRate ? moment.sampleRate : SAMPLE_RATE) / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
     }
     for (int b = 0; b < WAVEFORM_BINS; b++) {
         int bx = WAVE_X + b * WAVE_PITCH;
@@ -1183,7 +1199,7 @@ static void drawTransfer(const ViewState &v) {
     if (v.transferRequests > 0) snprintf(buf, sizeof(buf), "%lu request%s served  -  ", v.transferRequests, v.transferRequests == 1 ? "" : "s");
     else buf[0] = 0;
     strlcat(buf, "stops after 10 min unused", sizeof(buf));
-    drawTextCentered(cx, min(y, FOOTER_LINE_Y - 16), &Text17, buf, INK);
+    drawTextCentered(cx, min(y, listBottom() - 12), &Text17, buf, INK);
 }
 
 // Every scheduled recording, soonest first
@@ -1198,7 +1214,7 @@ static void drawScheduleScreen(const ViewState &v) {
         drawTextCentered(cx, 366, &Text22, "Settings, Web interface", INK);
         return;
     }
-    const int rowH = 74, visible = (FOOTER_LINE_Y - LIST_TOP - 8) / rowH;
+    const int rowH = 74, visible = (listBottom() - LIST_TOP - 4) / rowH;
     static int scrollTop = 0;
     int sel = max(0, v.selected);
     if (sel < scrollTop) scrollTop = sel;
@@ -1264,9 +1280,16 @@ static void formatSeconds(char *buf, size_t len, float seconds) {
     snprintf(buf, len, "%d:%04.1f", (int)seconds / 60, fmodf(seconds, 60));
 }
 
-// Frequency scale of both views: 0 to 20 kHz in 5 kHz steps
+// Frequency scale of both views: 0 to 48 kHz in 12 kHz steps (a 48 kHz
+// moment fills the lower half)
 static const int FREQ_STEPS = 4;
-static const char *const FREQ_LABELS[FREQ_STEPS + 1] = {"0", "5k", "10k", "15k", "20k"};
+static const char *freqLabel(int step) { // "0", "12k", ... up to the top of the scale
+    static char labels[FREQ_STEPS + 1][8];
+    if (!labels[0][0]) {
+        for (int i = 0; i <= FREQ_STEPS; i++) snprintf(labels[i], sizeof(labels[i]), i ? "%dk" : "0", (int)(SPECTRUM_HIGH_HZ * i / FREQ_STEPS / 1000));
+    }
+    return labels[step];
+}
 
 // Spectrogram: time across, frequency up (linear), loudness as dithered ink.
 // Marked with the frequency scale, the time, a ring on the loudest point, and
@@ -1292,7 +1315,7 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
         if (i > 0 && i < FREQ_STEPS) {
             for (int x = PLOT_X; x < PLOT_X + PLOT_W; x += 6) canvas->drawPixel(x, y, INK);
         }
-        drawTextRight(PLOT_X - 11, constrain(y + 6, PLOT_Y + 12, PLOT_Y + PLOT_H), &Text17, FREQ_LABELS[i], INK);
+        drawTextRight(PLOT_X - 11, constrain(y + 6, PLOT_Y + 12, PLOT_Y + PLOT_H), &Text17, freqLabel(i), INK);
     }
     drawTextRight(PLOT_X - 11, PLOT_Y - 8, &Text17, "Hz", INK);
 
@@ -1307,11 +1330,13 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
         else drawTextRight(x, PLOT_Y + PLOT_H + 26, &Text17, buf, INK);
     }
 
+#if SPECTRUM_PEAK_MARK
     // The loudest point: a ring, paper outside ink so it shows on both
     int px = PLOT_X + sp->peakColumn, py = PLOT_Y + sp->peakRow;
     drawArc(px, py, 13, 0, 360, 3, PAPER);
     drawArc(px, py, 10, 0, 360, 3, INK);
     drawArc(px, py, 7, 0, 360, 2, PAPER);
+#endif
 
     // Playhead: an ink line with paper edges, and a marker above the plot
     if (v.audio == AUDIO_PLAYING && sp->seconds > 0) {
@@ -1321,17 +1346,27 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
         canvas->fillTriangle(x - 7, PLOT_Y - 10, x + 7, PLOT_Y - 10, x, PLOT_Y - 2, INK);
     }
 
-    char hz[16], at[16], low[16], high[16];
+    char low[16], high[16];
+    int y = PLOT_Y + PLOT_H + 64;
+#if SPECTRUM_PEAK_MARK
+    char hz[16], at[16];
     formatHz(hz, sizeof(hz), sp->peakHz);
     formatSeconds(at, sizeof(at), sp->peakSeconds);
-    int y = PLOT_Y + PLOT_H + 64;
     drawArc(MARGIN + 9, y - 8, 9, 0, 360, 3, INK);
     snprintf(buf, sizeof(buf), "Loudest: %s, at %s", hz, at);
     drawText(MARGIN + 28, y, &Text22, buf, INK);
+    y += 30;
+#endif
+#if SPECTRUM_BAND_LINE
     formatHz(low, sizeof(low), sp->bandLowHz);
     formatHz(high, sizeof(high), sp->bandHighHz);
     snprintf(buf, sizeof(buf), "80%% of the sound: %s to %s", low, high);
-    drawText(MARGIN, y + 30, &Text22, buf, INK);
+    drawText(MARGIN, y, &Text22, buf, INK);
+#else
+    (void)low;
+    (void)high;
+    (void)y;
+#endif
 }
 
 // FFT graph: the moment's average spectrum, loudness (dB below its loudest
@@ -1339,13 +1374,15 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
 static void drawFftGraph(const ViewState &v, const Spectrogram *sp) {
     const float rangeDb = CONTRAST_DB[v.spectrumContrast] + 10; // 80 down to 38 dB
     int lastBin = min(sp->bins - 1, (int)(SPECTRUM_HIGH_HZ / sp->binHz));
+    int firstBin = max(1, (int)ceilf(PEAK_MIN_HZ / sp->binHz)); // the reference level: not the rumble below 40 Hz
     float loudest = -1000;
-    for (int b = 1; b <= lastBin; b++) loudest = max(loudest, sp->averageDb[b]);
+    for (int b = firstBin; b <= lastBin; b++) loudest = max(loudest, sp->averageDb[b]);
 
     int prevY = -1;
     for (int x = 0; x < PLOT_W; x++) {
         // The loudest bin under this pixel
         int b0 = max(1, (int)(x * SPECTRUM_HIGH_HZ / PLOT_W / sp->binHz));
+        if (b0 > lastBin) break; // a 48 kHz moment ends at 24 kHz: nothing to draw past it
         int b1 = max(b0, min(lastBin, (int)((x + 1) * SPECTRUM_HIGH_HZ / PLOT_W / sp->binHz)));
         float value = -1000;
         for (int b = b0; b <= b1; b++) value = max(value, sp->averageDb[b]);
@@ -1379,27 +1416,40 @@ static void drawFftGraph(const ViewState &v, const Spectrogram *sp) {
         if (i > 0 && i < FREQ_STEPS) {
             for (int y = PLOT_Y; y < PLOT_Y + PLOT_H; y += 6) canvas->drawPixel(x, y, INK);
         }
-        const char *label = FREQ_LABELS[i];
+        const char *label = freqLabel(i);
         if (i == 0) drawText(x, PLOT_Y + PLOT_H + 26, &Text17, label, INK);
-        else if (i == FREQ_STEPS) drawTextRight(x, PLOT_Y + PLOT_H + 26, &Text17, "20k Hz", INK);
+        else if (i == FREQ_STEPS) {
+            char top[12];
+            snprintf(top, sizeof(top), "%s Hz", freqLabel(i));
+            drawTextRight(x, PLOT_Y + PLOT_H + 26, &Text17, top, INK);
+        }
         else drawTextCentered(x, PLOT_Y + PLOT_H + 26, &Text17, label, INK);
     }
 
+    char low[16], high[16];
+    int y = PLOT_Y + PLOT_H + 64;
+#if SPECTRUM_PEAK_MARK
     // The loudest frequency on average: a ring on the curve
     int px = PLOT_X + constrain((int)(sp->averagePeakHz / SPECTRUM_HIGH_HZ * PLOT_W), 0, PLOT_W - 1);
     drawArc(px, PLOT_Y + 1, 13, 0, 360, 3, PAPER);
     drawArc(px, PLOT_Y + 1, 10, 0, 360, 3, INK);
-
-    char hz[16], low[16], high[16];
+    char hz[16];
     formatHz(hz, sizeof(hz), sp->averagePeakHz);
-    int y = PLOT_Y + PLOT_H + 64;
     drawArc(MARGIN + 9, y - 8, 9, 0, 360, 3, INK);
     snprintf(buf, sizeof(buf), "Loudest on average: %s", hz);
     drawText(MARGIN + 28, y, &Text22, buf, INK);
+    y += 30;
+#endif
+#if SPECTRUM_BAND_LINE
     formatHz(low, sizeof(low), sp->bandLowHz);
     formatHz(high, sizeof(high), sp->bandHighHz);
     snprintf(buf, sizeof(buf), "80%% of the sound: %s to %s", low, high);
-    drawText(MARGIN, y + 30, &Text22, buf, INK);
+    drawText(MARGIN, y, &Text22, buf, INK);
+#else
+    (void)low;
+    (void)high;
+    (void)y;
+#endif
 }
 
 static void drawSpectrum(const ViewState &v) {
@@ -1407,10 +1457,15 @@ static void drawSpectrum(const ViewState &v) {
     if (!momentGet(momentIndexByNumber(v.spectrumMoment), moment)) return;
     char title[24];
     snprintf(title, sizeof(title), "Moment %d", moment.number);
-    char subtitle[40];
-    snprintf(subtitle, sizeof(subtitle), "%s, contrast %d/%d", v.spectrumView == VIEW_FFT ? "FFT" : "Spectrogram",
-             v.spectrumContrast + 1, CONTRAST_LEVELS);
+    const char *subtitle = v.spectrumView == VIEW_FFT ? "Spectrum (FFT)" : "Spectrogram";
     drawSubHeader(v, title, subtitle);
+    // Contrast gauge after the subtitle: four bars, the set level filled
+    int gx = MARGIN + textWidth(&Text22, subtitle) + 16;
+    for (int i = 0; i < CONTRAST_LEVELS; i++) {
+        int bx = gx + i * 9, bh = 6 + i * 4, by = SECOND_BASELINE - bh;
+        if (i <= v.spectrumContrast) canvas->fillRect(bx, by, 6, bh, INK);
+        else canvas->drawRect(bx, by, 6, bh, INK);
+    }
     const Spectrogram *sp = spectrumResult(v.spectrumMoment);
     if (!sp) {
         iconBars(SW / 2, 300, 30, INK);
@@ -1655,7 +1710,7 @@ static void drawLibrary(const ViewState &v) {
     char subtitle[32];
     snprintf(subtitle, sizeof(subtitle), "%d document%s", v.libraryCount, v.libraryCount == 1 ? "" : "s");
     drawSubHeader(v, "Library", subtitle);
-    const int rowH = 72, visible = (FOOTER_LINE_Y - LIST_TOP - 8) / rowH;
+    const int rowH = 72, visible = (listBottom() - LIST_TOP - 4) / rowH;
     static int scrollTop = 0;
     int sel = max(0, v.selected);
     if (sel < scrollTop) scrollTop = sel;
@@ -1757,7 +1812,7 @@ static void drawRecordingView(const ViewState &v) {
 
 // Shades everything below the header so a dialog stands out; returns nothing
 static void shadeBehindDialog() {
-    for (int y = LIST_TOP; y < FOOTER_LINE_Y - 4; y += 2) {
+    for (int y = LIST_TOP; y < listBottom(); y += 2) {
         for (int x = (y / 2 % 2) * 2; x < SW; x += 4) canvas->drawPixel(x, y, INK);
     }
 }
@@ -1834,6 +1889,26 @@ static void drawGainPicker(const ViewState &v) {
         else snprintf(label, sizeof(label), "%d dB%s", GAIN_CHOICES[i], GAIN_CHOICES[i] == 54 ? "  (quiet places)" : GAIN_CHOICES[i] == 0 ? "  (very loud)" : "");
         drawText(x + 56, iy + 26, &Text22, label, fg);
         if (GAIN_CHOICES[i] == v.gainSetting) canvas->fillCircle(x + 34, iy + 18, 5, fg);
+    }
+}
+
+// Analysis: which view, or back to the list
+static const char *const VIEW_CHOICES[] = {"Spectrogram", "Spectrum (FFT)", "Back to the moments"};
+static const int VIEW_CHOICE_COUNT = 3;
+
+static void drawViewPicker(const ViewState &v) {
+    shadeBehindDialog();
+    const int itemH = 44, y = 200, h = 70 + VIEW_CHOICE_COUNT * itemH + 12;
+    const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
+    dialogBox(y, h);
+    drawText(x + 24, y + 44, &Bold32, "Analysis", INK);
+    for (int i = 0; i < VIEW_CHOICE_COUNT; i++) {
+        int iy = y + 62 + i * itemH;
+        bool chosen = i == v.overlayChoice;
+        uint16_t fg = chosen ? PAPER : INK;
+        if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
+        drawText(x + 56, iy + 28, &Text22, VIEW_CHOICES[i], fg);
+        if (i == v.spectrumView) canvas->fillCircle(x + 34, iy + 20, 5, fg); // the view shown now
     }
 }
 
@@ -1996,6 +2071,8 @@ static void drawFooter(const ViewState &v) {
             }
         } else if (v.overlay == OVERLAY_GAIN) {
             press = "Use";
+        } else if (v.overlay == OVERLAY_VIEW) {
+            press = v.overlayChoice == VIEW_CHOICE_COUNT - 1 ? "Back" : "Show";
         } else if (v.overlayChoice == 0) {
             press = "Cancel";
         } else {
@@ -2018,9 +2095,9 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_SPECTRUM) {
         if (playing) rocker[nr++] = {HINT_UPDOWN, "Up or down: speed"};
-        else rocker[nr++] = {HINT_UPDOWN, v.spectrumView == VIEW_FFT ? "Spectrogram / contrast" : "FFT / contrast"};
+        else rocker[nr++] = {HINT_UPDOWN, "Contrast"};
         rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
-        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: options"};
     } else if (v.screen == SCREEN_LIBRARY) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Read"};
@@ -2120,6 +2197,7 @@ static void render(const ViewState &v) {
         case OVERLAY_CONFIRM_DELETE: drawDeleteDialog(v); break;
         case OVERLAY_CONFIRM_FORMAT: drawFormatDialog(v); break;
         case OVERLAY_GAIN: drawGainPicker(v); break;
+        case OVERLAY_VIEW: drawViewPicker(v); break;
         case OVERLAY_CONFIRM_UNSCHEDULE: drawUnscheduleDialog(v); break;
         }
     }
@@ -2276,7 +2354,7 @@ static void openMenu(int index) {
 }
 
 static void handleOverlay(ButtonEvent event) {
-    int choices = overlay == OVERLAY_MENU ? MENU_ITEMS : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : 2;
+    int choices = overlay == OVERLAY_MENU ? MENU_ITEMS : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : overlay == OVERLAY_VIEW ? VIEW_CHOICE_COUNT : 2;
     switch (event) {
     case BTN_UP:
         overlayChoice = (overlayChoice + choices - 1) % choices;
@@ -2316,6 +2394,14 @@ static void handleOverlay(ButtonEvent event) {
         } else if (overlay == OVERLAY_GAIN) {
             audioSetMicGain(GAIN_CHOICES[overlayChoice]);
             overlay = OVERLAY_NONE;
+        } else if (overlay == OVERLAY_VIEW) {
+            overlay = OVERLAY_NONE;
+            if (overlayChoice == VIEW_CHOICE_COUNT - 1) {
+                if (audioState() == AUDIO_PLAYING) audioStopPlayback();
+                showScreen(spectrumFrom, spectrumFromSelected);
+            } else {
+                spectrumView = overlayChoice;
+            }
         } else if (overlay == OVERLAY_CONFIRM_UNSCHEDULE) {
             Schedule s;
             for (int i = 0; overlayChoice == 1 && scheduleGet(i, s); i++) {
@@ -2627,15 +2713,14 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_READER: handleReader(event); break;
     case SCREEN_SPECTRUM:
         if (event == BTN_UP) {
-            spectrumView = spectrumView == VIEW_FFT ? VIEW_SPECTROGRAM : VIEW_FFT;
+            if (spectrumContrast < CONTRAST_LEVELS - 1) spectrumContrast = spectrumContrast + 1; // more
         } else if (event == BTN_DOWN) {
-            spectrumContrast = (spectrumContrast + 1) % CONTRAST_LEVELS;
+            if (spectrumContrast > 0) spectrumContrast = spectrumContrast - 1;
         } else if (event == BTN_CLICK) {
             int index = momentIndexByNumber(spectrumMoment);
             if (index >= 0) togglePlay(index);
         } else if (event == BTN_LONG_CLICK) {
-            if (audio == AUDIO_PLAYING) audioStopPlayback();
-            showScreen(spectrumFrom, spectrumFromSelected);
+            openOverlay(OVERLAY_VIEW, spectrumView);
         }
         break;
     case SCREEN_TRANSFER:

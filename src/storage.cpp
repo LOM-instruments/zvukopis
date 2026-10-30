@@ -377,8 +377,9 @@ static bool readMomentHeader(File &f, Moment &moment) {
         if (memcmp(id, "fmt ", 4) == 0 && size >= sizeof(WavFormat)) {
             WavFormat fmt;
             f.read((uint8_t *)&fmt, sizeof(fmt));
-            haveFormat = fmt.audioFormat == 1 && fmt.channels == 1 &&
-                         fmt.sampleRate == SAMPLE_RATE && fmt.bitsPerSample == 16;
+            haveFormat = fmt.audioFormat == 1 && fmt.channels == 1 && fmt.bitsPerSample == 16 &&
+                         fmt.sampleRate >= 8000 && fmt.sampleRate <= 192000;
+            moment.sampleRate = fmt.sampleRate;
         } else if (memcmp(id, "zvkp", 4) == 0 && size >= sizeof(MomentChunk)) {
             MomentChunk extra;
             f.read((uint8_t *)&extra, sizeof(extra));
@@ -462,6 +463,8 @@ bool storageUpdateMoment(Moment &moment) {
     if (!f) return false;
     bool ok = forEachChunk(f, [&](const char *id, uint32_t size, uint32_t payload) {
         if (memcmp(id, "zvkp", 4) != 0 || size < sizeof(MomentChunk)) return false;
+        f.seek(payload + offsetof(MomentChunk, number));
+        f.write((const uint8_t *)&moment.number, sizeof(moment.number)); // renumbered, if it collided with another file's
         f.seek(payload + offsetof(MomentChunk, tag));
         f.write(&moment.tag, 1);
         return true;

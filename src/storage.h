@@ -34,7 +34,7 @@ int storageLoadMoments(Moment *out, int max);
 bool storageSaveMoment(Moment &moment, const int16_t *samples); // fills in fileName and dataOffset
 bool storageDeleteMoment(const Moment &moment);
 void storageListFiles(); // every file on the card, over serial (for debugging)
-bool storageUpdateMoment(Moment &moment); // writes its tag to the file and renames it to match
+bool storageUpdateMoment(Moment &moment); // writes its number and tag to the file and renames it to match the tag
 // The file name a moment gets (or would get) from its time and tag
 void storageMomentFileName(const Moment &moment, char *buf, size_t len);
 File storageOpenMoment(const Moment &moment);   // positioned at the first sample

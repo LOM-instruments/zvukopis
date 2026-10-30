@@ -7,11 +7,11 @@
 #include "audio.h"
 #include "storage.h"
 
-static const int FFT_SIZE = 2048; // 23 Hz bins at 48 kHz
-static const float PEAK_MIN_HZ = 40; // the loudest point is looked for above this: below is DC offset and rumble
+static const int FFT_SIZE = SAMPLE_RATE >= 96000 ? 4096 : 2048; // 23 Hz bins either way
 
 static Spectrogram result;
-static float *dbGrid = nullptr; // kept between analyses (PSRAM), sized by the first request
+static float *dbGrid = nullptr; // kept between analyses (PSRAM), grown when a request is bigger
+static size_t dbGridCells = 0;
 static float *averageDb = nullptr; // FFT_SIZE / 2
 static volatile int readyNumber = -1;   // moment whose spectrogram is in `result`
 static volatile int progress = 0;       // percent of the columns done
@@ -65,7 +65,11 @@ static bool compute(int number, int width, int height) {
     if (index < 0 || moment.length < FFT_SIZE / 4) return false;
     uint32_t start = millis();
 
-    if (!dbGrid) dbGrid = (float *)ps_malloc(wantedWidth * wantedHeight * sizeof(float));
+    if (!dbGrid || (size_t)wantedWidth * wantedHeight > dbGridCells) {
+        free(dbGrid);
+        dbGridCells = (size_t)wantedWidth * wantedHeight;
+        dbGrid = (float *)ps_malloc(dbGridCells * sizeof(float));
+    }
     float *db = dbGrid;
     float *fft = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_INTERNAL);
     int16_t *frame = (int16_t *)malloc(FFT_SIZE * sizeof(int16_t));
@@ -78,7 +82,8 @@ static bool compute(int number, int width, int height) {
     if (ok && !averageDb) averageDb = (float *)ps_malloc(FFT_SIZE / 2 * sizeof(float));
     ok = ok && averageDb && width * height <= wantedWidth * wantedHeight;
     if (ok) {
-        const float binHz = (float)SAMPLE_RATE / FFT_SIZE;
+        const float rate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
+        const float binHz = rate / FFT_SIZE;
         for (int r = 0; r < height; r++) {
             float upper = SPECTRUM_HIGH_HZ * (1 - (float)r / height);
             float lower = SPECTRUM_HIGH_HZ * (1 - (float)(r + 1) / height);
@@ -96,8 +101,14 @@ static bool compute(int number, int width, int height) {
             progress = c * 100 / width;
             long centre = (long)((c + 0.5) * moment.length / width);
             source.read(centre - FFT_SIZE / 2, FFT_SIZE, frame);
+            // The ADC's residual offset is tiny (about -100 dBFS) but far above
+            // one bin's share of the noise floor, so it must not leak into
+            // the first bins through the window: take the frame's mean out
+            int32_t sum = 0;
+            for (int i = 0; i < FFT_SIZE; i++) sum += frame[i];
+            float mean = (float)sum / FFT_SIZE;
             for (int i = 0; i < FFT_SIZE; i++) {
-                fft[2 * i] = frame[i] / 32768.0f * window[i];
+                fft[2 * i] = (frame[i] - mean) / 32768.0f * window[i];
                 fft[2 * i + 1] = 0;
             }
             dsps_fft2r_fc32(fft, FFT_SIZE);
@@ -144,7 +155,7 @@ static bool compute(int number, int width, int height) {
             result.db = db;
             result.loudestDb = loudest;
             result.peakHz = spectrumRowHz(result.peakRow, height);
-            result.seconds = (float)moment.length / SAMPLE_RATE;
+            result.seconds = (float)moment.length / rate;
             result.peakSeconds = (result.peakColumn + 0.5f) / width * result.seconds;
             int firstBin = (int)ceilf(PEAK_MIN_HZ / binHz), peakBin = firstBin;
             for (int b = 0; b < FFT_SIZE / 2; b++) {

@@ -283,7 +283,7 @@ setInterval(poll,1000);poll();
 if($('ssid')&&firstTab==='settings')scan();else if($('ssid'))ssidChanged();
 </script></body></html>)";
 
-static const int GAIN_STEPS[] = {GAIN_AUTO, 0, 6, 12, 18, 24, 30, 36, 42, 48, 54};
+static const int GAIN_STEPS[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int LENGTHS[] = {30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 28800, 43200};
 
 // "12 h", "1 h 30 min", "5 min", "45 s"
@@ -381,7 +381,8 @@ static void sendMoments(char *buf, size_t len) {
             strftime(when, sizeof(when), "%e %b %Y %H:%M:%S", &local);
         }
         downloadName(moment, name, sizeof(name));
-        int seconds = (int)((moment.length + SAMPLE_RATE / 2) / SAMPLE_RATE);
+        uint32_t rate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
+        int seconds = (int)((moment.length + rate / 2) / rate);
         if (moment.tag != TAG_NONE) {
             Category c = configCategory(moment.tag);
             char escaped[CATEGORY_NAME_LEN * 6];

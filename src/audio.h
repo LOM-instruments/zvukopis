@@ -9,13 +9,17 @@
 // With an SD card in at startup, moments are saved to it and played back from it;
 // otherwise they live in PSRAM and are lost on reset.
 
-// 48 kHz; the measure96k build (platformio.ini) doubles it for looking above
-// 20 kHz. Files from one rate don't load in the other.
+// 96 kHz: the microphone has real output to 40 kHz (measured). Moments made
+// at 48 kHz (older firmware, or a build with -DSAMPLE_RATE_HZ=48000) still
+// load and play; each moment carries its own rate.
 #ifndef SAMPLE_RATE_HZ
-#define SAMPLE_RATE_HZ 48000
+#define SAMPLE_RATE_HZ 96000
 #endif
 static const int SAMPLE_RATE = SAMPLE_RATE_HZ;
-static const uint32_t MAX_RECORDING_SECONDS = 12 * 3600; // one WAV file can't pass 4 GB
+// The lowest useful mic gain: below it the codec's own floor (about -92 dBFS)
+// swallows the signal, and nothing is loud enough to need the headroom
+static const int MIN_GAIN_DB = 18;
+static const uint32_t MAX_RECORDING_SECONDS = (SAMPLE_RATE >= 96000 ? 6 : 12) * 3600; // one WAV file can't pass 4 GB
 static const int MAX_MOMENTS = 500;
 static const int WAVEFORM_BINS = 77;
 
@@ -39,6 +43,7 @@ struct Moment {
     char fileName[48];               // ... and the file in it: 2026-10-28T10-05-15_nature.wav
     int16_t *samples;                // mono, SAMPLE_RATE Hz; nullptr when the moment is on the SD card
     size_t length;                   // in samples
+    uint32_t sampleRate;             // of this moment's samples (older files: 48000)
     uint32_t dataOffset;             // where the samples start in the moment's file on the SD card
     float gain;                      // playback boost so the loudest moment is near full scale
     uint8_t waveform[WAVEFORM_BINS]; // loudness overview for the list, 0-255

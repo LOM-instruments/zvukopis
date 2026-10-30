@@ -80,7 +80,7 @@ static int nextMomentNumber = 1;
 
 // Recording goes into a buffer sized for the longest moment that fits, which is
 // then shrunk to the moment (in PSRAM) or written to the card and freed.
-// At 48 kHz a minute is 5.8 MB, too much to keep reserved.
+// At 96 kHz a minute is 11.5 MB, too much to keep reserved.
 static int16_t *scratch = nullptr;
 static volatile size_t scratchLength = 0; // samples taken in so far
 // With a card in, the samples go straight onto it (see storage.h); the list
@@ -128,7 +128,7 @@ static int gainStepUp(int db) { return db < 30 ? db + 3 : db + 6; }
 static int gainStepDown(int db) { return db > 30 ? db - 6 : db - 3; }
 
 static void applyGain(int db) {
-    db = constrain(db, 0, MAX_GAIN_DB);
+    db = constrain(db, MIN_GAIN_DB, MAX_GAIN_DB);
     int pga = min(db, 30) / 3;
     int scale = (db - pga * 3) / 6;
     if (codec) {
@@ -142,7 +142,7 @@ static void applyGain(int db) {
 static void autoGain(const int16_t *in, size_t frames, size_t skip) {
     int peak = 0;
     for (size_t i = skip; i < frames; i++) peak = max(peak, abs((int)in[2 * i]));
-    if (peak > AGC_LOUD && gainNow > 0) {
+    if (peak > AGC_LOUD && gainNow > MIN_GAIN_DB) {
         applyGain(gainStepDown(gainNow));
         agcQuietChunks = 0;
         agcChanges++;
@@ -195,7 +195,7 @@ static size_t recordableSamples() {
 }
 
 static void startRecording(uint32_t seconds) {
-    recordLimit = min((size_t)seconds * SAMPLE_RATE, recordableSamples());
+    recordLimit = (size_t)min((uint64_t)seconds * SAMPLE_RATE, (uint64_t)recordableSamples());
     if (recordLimit < MIN_MOMENT_SAMPLES) {
         Serial.println("No room for another recording");
         return;
@@ -300,6 +300,7 @@ static void finishRecording() {
     }
     Moment moment = {};
     moment.number = nextMomentNumber++;
+    moment.sampleRate = SAMPLE_RATE;
     moment.recordedAt = recordStartedAt;
     moment.startMs = recordStartedMs;
     moment.length = length;
@@ -555,10 +556,13 @@ static void updateSpeed() {
 
 // Fills `out` (stereo) with up to `frames` frames of the playing moment at the
 // current speed, by linear interpolation; fewer at the end
+static volatile uint32_t playRate = SAMPLE_RATE; // the playing moment's
+
 static size_t playbackChunk(const Moment &moment, int16_t *out, size_t frames) {
     updateSpeed();
     double pos = playPos;
-    float step = speed;
+    playRate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
+    float step = speed * (float)playRate / SAMPLE_RATE; // a 48 kHz moment steps half as fast
     size_t n = 0;
     while (n < frames && !playFileEnded) {
         if (pos < 0) pos = 0; // backwards to the start: wait there
@@ -612,6 +616,7 @@ static void audioTask(void *) {
                 if (scratchLength == 0 && n > 0) {
                     streamMoment = {};
                     streamMoment.number = nextMomentNumber;
+                    streamMoment.sampleRate = SAMPLE_RATE;
                     streamMoment.recordedAt = recordStartedAt;
                     streamMoment.startMs = recordStartedMs;
                     if (!storageStreamBegin(streamMoment)) {
@@ -712,6 +717,7 @@ bool audioInit() {
     Preferences prefs;
     prefs.begin("zvukopis", true);
     gainSetting = prefs.getInt("gain", GAIN_AUTO);
+    if (gainSetting != GAIN_AUTO && gainSetting < MIN_GAIN_DB) gainSetting = MIN_GAIN_DB; // saved by a firmware that allowed less
     prefs.end();
 
     pinMode(PA_ENABLE_PIN, OUTPUT);
@@ -719,9 +725,25 @@ bool audioInit() {
 
     if (storageInit()) {
         momentTotal = storageLoadMoments(moments, MAX_MOMENTS);
-        qsort(moments, momentTotal, sizeof(Moment), [](const void *a, const void *b) {
-            return ((const Moment *)b)->number - ((const Moment *)a)->number; // newest first
-        });
+        auto newestFirst = [](const void *a, const void *b) { return ((const Moment *)b)->number - ((const Moment *)a)->number; };
+        qsort(moments, momentTotal, sizeof(Moment), newestFirst);
+        // Files numbered by a firmware that didn't see the others (a different
+        // sample rate, once) can share a number; the later ones get new ones,
+        // written into their files so the numbers stay put from then on
+        int highest = momentTotal > 0 ? moments[0].number : 0;
+        int previousOriginal = highest; // the number the entry before had on the card
+        bool renumbered = false;
+        for (int i = 1; i < momentTotal; i++) {
+            int original = moments[i].number;
+            if (original == previousOriginal) {
+                Serial.printf("Moment %d twice on the card: %s/%s becomes Moment %d\n", moments[i].number, moments[i].folder, moments[i].fileName, highest + 1);
+                moments[i].number = ++highest;
+                if (!storageUpdateMoment(moments[i])) Serial.println("  (couldn't write the new number to the card)");
+                renumbered = true;
+            }
+            previousOriginal = original;
+        }
+        if (renumbered) qsort(moments, momentTotal, sizeof(Moment), newestFirst);
         if (momentTotal > 0) nextMomentNumber = moments[0].number + 1;
     }
 
@@ -796,7 +818,7 @@ float audioRecordingLimitSeconds() { return (float)recordLimit / SAMPLE_RATE; }
 int audioPlayingIndex() { return playingIndex; }
 
 float audioPlaybackSeconds() {
-    return state == AUDIO_PLAYING ? (float)(playPos / SAMPLE_RATE) : 0;
+    return state == AUDIO_PLAYING ? (float)(playPos / playRate) : 0;
 }
 
 float audioPlaybackSpeed() { return state == AUDIO_PLAYING ? speed : 1; }

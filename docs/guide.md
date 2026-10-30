@@ -22,11 +22,11 @@ Below that is the list: *New recording* first, then your moments, newest on top,
 
 Press the side switch in on *New recording*. The screen shows that it is recording and when it started. Press in again to stop. The moment appears at the top of the list.
 
-A recording can run for up to twelve hours with an SD card in. Without a card the moments live in memory only, which holds a minute or so, and they are gone when the device is switched off.
+A recording can run for up to six hours with an SD card in. Without a card the moments live in memory only, which holds about half a minute, and they are gone when the device is switched off.
 
 The screen keeps still while recording, because the panel's refresh is faintly audible to the microphone.
 
-**Mic gain** is in Settings. *Auto* follows the room and is right for most things; a fixed value from 0 to 54 dB is better for a sound you know, such as a concert or a quiet night.
+**Mic gain** is in Settings. *Auto* follows the room and is right for most things; a fixed value from 18 to 54 dB is better for a sound you know, such as a concert or a quiet night.
 
 ## Quick record
 
@@ -81,7 +81,7 @@ The web interface stays on until you leave the screen on the device. Wi-Fi uses 
 
 ## The SD card
 
-Moments are ordinary WAV files (48 kHz, mono, 16-bit) in a folder per day:
+Moments are ordinary WAV files (96 kHz, mono, 16-bit) in a folder per day:
 
 > moments/2026-10-28/2026-10-28T10-12-27_nature.wav
 

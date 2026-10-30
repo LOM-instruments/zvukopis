@@ -17,7 +17,7 @@ is also on the project page, and it reads on the device (a copy sits in
 `library/` next to the sample document). In short:
 
 - **Record:** press the side switch in on *New recording*. Press again to stop.
-  With an SD card in, a recording can run for up to 12 hours.
+  With an SD card in, a recording can run for up to 6 hours.
 - **Listen:** move to a moment and press in. Holding up or down while it plays
   changes the speed, like a tape reel.
 - **Tag, analyse, delete:** hold the switch in on a moment.
@@ -65,7 +65,7 @@ chapter *Sounds* from Thoreau's *Walden*.
 
 ### SD card
 
-Moments are WAV files (48 kHz, mono, 16-bit) in a folder per day:
+Moments are WAV files (96 kHz, mono, 16-bit) in a folder per day:
 
     /moments/2026-10-28/2026-10-28T10-12-27_nature.wav
 
@@ -76,6 +76,11 @@ recording started, so audio editors place it on their timeline.
 Cards over 32 GB come formatted as exFAT, which the firmware can't read; it
 offers to format such a card (FAT32) in Settings, and the USB card reader
 also works with it, so you can format it from a computer instead.
+
+## Technical specification
+
+[docs/tech-spec.md](docs/tech-spec.md): the audio chain, levels and limits of
+this board with this firmware, measured where it says so.
 
 ## Flashing
 
