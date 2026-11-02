@@ -32,16 +32,11 @@
   </div>
 </section>
 
-<section class="band" aria-labelledby="gist">
-  <div class="cell c3"><h1 class="title" id="gist">In short</h1></div>
-  <div class="cell c9 flush">
-    <ul class="tiles">
-      <li><span class="cap">Open source, DIY</span><span class="what">A Waveshare e-ink board, a USB cable and a browser. MIT licence; the code is on GitHub.</span></li>
-      <li><span class="cap">96 kHz / 16-bit on SD card</span><span class="what">Plain WAV files, up to 6 hours each, with a timecode of when they started. Microphone bandwidth to 40 kHz.</span></li>
-      <li><span class="cap">Spectrogram and FFT</span><span class="what">Frequency analysis of any recording on the device, 0 to 48 kHz, with adjustable contrast.</span></li>
-      <li><span class="cap">Wi-Fi remote and schedule</span><span class="what">Record from a phone, download or back everything up, and set recordings to start by themselves, even from sleep.</span></li>
-    </ul>
-  </div>
+<section class="band four" aria-label="In short">
+  <div class="cell"><h1 class="title">Open source, DIY</h1><p class="note">A Waveshare e-ink board, a USB cable and a browser. MIT licence; the code is on GitHub.</p></div>
+  <div class="cell"><h1 class="title">96 kHz / 16-bit on SD card</h1><p class="note">Plain WAV files, up to 6 hours each, with a timecode of when they started. Microphone bandwidth to 40 kHz.</p></div>
+  <div class="cell"><h1 class="title">Spectrogram and FFT</h1><p class="note">Frequency analysis of any recording on the device, 0 to 48 kHz, with adjustable contrast.</p></div>
+  <div class="cell"><h1 class="title">Wi-Fi remote and schedule</h1><p class="note">Record from a phone, download or back everything up, and set recordings to start by themselves, even from sleep.</p></div>
 </section>
 
 <section class="band" aria-labelledby="use">
@@ -64,6 +59,8 @@
     <p class="note version" id="installs">Loading the firmware version&hellip;</p>
   </div>
   <div class="cell c9">
+    <p id="noserial" class="warning" hidden><b>No Install button here.</b> <span id="noserial-why">This browser can't talk to USB ports.</span>
+    Open this page in <b>Chrome</b> or <b>Edge</b> on a computer (not on a phone) and the button appears.</p>
     <p>Chrome or Edge on a computer, the <a href="https://www.waveshare.com/esp32-s3-epaper-3.97.htm">board</a> on a USB cable.</p>
     <ol>
       <li>Connect the board, awake (if the screen says it's sleeping, hold the sleep button, marked PWR, for a second).</li>
@@ -106,6 +103,13 @@
 </main>
 
 <script>
+  if (!('serial' in navigator)) {
+    const ua = navigator.userAgent, why = document.getElementById('noserial-why');
+    if (/iPhone|iPad|Android/.test(ua)) why.textContent = 'Phones and tablets can\'t flash a board over USB.';
+    else if (/Safari/.test(ua) && !/Chrome|Chromium|Edg/.test(ua)) why.textContent = 'Safari can\'t talk to USB ports.';
+    else if (/Firefox/.test(ua)) why.textContent = 'Firefox can\'t talk to USB ports.';
+    document.getElementById('noserial').hidden = false;
+  }
   fetch('manifest.json', {cache: 'no-cache'}).then(r => r.json()).then(m => {
     document.getElementById('installs').innerHTML = 'Installs firmware <b>' + m.version + '</b>';
   }).catch(() => { document.getElementById('installs').textContent = ''; });
