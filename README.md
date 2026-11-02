@@ -99,7 +99,12 @@ flasher's reset.
 platform. `pio run -t upload` builds and flashes; `scripts/make_release.py`
 builds the `release` environment (the same firmware without any baked-in
 Wi-Fi credentials, and it checks the binary for them), copies the binaries
-into `docs/firmware/` and writes the flasher's manifest.
+into `docs/firmware/` and writes the flasher's manifest. With `--publish` it
+also commits that, pushes, and creates a
+[GitHub Release](https://github.com/LOM-instruments/zvukopis/releases) tagged
+with the version, the binaries attached and notes made from the commits since
+the previous release. The version (date and commit) is what Settings on the
+device shows.
 
 Wi-Fi credentials are not in the code: they are saved from the web interface.
 For development, `src/wifi_config.example.h` can be copied to

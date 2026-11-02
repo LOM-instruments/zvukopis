@@ -21,6 +21,7 @@
   .screen b { display: block; margin-bottom: .3rem; }
   .screen i { color: var(--dim); font-style: normal; }
   .install { margin: 1.2rem 0; }
+  .sub { color: var(--dim); margin: .2rem 0 0; }
   esp-web-install-button { --esp-tools-button-color: var(--ink); --esp-tools-button-text-color: var(--paper); }
   code { background: rgba(127,127,127,.15); padding: 0 .3rem; border-radius: .3rem; }
   .note { font-size: .9rem; color: var(--dim); border-top: 1px solid var(--rule); padding-top: 1rem; margin-top: 2.5rem; }
@@ -88,6 +89,7 @@ a USB cable, and Chrome or Edge on a computer (they can talk to USB ports; Safar
   <li>When it's done, <b>unplug and replug the USB cable</b> (or hold the sleep button for 10 seconds). The board stays
   in download mode after the flasher's reset.</li>
 </ol>
+<p id="installs" class="sub">Loading the firmware version&hellip;</p>
 <div class="install">
   <esp-web-install-button manifest="manifest.json">
     <span slot="unsupported">This browser can't talk to USB ports. Use Chrome or Edge on a computer.</span>
@@ -108,5 +110,11 @@ Build it with PlatformIO, or read the README for how it all fits together.</p>
   Quotes on the sleep screen: Pauline Oliveros. Flasher: <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>.
   <code>manifest.json</code> says which firmware version this page installs.
 </div>
+<script>
+  fetch('manifest.json', {cache: 'no-cache'}).then(r => r.json()).then(m => {
+    document.getElementById('installs').innerHTML = 'Installs firmware <b>' + m.version + '</b>' +
+      ' (<a href="https://github.com/LOM-instruments/zvukopis/releases">release notes</a>). Settings on the device shows the version it runs.';
+  }).catch(() => { document.getElementById('installs').textContent = ''; });
+</script>
 </body>
 </html>
