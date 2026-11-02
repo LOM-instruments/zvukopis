@@ -1,7 +1,7 @@
 /* zvukopis pages in the LOM house style, as on space.lom.audio and
    library.lom.audio: a grey page, black Helvetica, one-pixel rules, bands of
    cells, an etched wordmark, one accent colour. */
-:root { --bg: #ececec; --text: #000; --muted: #595959; --tile: #d8d8d8; --accent: #3a86ff; --edge: 16px; --line: 1px; }
+:root { --bg: #ececec; --text: #000; --muted: #595959; --tile: #d8d8d8; --accent: #3a86ff; --yellow: #ffc72c; --red: #f15656; --green: #35c46a; --blue: #3a86ff; --edge: 16px; --line: 1px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--text); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; min-height: 100dvh; }
@@ -32,9 +32,21 @@ pre code { border: 0; padding: 0; background: none; }
 
 /* Bands of cells */
 .band { border-bottom: var(--line) solid var(--text); }
+.cell.black { background: var(--text); color: #fff; }
+.cell.black .display { max-width: 40ch; }
+.cell.black .note { color: #bbb; }
 .cell.photo { padding: 0; background: #fff; line-height: 0; }
 .cell.photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .band.hero .cell:not(.photo) { display: flex; flex-direction: column; justify-content: center; }
+/* The four points: a colour each, the lines between them drawn by the grid's gaps */
+.band.four { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--line); background: var(--text); }
+.band.four .cell { border: 0; background: var(--bg); }
+.band.four .cell:nth-child(1) { background: var(--yellow); }
+.band.four .cell:nth-child(2) { background: var(--red); }
+.band.four .cell:nth-child(3) { background: var(--green); }
+.band.four .cell:nth-child(4) { background: var(--blue); }
+.band.four .note { color: var(--text); }
+.band.four .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--text); vertical-align: .08em; }
 .cell { min-width: 0; padding: 18px var(--edge) 24px; }
 .cell + .cell { border-top: var(--line) solid var(--text); }
 .cell.flush { padding: 0; }
@@ -67,10 +79,10 @@ pre code { border: 0; padding: 0; background: none; }
 .btn { display: inline-block; padding: 11px 18px 12px; background: var(--text); color: #fff; font-size: 17px; line-height: 1.2; text-decoration: none; border: var(--line) solid var(--text); border-radius: 0; cursor: pointer; transition: background-color .15s; }
 .btn.quiet { background: transparent; color: var(--text); }
 .btn:hover, .btn:focus-visible { background: var(--accent); color: #000; }
-esp-web-install-button { --esp-tools-button-color: var(--text); --esp-tools-button-text-color: #fff; --esp-tools-button-border-radius: 0; }
+esp-web-install-button { --esp-tools-button-color: var(--blue); --esp-tools-button-text-color: #000; --esp-tools-button-border-radius: 0; }
 esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 11px 18px 12px; }
 .install { margin: 14px 0 10px; }
-.version b { font-weight: 400; background: var(--text); color: #fff; padding: 1px 7px 2px; }
+.version b { font-weight: 400; background: var(--yellow); color: var(--text); padding: 1px 7px 2px; }
 
 /* Footer */
 .site-footer { font-size: 14px; line-height: 1.5; color: var(--muted); border-bottom: 0; }
@@ -81,7 +93,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 .doc h1 { margin: 0 0 14px; font-size: clamp(28px, 4vw, 46px); font-weight: 400; line-height: 1.08; letter-spacing: -.015em; }
 .doc h1 + p em { font-size: clamp(18px, 2vw, 24px); line-height: 1.25; color: var(--muted); font-style: normal; }
 .doc h2 { margin: 34px 0 10px; padding-top: 18px; border-top: var(--line) solid var(--text); font-size: 22px; font-weight: 400; line-height: 1.2; }
-.doc h2::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--text); vertical-align: .08em; }
+.doc h2::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--blue); vertical-align: .08em; }
 .doc p, .doc li { max-width: 66ch; font-size: 17px; }
 .doc li { margin-bottom: .5em; }
 .doc blockquote { margin: 12px 0; padding: 6px 14px; border-left: 3px solid var(--text); background: #fff; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; max-width: 66ch; }
@@ -113,7 +125,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 }
 @media (max-width: 899px) {
   main > .band { border-bottom-width: 3px; }
-  .band > .cell:first-child .title::before, .band.four .cell .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--text); vertical-align: .08em; }
+  .band > .cell:first-child .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--blue); vertical-align: .08em; }
   .band > .cell:first-child:has(> .title) + .cell { padding-top: 0; border-top: 0; }
 }
 @media (min-width: 900px) {
@@ -124,15 +136,12 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
   .c5 { grid-column: span 5; }
   .c7 { grid-column: span 7; }
   .band.hero .cell.photo { min-height: 100%; }
-  /* The four points: two by two on a desktop, four across only on a wide one */
-  .band.four .cell { grid-column: span 6; }
-  .band.four .cell:nth-child(3) { border-left: 0; }
-  .band.four .cell:nth-child(n+3) { border-top: var(--line) solid var(--text); }
+  .band.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .band.four .cell { grid-column: auto; border: 0; }
   .c9 { grid-column: span 9; }
   .c12 { grid-column: span 12; }
   .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (min-width: 1300px) {
-  .band.four .cell { grid-column: span 3; border-top: 0; }
-  .band.four .cell:nth-child(3) { border-left: var(--line) solid var(--text); }
+  .band.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }

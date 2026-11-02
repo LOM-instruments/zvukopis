@@ -44,6 +44,13 @@
   <div class="cell"><h1 class="title">Wi-Fi remote and schedule</h1><p class="note">Record from a phone, download or back everything up, and set recordings to start by themselves, even from sleep.</p></div>
 </section>
 
+<section class="band" aria-label="No distractions">
+  <div class="cell c12 black">
+    <p class="display">Nothing else on it. No notifications, no apps, no account, no feed.</p>
+    <p class="note">A screen that waits, one switch, and the sound around you.</p>
+  </div>
+</section>
+
 <section class="band" aria-labelledby="use">
   <div class="cell c3"><h1 class="title" id="use">In use</h1><p class="note">The side switch does everything: up or down, press in, hold in.</p></div>
   <div class="cell c9">
@@ -75,6 +82,7 @@
     </ol>
     <div class="install">
       <esp-web-install-button manifest="manifest.json">
+        <button slot="activate" class="btn" style="background:var(--blue);color:#000">Install</button>
         <span slot="unsupported">This browser can't talk to USB ports. Use Chrome or Edge on a computer.</span>
         <span slot="not-allowed">This page has to be opened over HTTPS for the browser to allow USB access.</span>
       </esp-web-install-button>
