@@ -37,6 +37,7 @@ pre code { border: 0; padding: 0; background: none; }
 .cell.black .note { color: #bbb; }
 .cell.photo { padding: 0; background: #fff; line-height: 0; }
 .cell.photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cell.photo.fit img { object-fit: contain; max-height: 70vh; }
 .band.hero .cell:not(.photo) { display: flex; flex-direction: column; justify-content: center; }
 /* The four points: a colour each, the lines between them drawn by the grid's gaps */
 .band.four { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--line); background: var(--text); }
@@ -130,6 +131,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
   .cell { padding: 22px var(--edge) 30px; }
   .cell + .cell { border-top: 0; border-left: var(--line) solid var(--text); }
   .c3 { grid-column: span 3; }
+  .c4 { grid-column: span 4; }
   .c5 { grid-column: span 5; }
   .c7 { grid-column: span 7; }
   .band.hero .cell.photo { min-height: 100%; }

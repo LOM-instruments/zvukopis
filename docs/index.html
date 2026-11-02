@@ -20,6 +20,7 @@
 <nav class="site-nav" aria-label="Main">
   <span class="pages">
     <a href="./" aria-current="page">Project</a>
+    <a href="#build">Build</a>
     <a href="#flash">Install</a>
     <a href="guide.html">User guide</a>
     <a href="tech-spec.html">Specification</a>
@@ -38,7 +39,7 @@
 </section>
 
 <section class="band four" aria-label="In short">
-  <div class="cell"><h1 class="title">Open source, DIY</h1><p class="note">A Waveshare e-ink board with SD card, a USB cable and a browser. MIT licence; the code is on GitHub.</p></div>
+  <div class="cell"><h1 class="title">Open source, DIY</h1><p class="note">A Waveshare e-ink board in a 3D-printed case, an SD card, a USB cable and a browser. MIT licence; the code is on GitHub.</p></div>
   <div class="cell"><h1 class="title">96 kHz / 16-bit recording</h1><p class="note">Plain WAV files, up to 6 hours each, with embedded time of the day timecode. Microphone bandwidth to 40 kHz.</p></div>
   <div class="cell"><h1 class="title">Spectrogram and FFT</h1><p class="note">Frequency analysis of any recording on the device, 0 to 48 kHz, with adjustable contrast.</p></div>
   <div class="cell"><h1 class="title">Wi-Fi remote and schedule</h1><p class="note">Record from a phone, download or back everything up, and set recordings to start by themselves, even from sleep.</p></div>
@@ -61,6 +62,25 @@
       <dt>Read</dt><dd>Markdown files in the card's <code>doc</code> folder open on the screen, for the quiet between recordings.</dd>
       <dt>Rest</dt><dd>It sleeps after five minutes and wakes for a scheduled recording or a press.</dd>
     </dl>
+  </div>
+</section>
+
+<section class="band" id="build" aria-labelledby="building">
+  <div class="cell c3">
+    <h1 class="title" id="building">Building the Zvukopis from scratch</h1>
+    <p class="note">The Waveshare board, its speaker and battery, and a 3D-printed case held by four bolts.</p>
+  </div>
+  <div class="cell photo fit c4"><img src="zvukopis-case.png" width="900" height="1200" loading="lazy" alt="Exploded view: the board, the case behind it with a speaker grille, and the four countersunk bolts"></div>
+  <div class="cell c5">
+    <p>The case: <a href="zvukopis-case.stl" download>zvukopis-case.stl</a>, which prints on an ordinary FDM printer or a resin printer.
+    Four countersunk M2.5&times;6 bolts, hex or Torx, hold the board in it.</p>
+    <ol>
+      <li>Fit the speaker over the speaker holes in the case.</li>
+      <li>Stick the battery in with double-sided mounting tape (acrylic tape is recommended).</li>
+      <li>Plug the battery and the speaker into their connectors on the board.</li>
+      <li>Set the board into the case and fasten it with the four countersunk bolts.</li>
+    </ol>
+    <p class="note">Then install the firmware, below.</p>
   </div>
 </section>
 
@@ -104,7 +124,7 @@
       <dt><a href="guide.html">User guide</a></dt><dd>Every screen and setting. The same file reads on the device.</dd>
       <dt><a href="tech-spec.html">Specification</a></dt><dd>The audio chain, measured levels, limits.</dd>
       <dt><a href="https://github.com/LOM-instruments/zvukopis/releases">Releases</a></dt><dd>Each version with its notes.</dd>
-      <dt><a href="https://github.com/LOM-instruments/zvukopis">Source</a></dt><dd>Firmware, this page and the tools. PlatformIO builds it.</dd>
+      <dt><a href="https://github.com/LOM-instruments/zvukopis">Source</a></dt><dd>Firmware, this page, the tools and the case. PlatformIO builds it.</dd>
     </dl>
     <p class="warning" style="margin-top:22px"><b>Warning.</b> Experimental firmware. Written by an AI (Claude) with Jonáš Gruska, tested on the
     device as it went, never audited. It may lose a recording, drain the battery or fail in a way nobody has seen yet. No warranty of any kind.</p>

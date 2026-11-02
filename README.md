@@ -2,7 +2,7 @@
 
 A pocket recorder for sonic moments, built on the Waveshare ESP32-S3-ePaper-3.97
 board: a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
-a microSD slot and a battery.
+a microSD slot and a battery, in a 3D-printed case.
 
 > **Warning: experimental firmware.** The idea and concept are
 > [Jonáš Gruska](https://lom.audio)'s; the programming was done by Claude
@@ -94,6 +94,17 @@ also works with it, so you can format it from a computer instead.
 [docs/tech-spec.md](docs/tech-spec.md): the audio chain, levels and limits of
 this board with this firmware, measured where it says so.
 
+## The case
+
+zvukopis is the Waveshare board with its speaker and battery in a 3D-printed
+case, [docs/zvukopis-case.stl](docs/zvukopis-case.stl), which prints on an
+ordinary FDM printer or a resin printer. Four countersunk M2.5×6 bolts, hex or
+Torx, hold the board in it. To build one: fit the speaker over the speaker
+holes in the case, stick the battery in with double-sided mounting tape
+(acrylic recommended), plug the battery and the speaker into their connectors
+on the board, then set the board into the case and fasten it with the four
+bolts. The exploded view is in [docs/zvukopis-case.png](docs/zvukopis-case.png).
+
 ## Flashing
 
 **Without any tools:** open the project page,
@@ -129,7 +140,8 @@ For development, `src/wifi_config.example.h` can be copied to
 - `scripts/` tools: `make_fonts.py` renders the UI fonts, `import_quotes.py`
   builds the sleep-screen quotes, `serial_session.py` drives the device over
   USB for testing, `make_release.py` prepares the web flasher.
-- `docs/` the web flasher, served by GitHub Pages.
+- `docs/` the web flasher, served by GitHub Pages, with the case (STL and
+  exploded view).
 
 ## Licence
 
