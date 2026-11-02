@@ -1,7 +1,7 @@
 /* zvukopis pages in the LOM house style, as on space.lom.audio and
    library.lom.audio: a grey page, black Helvetica, one-pixel rules, bands of
    cells, an etched wordmark, one accent colour. */
-:root { --bg: #ececec; --text: #000; --muted: #595959; --tile: #d8d8d8; --accent: #3a86ff; --yellow: #ffc72c; --red: #f15656; --green: #35c46a; --blue: #3a86ff; --edge: 16px; --line: 1px; }
+:root { --bg: #ececec; --text: #000; --muted: #595959; --tile: #d8d8d8; --accent: #ffc72c; --warn: #f15656; --edge: 16px; --line: 1px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--text); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; min-height: 100dvh; }
@@ -41,12 +41,9 @@ pre code { border: 0; padding: 0; background: none; }
 /* The four points: a colour each, the lines between them drawn by the grid's gaps */
 .band.four { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--line); background: var(--text); }
 .band.four .cell { border: 0; background: var(--bg); }
-.band.four .cell:nth-child(1) { background: var(--yellow); }
-.band.four .cell:nth-child(2) { background: var(--red); }
-.band.four .cell:nth-child(3) { background: var(--green); }
-.band.four .cell:nth-child(4) { background: var(--blue); }
+.band.four .cell { background: var(--accent); }
 .band.four .note { color: var(--text); }
-.band.four .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--text); vertical-align: .08em; }
+.band.four .cell .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--text) !important; vertical-align: .08em; }
 .cell { min-width: 0; padding: 18px var(--edge) 24px; }
 .cell + .cell { border-top: var(--line) solid var(--text); }
 .cell.flush { padding: 0; }
@@ -64,7 +61,7 @@ pre code { border: 0; padding: 0; background: none; }
 .status::before { content: ""; display: inline-block; width: .6em; height: .6em; margin-right: .5em; background: var(--accent); vertical-align: .05em; }
 .warning { margin: 0 0 16px; padding: 10px 14px 11px; border: var(--line) solid var(--text); background: #fff; font-size: 15px; line-height: 1.4; max-width: 66ch; }
 .warning b { font-weight: 700; }
-.warning > b:first-child::before { content: ""; display: inline-block; width: .6em; height: .6em; margin-right: .5em; background: #f15656; vertical-align: .05em; }
+.warning > b:first-child::before { content: ""; display: inline-block; width: .6em; height: .6em; margin-right: .5em; background: var(--warn); vertical-align: .05em; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; font-size: 15px; line-height: 1.4; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -79,10 +76,10 @@ pre code { border: 0; padding: 0; background: none; }
 .btn { display: inline-block; padding: 11px 18px 12px; background: var(--text); color: #fff; font-size: 17px; line-height: 1.2; text-decoration: none; border: var(--line) solid var(--text); border-radius: 0; cursor: pointer; transition: background-color .15s; }
 .btn.quiet { background: transparent; color: var(--text); }
 .btn:hover, .btn:focus-visible { background: var(--accent); color: #000; }
-esp-web-install-button { --esp-tools-button-color: var(--blue); --esp-tools-button-text-color: #000; --esp-tools-button-border-radius: 0; }
+esp-web-install-button { --esp-tools-button-color: var(--accent); --esp-tools-button-text-color: #000; --esp-tools-button-border-radius: 0; }
 esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 11px 18px 12px; }
 .install { margin: 14px 0 10px; }
-.version b { font-weight: 400; background: var(--yellow); color: var(--text); padding: 1px 7px 2px; }
+.version b { font-weight: 400; background: var(--accent); color: var(--text); padding: 1px 7px 2px; }
 
 /* Footer */
 .site-footer { font-size: 14px; line-height: 1.5; color: var(--muted); border-bottom: 0; }
@@ -93,7 +90,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 .doc h1 { margin: 0 0 14px; font-size: clamp(28px, 4vw, 46px); font-weight: 400; line-height: 1.08; letter-spacing: -.015em; }
 .doc h1 + p em { font-size: clamp(18px, 2vw, 24px); line-height: 1.25; color: var(--muted); font-style: normal; }
 .doc h2 { margin: 34px 0 10px; padding-top: 18px; border-top: var(--line) solid var(--text); font-size: 22px; font-weight: 400; line-height: 1.2; }
-.doc h2::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--blue); vertical-align: .08em; }
+.doc h2::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--accent); vertical-align: .08em; }
 .doc p, .doc li { max-width: 66ch; font-size: 17px; }
 .doc li { margin-bottom: .5em; }
 .doc blockquote { margin: 12px 0; padding: 6px 14px; border-left: 3px solid var(--text); background: #fff; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; max-width: 66ch; }
@@ -125,7 +122,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 }
 @media (max-width: 899px) {
   main > .band { border-bottom-width: 3px; }
-  .band > .cell:first-child .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--blue); vertical-align: .08em; }
+  .band > .cell:first-child .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--accent); vertical-align: .08em; }
   .band > .cell:first-child:has(> .title) + .cell { padding-top: 0; border-top: 0; }
 }
 @media (min-width: 900px) {
