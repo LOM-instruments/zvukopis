@@ -167,9 +167,10 @@ small{font-size:13px;color:var(--muted)}
 button,input,select{font:inherit;color:var(--text)}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,.pick input:focus-visible+svg{outline:2px solid var(--accent);outline-offset:-2px}
 h1{margin:0;padding:16px var(--edge) 12px;font-size:46px;font-weight:700;line-height:.95;letter-spacing:.01em;color:transparent;-webkit-text-stroke:1.5px var(--text)}@supports not (-webkit-text-stroke:1px #000){h1{color:var(--text)}}
-.head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:var(--line) solid var(--text)}
-.head .cell:first-child{grid-column:1/-1}.head .stat+.stat{border-left:var(--line) solid var(--text)}
-.stat{display:flex;flex-direction:column;gap:2px;padding:10px 12px 11px;font-size:14px;line-height:1.3}.stat>*+*{border-top:0}.stat b{font-weight:400;overflow-wrap:anywhere}
+.head{border-bottom:var(--line) solid var(--text)}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:var(--line) solid var(--text)}
+.stat{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px .6rem;min-height:var(--unit);padding:6px 12px;font-size:14px;line-height:1.3}.stat+.stat{border-left:var(--line) solid var(--text)}
+.stat small{font-size:13px}.stat b{font-weight:400;overflow-wrap:anywhere}
 .tabs{display:grid;grid-template-columns:1fr 1fr;border-bottom:var(--line) solid var(--text)}
 .tabs button{min-height:var(--unit);border:0;border-left:var(--line) solid var(--text);border-radius:0;padding:0 4px;background:transparent;cursor:pointer}
 .tabs button:first-child{border-left:0}.tabs button:hover{background:var(--accent);color:#000}.tabs button.on{background:var(--text);color:#fff}
@@ -179,9 +180,9 @@ h1{margin:0;padding:16px var(--edge) 12px;font-size:46px;font-weight:700;line-he
 h2{margin:0;padding:18px var(--edge) 8px;font-size:22px;font-weight:400;line-height:1.2;overflow-wrap:break-word}
 .note{margin:0;padding:0 var(--edge) 22px;font-size:15px;line-height:1.4;color:var(--muted)}.cell>h2+.note,.cell>.note+.note{border-top:0}.cell>.note:first-child{padding-top:18px}
 .cell>.row:last-child,.cell>table:last-child,.cell>#cats:last-child,.cell>.cal:last-child{border-bottom:var(--line) solid var(--text);margin-bottom:-1px}
-.big{display:flex;justify-content:center;align-items:center;gap:.6rem;width:100%;min-height:5rem;border:0;border-radius:0;background:var(--text);color:#fff;font-size:22px;cursor:pointer}
-.big:hover{background:var(--accent);color:#000}.big:disabled{background:var(--muted);color:#fff;cursor:default}
-.big .dot{width:.75em;height:.75em;border-radius:50%;background:var(--warn)}.big.rec .dot{background:#fff}.big:hover .dot{background:var(--warn)}
+.big{display:flex;justify-content:center;align-items:center;gap:.6rem;width:100%;min-height:5rem;border:0;border-radius:0;background:#fff;color:var(--text);font-size:22px;cursor:pointer}
+.big:hover{background:var(--accent);color:#000}.big.rec{background:var(--text);color:#fff}.big:disabled{color:var(--muted);cursor:default}
+.big .dot{width:.75em;height:.75em;border-radius:50%;background:var(--warn)}
 #rectime:empty{display:none}.mono{font-variant-numeric:tabular-nums}
 .row{display:flex;flex-wrap:wrap;gap:var(--line);background:var(--text)}
 .row>*{flex:1 1 9rem;margin:0;min-width:0;min-height:var(--unit);background:#fff;border:0;border-radius:0;padding:6px var(--edge);display:flex;align-items:center;gap:.5rem;color:var(--text);text-decoration:none}
@@ -215,15 +216,15 @@ td.c .ic{position:absolute;inset:0;width:100%;height:100%}
 .cal{background:#fff}.cal .head{display:flex;align-items:stretch;min-height:var(--unit);border-bottom:var(--line) solid var(--text)}
 .cal .head b{flex:1;display:flex;align-items:center;justify-content:center;font-weight:400}
 .cal .head .ic{flex:0 0 var(--unit)}.cal .head .ic:first-child{border-right:var(--line) solid var(--text)}.cal .head .ic:last-child{border-left:var(--line) solid var(--text)}
-.cal .grid{display:grid;grid-template-columns:repeat(7,1fr)}.cal .grid>*{border-top:var(--line) solid var(--text);border-right:var(--line) solid var(--text)}.cal .grid>*:nth-child(7n){border-right:0}
+.cal .grid{display:grid;grid-template-columns:repeat(7,1fr)}.cal .grid>*{border-top:var(--line) solid #c4c4c4;border-right:var(--line) solid #c4c4c4}.cal .grid>*:nth-child(7n){border-right:0}
 .cal .wd{border-top:0;text-align:center;font-size:13px;color:var(--muted);padding:6px 0}
 .cal .day{aspect-ratio:1;border-radius:0;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default;font:inherit}
 .cal .day.has{font-weight:700;cursor:pointer}.cal .day.has:hover{background:var(--accent)}.cal .day small{font-weight:400}
 .cal .day.on{background:var(--text);color:#fff}.cal .day.on small{color:#ccc}.cal .day.off{color:var(--muted)}
-@media (min-width:720px){:root{--edge:20px}h1{font-size:72px;padding:26px var(--edge) 18px}h2{font-size:clamp(22px,2vw,28px)}.stat{font-size:15px;padding:12px var(--edge) 13px}}
+@media (min-width:720px){:root{--edge:20px}h1{font-size:72px;padding:22px var(--edge) 16px}h2{font-size:clamp(22px,2vw,28px)}.stat{font-size:15px;padding:6px var(--edge)}}
 @media (max-width:719px){.row>input[type=file]{flex:1 1 100%}}
 @media (max-width:899px){.tab>.band{border-bottom-width:3px}.tabs{border-bottom-width:3px}h2::before{content:"";display:inline-block;width:.5em;height:.5em;margin-right:.45em;background:var(--accent);vertical-align:.08em}}
-@media (min-width:900px){.band,.head{display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}.head .cell:first-child{grid-column:span 6}.cell+.cell,.head .stat+.stat{border-top:0;border-left:var(--line) solid var(--text)}.c2{grid-column:span 2}.c3{grid-column:span 3}.c4{grid-column:span 4}.c5{grid-column:span 5}.c9{grid-column:span 9}.cell.last{order:1}h2{padding-top:22px}.note{padding-bottom:30px}.cell>.note:first-child{padding-top:22px}.stat{padding:22px var(--edge) 24px}}
+@media (min-width:900px){.band{display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}.cell+.cell{border-top:0;border-left:var(--line) solid var(--text)}.cell.last{border-left-width:3px}.c2{grid-column:span 2}.c3{grid-column:span 3}.c4{grid-column:span 4}.c5{grid-column:span 5}.c9{grid-column:span 9}.cell.last{order:1}h2{padding-top:22px}.note{padding-bottom:30px}.cell>.note:first-child{padding-top:22px}.stat{padding:22px var(--edge) 24px}}
 </style></head><body>
 )";
 
@@ -404,8 +405,8 @@ static void sendMoments(char *buf, size_t len) {
         Moment moment;
         if (momentGet(i, moment)) bytes += WAV_HEADER_BYTES + moment.length * sizeof(int16_t);
     }
-    if (count) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments (%d)</h2>", count);
-    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments</h2>");
+    if (count) snprintf(buf, len, "<audio id=player></audio><section class=band><div class=\"cell c3\"><h2>Moments (%d)</h2>", count);
+    else snprintf(buf, len, "<audio id=player></audio><section class=band><div class=\"cell c3\"><h2>Moments</h2>");
     server.sendContent(buf);
     if (!clockValid()) server.sendContent("<p class=note><b>The device clock isn't set.</b> New moments get no date, so the calendar "
                                           "can't place them. Set it under Settings, Time.</p>");
@@ -425,7 +426,7 @@ static void sendMoments(char *buf, size_t len) {
         if (fits) server.sendContent("<div class=row><a href=\"/backup\" download>Download all</a></div>");
         server.sendContent("</div>");
     }
-    server.sendContent("<div class=\"cell c5\"><audio id=player></audio><table id=moments>");
+    server.sendContent("<div class=\"cell c5\"><table id=moments>");
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
@@ -675,10 +676,10 @@ static void handleIndex() {
     char batteryText[24] = "on USB";
     if (battery >= 0) snprintf(batteryText, sizeof(batteryText), "%d%%", battery);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
-    snprintf(buf, sizeof(buf), "<header class=\"band head\"><div class=cell><h1>zvukopis</h1></div>"
-                               "<div class=\"cell stat c2\"><small>Device clock</small><b>%s</b></div>"
-                               "<div class=\"cell stat c2\"><small>Battery</small><b>%s</b></div>"
-                               "<div class=\"cell stat c2\"><small>Firmware</small><b>" FIRMWARE_VERSION "</b></div></header>"
+    snprintf(buf, sizeof(buf), "<header class=head><h1>zvukopis</h1></header><div class=stats>"
+                               "<div class=stat><small>Device clock</small><b>%s</b></div>"
+                               "<div class=stat><small>Battery</small><b>%s</b></div>"
+                               "<div class=stat><small>Firmware</small><b>" FIRMWARE_VERSION "</b></div></div>"
                                "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Recording</button>"
                                "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
                                "<script>const firstTab='%s'</script><div id=live class=tab>",
