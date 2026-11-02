@@ -40,6 +40,7 @@ pre code { border: 0; padding: 0; background: none; }
 .cell.photo.fit { display: flex; flex-direction: column; flex: 0 0 auto; aspect-ratio: 1; position: relative; }
 .cell.photo.fit img, .cell.photo.fit canvas { flex: 1 1 0; min-height: 0; width: 100%; height: auto; object-fit: contain; touch-action: pan-y; }
 .cell.photo.fit .note { position: absolute; left: var(--edge); right: var(--edge); bottom: 12px; margin: 0; line-height: 1.4; }
+.cell.photo.fit.black { background: var(--text); }
 /* A column of cells inside a band; its last cell stretches, so the lattice stays whole whatever the band's height */
 .col { display: flex; flex-direction: column; min-width: 0; }
 .col > .cell:last-child { flex: 1 0 auto; }
@@ -90,7 +91,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 
 /* Footer */
 .site-footer { font-size: 14px; line-height: 1.5; color: var(--muted); border-bottom: 0; }
-.site-footer p { margin: 0 0 6px; max-width: 70ch; }
+.site-footer p { margin: 0 0 6px; max-width: none; }
 .site-footer strong { color: var(--text); font-weight: 400; }
 
 /* A document rendered from Markdown (the guide, the specification) */

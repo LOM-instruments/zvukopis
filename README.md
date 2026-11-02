@@ -1,4 +1,4 @@
-# zvukopis
+# Zvukopis
 
 A pocket recorder for sonic moments, built on the Waveshare ESP32-S3-ePaper-3.97
 board: a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
@@ -53,7 +53,7 @@ is also on the project page, and it reads on the device (a copy sits in
 ### Web interface
 
 *Settings > Web interface* starts a web page on the device. The first time,
-with no Wi-Fi network known, zvukopis opens its own hotspot and shows a QR code:
+with no Wi-Fi network known, Zvukopis opens its own hotspot and shows a QR code:
 scan it with a phone camera to join, and the page opens by itself so you can
 save your Wi-Fi network. From then on it joins that network and is at
 `http://zvukopis.local` (or the address shown on the screen).
@@ -96,7 +96,7 @@ this board with this firmware, measured where it says so.
 
 ## The case
 
-zvukopis is the Waveshare board with its speaker and battery in a 3D-printed
+Zvukopis is the Waveshare board with its speaker and battery in a 3D-printed
 case. LOM does not sell the board or a kit: you buy the board yourself and
 print the case. The cases are in [docs/case/](docs/case/), an STL and an
 exploded view per version, with a list of the versions.

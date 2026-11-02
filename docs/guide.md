@@ -1,14 +1,14 @@
-# zvukopis user guide
+# Zvukopis user guide
 
 *How to record, listen and look after your moments*
 
-zvukopis is a pocket recorder for sonic moments. A moment is a recording: the sound of here and now, kept with its time, a waveform and a tag. This guide covers the whole device. If you only read one section, read "Recording".
+Zvukopis is a pocket recorder for sonic moments. A moment is a recording: the sound of here and now, kept with its time, a waveform and a tag. This guide covers the whole device. If you only read one section, read "Recording".
 
 ## The buttons
 
 - **The side switch.** The rocker on the left edge. Move it up or down to choose, press it in to do the thing, hold it in for more options. Nearly everything is done with it.
 - **The Settings button.** The small button next to the USB port. It opens the settings from any screen, and closes them again.
-- **The Sleep button.** On the right edge, a little above the side switch. Hold it for a second to send zvukopis to sleep, or to wake it.
+- **The Sleep button.** On the right edge, a little above the side switch. Hold it for a second to send Zvukopis to sleep, or to wake it.
 
 The guide at the bottom of every screen says what the switch does right there: "Up or down", "Press in" and "Hold in". Once you know your way around, turn it off in Settings > Button guide and the screens get the room; the pointers on the sleep screen go with it.
 
@@ -64,7 +64,7 @@ Move up from *New recording* to the calendar button and press in. Every day with
 
 ## The library
 
-zvukopis reads too. Put Markdown or plain text files into the *doc* folder on the card, or upload them on the web interface, and a book button appears next to the calendar. Pick a document and read: up and down turn the pages, press in goes forward, and holding in returns to the library. Each document opens where you left it.
+Zvukopis reads too. Put Markdown or plain text files into the *doc* folder on the card, or upload them on the web interface, and a book button appears next to the calendar. Pick a document and read: up and down turn the pages, press in goes forward, and holding in returns to the library. Each document opens where you left it.
 
 Headings, paragraphs, quotations, lists, italics and bold are laid out; the text is shown in plain ASCII, with typographic quotes and dashes in their plain forms. Files up to half a megabyte, and the first heading becomes the title.
 
@@ -74,19 +74,19 @@ Hold the Sleep button for a second. The screen shows a quote about listening and
 
 The battery charges whenever the USB cable is plugged in; the lightning mark in the top line shows it. A full battery lasts for days of ordinary use.
 
-If zvukopis ever stops responding, hold the Sleep button for ten seconds: it restarts. Nothing on the card is lost.
+If Zvukopis ever stops responding, hold the Sleep button for ten seconds: it restarts. Nothing on the card is lost.
 
 ## The web interface
 
 Open Settings and choose *Web interface*. The screen shows the address; on a phone or computer on the same Wi-Fi, open http://zvukopis.local (or the address shown).
 
-**The first time**, when zvukopis knows no Wi-Fi network yet, it makes its own: scan the code on the screen with a phone camera, join, and the page opens by itself. Choose your network there and enter its password. From then on zvukopis joins that network when you start the web interface. *Web interface on own hotspot* makes its own network on purpose, for a field without Wi-Fi.
+**The first time**, when Zvukopis knows no Wi-Fi network yet, it makes its own: scan the code on the screen with a phone camera, join, and the page opens by itself. Choose your network there and enter its password. From then on Zvukopis joins that network when you start the web interface. *Web interface on own hotspot* makes its own network on purpose, for a field without Wi-Fi.
 
 The page has two tabs.
 
-**Recording.** A big Record button, a length to stop after, mic gain. Below it the calendar of days with moments and the moments themselves, each with play, download and delete. *Download all* saves every moment as WAV files in one ZIP, in a folder per day, which is the way to back zvukopis up; a day chosen in the calendar can be downloaded on its own.
+**Recording.** A big Record button, a length to stop after, mic gain. Below it the calendar of days with moments and the moments themselves, each with play, download and delete. *Download all* saves every moment as WAV files in one ZIP, in a folder per day, which is the way to back Zvukopis up; a day chosen in the calendar can be downloaded on its own.
 
-**Settings.** Scheduled recordings (a date, a time and a length; zvukopis wakes up for them), the tags with their names and icons (add more, up to twelve, or remove the last), varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
+**Settings.** Scheduled recordings (a date, a time and a length; Zvukopis wakes up for them), the tags with their names and icons (add more, up to twelve, or remove the last), varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
 
 The web interface stays on until you leave the screen on the device. Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
 
@@ -98,9 +98,9 @@ Moments are ordinary WAV files (96 kHz, mono, 16-bit) in a folder per day:
 
 The time uses dashes, because FAT names cannot hold colons, and the tag goes at the end. Each file carries a Broadcast Wave timecode of when it started, so an audio editor can place it on the timeline at the right time of day.
 
-**USB card reader.** With the USB cable in a computer, Settings > *USB card reader* turns zvukopis into a card reader: the card appears on the computer, and you can copy moments off or documents on. Eject the drive on the computer when you are done and zvukopis restarts into its main screen by itself (pressing the side switch in does the same).
+**USB card reader.** With the USB cable in a computer, Settings > *USB card reader* turns Zvukopis into a card reader: the card appears on the computer, and you can copy moments off or documents on. Eject the drive on the computer when you are done and Zvukopis restarts into its main screen by itself (pressing the side switch in does the same).
 
-**Formatting.** Cards over 32 GB come formatted as exFAT, which zvukopis cannot read. It says so and offers Settings > *Format SD card*, which makes it FAT32. Formatting erases the card.
+**Formatting.** Cards over 32 GB come formatted as exFAT, which Zvukopis cannot read. It says so and offers Settings > *Format SD card*, which makes it FAT32. Formatting erases the card.
 
 ## Settings, in order
 
@@ -108,13 +108,13 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 - **Varispeed.** The top speed, the ramp, and whether letting go brings the speed back or keeps it.
 - **Scheduled recordings.** The list of what is planned; they are set up on the web interface.
 - **Web interface.** On your Wi-Fi.
-- **Web interface on own hotspot.** zvukopis makes its own network.
+- **Web interface on own hotspot.** Zvukopis makes its own network.
 - **Sync clock.** Sets the clock from the internet, over Wi-Fi.
 - **Button guide.** The hints at the bottom of the screens, on or off.
 - **USB card reader.** The card on a computer.
 - **Format SD card.** Erases it.
 - **Firmware update.** Which version this is, and how to install the newest (a code to scan, three steps).
-- **Reset settings.** Forgets the Wi-Fi networks, tags, schedule, gain and the rest; the moments on the card stay. For handing zvukopis on.
+- **Reset settings.** Forgets the Wi-Fi networks, tags, schedule, gain and the rest; the moments on the card stay. For handing Zvukopis on.
 
 Hold the side switch in, or press the Settings button again, to leave.
 
@@ -128,4 +128,4 @@ Hold the side switch in, or press the Settings button again, to leave.
 
 ---
 
-*zvukopis is open source: github.com/LOM-instruments/zvukopis. The newest firmware is always on the project page, which installs it from the browser.*
+*Zvukopis is open source: github.com/LOM-instruments/zvukopis. The newest firmware is always on the project page, which installs it from the browser.*

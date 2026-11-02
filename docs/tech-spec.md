@@ -1,6 +1,6 @@
-# zvukopis: technical specification
+# Zvukopis: technical specification
 
-The Waveshare ESP32-S3-ePaper-3.97 board running the zvukopis firmware, as a
+The Waveshare ESP32-S3-ePaper-3.97 board running the Zvukopis firmware, as a
 sound recorder. Figures marked *measured* come from an anechoic room with a
 94 dB SPL calibrator on 2026-10-30; the absolute levels are preliminary (the
 calibrator was held to the board's microphone pinhole without a sealed

@@ -1,4 +1,4 @@
-# The zvukopis case
+# The Zvukopis case
 
 3D-printed cases for the Waveshare ESP32-S3-ePaper-3.97 board, one STL and
 one exploded view per version. The case bolts to the board's standoffs with
