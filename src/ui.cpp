@@ -91,10 +91,13 @@ enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, 
 static const char *const UPDATE_URL = "https://zvukopis.lom.audio"; // the project page with the web flasher
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
-static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
-static const int MENU_DELETE = TAG_COUNT;
-static const int MENU_CANCEL = TAG_COUNT + 1;
-static const int MENU_ITEMS = TAG_COUNT + 2;
+// The long-press menu: the tags, then Frequency analysis, Delete..., Cancel
+static int menuTags() { return configCategoryCount(); }
+static int menuAnalysis() { return menuTags(); }
+static int menuDelete() { return menuTags() + 1; }
+static int menuItems() { return menuTags() + 3; }
+// A tag a moment can show: a slot that is in use
+static bool tagShown(int tag) { return tag > TAG_NONE && tag <= configCategoryCount(); }
 
 // Frequency analysis plot; labels go left of and below it
 static const int PLOT_X = MARGIN + 46, PLOT_Y = 116;
@@ -160,7 +163,7 @@ struct DayInfo {
     int key;     // yyyymmdd, local time
     int count;   // moments that day
     int seconds; // their total length
-    uint8_t tags; // bit per MomentTag present
+    uint16_t tags; // bit per tag slot present
 };
 
 // Each task keeps its own copy, rebuilt when the moment list changes
@@ -618,6 +621,7 @@ static void iconCategory(int icon, int cx, int cy, int r, uint16_t c) {
 
 // The icon of the category a moment is tagged with
 static void iconTag(int tag, int cx, int cy, int r, uint16_t c) {
+    if (!tagShown(tag)) return;
     iconCategory(configCategory(tag).icon, cx, cy, r, c);
 }
 
@@ -844,7 +848,7 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
         drawText(x, lineY, &Text22, buf, fg);
         x += textWidth(&Text22, buf) + 14;
     }
-    if (moment.tag != TAG_NONE) iconTag(moment.tag, x + 11, lineY - 8, 11, fg); // reads as part of the description
+    if (tagShown(moment.tag)) iconTag(moment.tag, x + 11, lineY - 8, 11, fg); // reads as part of the description
 
     char total[12];
     formatTime(total, sizeof(total), momentSeconds(moment));
@@ -956,15 +960,25 @@ static void drawCalendar(const ViewState &v) {
     char subtitle[48];
     int total = 0;
     for (int d = 0; d < index.count; d++) total += index.days[d].count;
-    snprintf(subtitle, sizeof(subtitle), "%d moment%s on %d day%s", total, total == 1 ? "" : "s",
-             index.count, index.count == 1 ? "" : "s");
+    bool clockSet = v.clockMinute >= 0;
+    if (clockSet) snprintf(subtitle, sizeof(subtitle), "%d moment%s on %d day%s", total, total == 1 ? "" : "s",
+                           index.count, index.count == 1 ? "" : "s");
+    else snprintf(subtitle, sizeof(subtitle), "Clock not set: new moments undated");
     drawSubHeader(v, "Calendar", subtitle);
 
     int cx = SW / 2;
     if (index.count == 0) {
-        drawTextCentered(cx, 300, &Bold22, "No dated moments yet", INK);
-        drawTextCentered(cx, 338, &Text22, "Moments get a date once", INK);
-        drawTextCentered(cx, 366, &Text22, "the clock is set", INK);
+        if (!clockSet) {
+            // The calendar can't work until it is
+            drawTextCentered(cx, 300, &Bold22, "The clock isn't set", INK);
+            drawTextCentered(cx, 338, &Text22, "Moments get no date until it is.", INK);
+            drawTextCentered(cx, 366, &Text22, "Set it in Settings (Sync clock)", INK);
+            drawTextCentered(cx, 394, &Text22, "or on the web interface.", INK);
+        } else {
+            drawTextCentered(cx, 300, &Bold22, "No dated moments yet", INK);
+            drawTextCentered(cx, 338, &Text22, "Moments recorded without", INK);
+            drawTextCentered(cx, 366, &Text22, "the clock set have no day", INK);
+        }
         return;
     }
     int key = v.calendarDay;
@@ -1037,8 +1051,9 @@ static void drawCalendar(const ViewState &v) {
     formatTime(total2, sizeof(total2), day.seconds);
     snprintf(buf, sizeof(buf), "%d moment%s, %s", day.count, day.count == 1 ? "" : "s", total2);
     drawText(MARGIN, y + 30, &Text22, buf, INK);
-    int x = SW - MARGIN - 12;
-    for (int t = TAG_COUNT - 1; t > TAG_NONE; t--) {
+    // The day's tags, from the right, as many as fit beside the text
+    int x = SW - MARGIN - 12, leftLimit = MARGIN + textWidth(&Text22, buf) + 28;
+    for (int t = configCategoryCount(); t > TAG_NONE && x > leftLimit; t--) {
         if (day.tags & (1 << t)) {
             iconTag(t, x, y + 12, 11, INK);
             x -= 30;
@@ -2016,23 +2031,29 @@ static void drawMenu(const ViewState &v) {
     Moment moment;
     if (!momentGet(index, moment)) return;
     shadeBehindDialog();
-    const int itemH = 50, y = 140, h = 76 + MENU_ITEMS * itemH + 14;
+    // With many tags the list scrolls, the highlighted item kept in view
+    const int itemH = 50, y = 140, items = menuItems();
+    const int visible = constrain((listBottom() - 6 - y - 90) / itemH, 4, items);
+    const int first = v.overlayChoice < visible ? 0 : min(v.overlayChoice - visible + 1, items - visible);
+    const int h = 76 + visible * itemH + 14;
     const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
     dialogBox(y, h);
     char title[32];
     snprintf(title, sizeof(title), "Moment %d", moment.number);
     drawText(x + 24, y + 46, &Bold32, title, INK);
+    if (first > 0) canvas->fillTriangle(x + w - 36, y + 44, x + w - 44, y + 54, x + w - 28, y + 54, INK); // more above
+    if (first + visible < items) canvas->fillTriangle(x + w - 36, y + h - 10, x + w - 44, y + h - 20, x + w - 28, y + h - 20, INK); // more below
 
-    for (int i = 0; i < MENU_ITEMS; i++) {
-        int iy = y + 70 + i * itemH;
+    for (int i = first; i < first + visible; i++) {
+        int iy = y + 70 + (i - first) * itemH;
         bool chosen = i == v.overlayChoice;
         uint16_t fg = chosen ? PAPER : INK;
         if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
         int cy = iy + (itemH - 4) / 2;
         const char *label;
-        if (i == MENU_ANALYSIS && !chosen) dottedLine(x + 24, x + w - 24, iy - 2); // tags above, actions below
-        if (i < MENU_ANALYSIS) {
-            int tag = TAG_HUMAN + i;
+        if (i == menuAnalysis() && !chosen && i > first) dottedLine(x + 24, x + w - 24, iy - 2); // tags above, actions below
+        if (i < menuAnalysis()) {
+            int tag = 1 + i;
             iconTag(tag, x + 44, cy, 13, fg);
             label = configCategory(tag).name;
             if (moment.tag == tag) {
@@ -2042,15 +2063,15 @@ static void drawMenu(const ViewState &v) {
                 canvas->drawLine(x + w - 48, cy + 8, x + w - 34, cy - 8, fg);
                 canvas->drawLine(x + w - 48, cy + 9, x + w - 34, cy - 7, fg);
             }
-        } else if (i == MENU_ANALYSIS) {
+        } else if (i == menuAnalysis()) {
             iconBars(x + 44, cy, 12, fg);
             label = "Frequency analysis";
-        } else if (i == MENU_DELETE) {
+        } else if (i == menuDelete()) {
             label = "Delete...";
         } else {
             label = "Cancel";
         }
-        drawText(x + 76, cy + 8, i < MENU_ANALYSIS ? &Bold22 : &Text22, label, fg);
+        drawText(x + 76, cy + 8, i < menuAnalysis() ? &Bold22 : &Text22, label, fg);
     }
 }
 
@@ -2161,13 +2182,13 @@ static void drawFooter(const ViewState &v) {
         const char *press = "Choose";
         if (v.overlay == OVERLAY_MENU) {
             Moment moment;
-            if (v.overlayChoice < MENU_ANALYSIS) {
-                bool tagged = momentGet(momentIndexByNumber(v.menuMoment), moment) && moment.tag == TAG_HUMAN + v.overlayChoice;
+            if (v.overlayChoice < menuAnalysis()) {
+                bool tagged = momentGet(momentIndexByNumber(v.menuMoment), moment) && moment.tag == 1 + v.overlayChoice;
                 press = tagged ? "Remove tag" : "Tag";
-            } else if (v.overlayChoice == MENU_ANALYSIS) {
+            } else if (v.overlayChoice == menuAnalysis()) {
                 press = "Open";
             } else {
-                press = v.overlayChoice == MENU_DELETE ? "Delete..." : "Cancel";
+                press = v.overlayChoice == menuDelete() ? "Delete..." : "Cancel";
             }
         } else if (v.overlay == OVERLAY_GAIN) {
             press = "Use";
@@ -2459,11 +2480,11 @@ static void openMenu(int index) {
     if (!momentGet(index, moment)) return;
     if (audioState() == AUDIO_PLAYING) audioStopPlayback();
     menuMoment = moment.number;
-    openOverlay(OVERLAY_MENU, moment.tag != TAG_NONE ? moment.tag - TAG_HUMAN : 0);
+    openOverlay(OVERLAY_MENU, tagShown(moment.tag) ? moment.tag - 1 : 0);
 }
 
 static void handleOverlay(ButtonEvent event) {
-    int choices = overlay == OVERLAY_MENU ? MENU_ITEMS : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : overlay == OVERLAY_VIEW ? VIEW_CHOICE_COUNT
+    int choices = overlay == OVERLAY_MENU ? menuItems() : overlay == OVERLAY_GAIN ? GAIN_CHOICE_COUNT : overlay == OVERLAY_VIEW ? VIEW_CHOICE_COUNT
                 : overlay == OVERLAY_VARISPEED ? VARISPEED_ITEMS : 2;
     switch (event) {
     case BTN_UP:
@@ -2477,7 +2498,7 @@ static void handleOverlay(ButtonEvent event) {
     case BTN_CLICK: {
         int index = momentIndexByNumber(menuMoment);
         if (overlay == OVERLAY_MENU) {
-            if (overlayChoice == MENU_ANALYSIS) {
+            if (overlayChoice == menuAnalysis()) {
                 spectrumFrom = (Screen)(int)screen;
                 spectrumFromSelected = selected;
                 spectrumMoment = menuMoment;
@@ -2485,12 +2506,12 @@ static void handleOverlay(ButtonEvent event) {
                 spectrumRequest(menuMoment, PLOT_W, PLOT_H);
                 overlay = OVERLAY_NONE;
                 showScreen(SCREEN_SPECTRUM, 0);
-            } else if (overlayChoice < MENU_ANALYSIS) {
+            } else if (overlayChoice < menuAnalysis()) {
                 Moment moment;
-                int tag = TAG_HUMAN + overlayChoice;
-                if (momentGet(index, moment)) audioSetTag(index, (MomentTag)(moment.tag == tag ? TAG_NONE : tag));
+                int tag = 1 + overlayChoice;
+                if (momentGet(index, moment)) audioSetTag(index, moment.tag == tag ? TAG_NONE : tag);
                 overlay = OVERLAY_NONE;
-            } else if (overlayChoice == MENU_DELETE) {
+            } else if (overlayChoice == menuDelete()) {
                 openOverlay(OVERLAY_CONFIRM_DELETE, 0);
             } else {
                 overlay = OVERLAY_NONE;

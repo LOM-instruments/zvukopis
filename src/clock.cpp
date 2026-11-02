@@ -231,7 +231,7 @@ void clockSet(time_t utc) {
     tm local;
     localtime_r(&utc, &local);
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
-    Serial.printf("[clock] set to %s\n", buf);
+    Serial.printf("[clock] set to %s, zone %s\n", buf, timeZone);
 }
 
 bool clockSyncAvailable() { return wifiKnowsAny(); }

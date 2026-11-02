@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "config.h"
+
 // Sound moment engine on the board's ES8311 codec (mic in + speaker out over I2S).
 // A task on core 0 streams audio and carries out the requests below.
 // With an SD card in at startup, moments are saved to it and played back from it;
@@ -23,22 +25,15 @@ static const uint32_t MAX_RECORDING_SECONDS = (SAMPLE_RATE >= 96000 ? 6 : 12) * 
 static const int MAX_MOMENTS = 500;
 static const int WAVEFORM_BINS = 77;
 
-// What a moment is about, chosen from the long-press menu
-enum MomentTag : uint8_t {
-    TAG_NONE,
-    TAG_HUMAN,
-    TAG_NATURE,
-    TAG_FUNNY,
-    TAG_ART,
-    TAG_OTHER,
-    TAG_COUNT,
-};
+// What a moment is about, chosen from the long-press menu: the slot of a
+// category (config.h), 1..CATEGORY_MAX, or TAG_NONE
+static const int TAG_NONE = 0;
 
 struct Moment {
     int number;                      // shown as "Moment N"; numbers are never reused
     time_t recordedAt;               // UTC start of the recording, 0 if the clock wasn't set
     uint16_t startMs;                // milliseconds past recordedAt
-    uint8_t tag;                     // MomentTag
+    uint8_t tag;                     // category slot, TAG_NONE for none
     char folder[12];                 // on the SD card: the day's folder in /moments ("2026-10-28", or "undated")
     char fileName[48];               // ... and the file in it: 2026-10-28T10-05-15_nature.wav
     int16_t *samples;                // mono, SAMPLE_RATE Hz; nullptr when the moment is on the SD card
@@ -70,7 +65,8 @@ void audioCancelRecording(); // stops and discards it
 void audioPlay(int index);
 void audioStopPlayback();
 void audioDelete(int index);
-void audioSetTag(int index, MomentTag tag);
+void audioSetTag(int index, int tag); // a category slot, or TAG_NONE
+void audioClearTagsAbove(int count); // moments tagged with a slot above `count` lose the tag
 // Tape-style varispeed while playing: +1 speeds up for as long as it's held,
 // -1 slows down, 0 drifts back to normal speed
 void audioSpeedHold(int direction);

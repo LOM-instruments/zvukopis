@@ -78,6 +78,8 @@
       <li>Press <b>Install</b> and choose the board's port. On a new board tick <i>Erase device</i>; when updating, leave it unticked and
       recordings and settings stay.</li>
       <li>Afterwards unplug and replug the cable, or hold the sleep button for 10 seconds.</li>
+      <li>Press <b>Set the clock</b> and choose the port once more: the board takes this computer's time and time zone.
+      Moments get their date from it.</li>
     </ol>
     <div class="install">
       <esp-web-install-button manifest="manifest.json">
@@ -85,6 +87,10 @@
         <span slot="unsupported">This browser can't talk to USB ports. Use Chrome or Edge on a computer.</span>
         <span slot="not-allowed">This page has to be opened over HTTPS for the browser to allow USB access.</span>
       </esp-web-install-button>
+    </div>
+    <div class="install" id="clockrow" hidden>
+      <button class="btn quiet" id="setclock" onclick="setClock()">Set the clock</button>
+      <span class="note" id="clockstatus"></span>
     </div>
     <p class="note">The firmware holds no Wi-Fi credentials; the device asks for your network the first time, with a QR code on its screen.
     Settings on the device shows the version it runs; Settings > Firmware update shows the way back here.</p>
@@ -125,6 +131,61 @@
   fetch('manifest.json', {cache: 'no-cache'}).then(r => r.json()).then(m => {
     document.getElementById('installs').innerHTML = 'Installs firmware <b>' + m.version + '</b>';
   }).catch(() => { document.getElementById('installs').textContent = ''; });
+
+  // Set the clock: over the same USB port, the firmware's serial commands
+  // T<unix time> and Z<posix time zone>. The zone table matches the one on
+  // the device's web interface.
+  if ('serial' in navigator) document.getElementById('clockrow').hidden = false;
+  const ZONES=[["UTC0","UTC Etc/UTC","UTC"],["GMT0BST,M3.5.0/1,M10.5.0","Europe/London Europe/Dublin Europe/Lisbon Atlantic/Canary","London, Dublin, Lisbon"],["CET-1CEST,M3.5.0,M10.5.0/3","Europe/Berlin Europe/Paris Europe/Prague Europe/Bratislava Europe/Vienna Europe/Rome Europe/Madrid Europe/Warsaw Europe/Amsterdam Europe/Brussels Europe/Budapest Europe/Copenhagen Europe/Oslo Europe/Stockholm Europe/Zurich Europe/Belgrade Europe/Zagreb Europe/Ljubljana","Central Europe (Berlin, Paris, Prague, Bratislava, Rome, Madrid)"],["EET-2EEST,M3.5.0/3,M10.5.0/4","Europe/Athens Europe/Helsinki Europe/Kiev Europe/Kyiv Europe/Bucharest Europe/Sofia Europe/Riga Europe/Tallinn Europe/Vilnius","Eastern Europe (Athens, Helsinki, Kyiv, Bucharest)"],["<+03>-3","Europe/Istanbul","Istanbul"],["MSK-3","Europe/Moscow","Moscow"],["WAT-1","Africa/Lagos","Lagos"],["EET-2EEST,M4.5.5/0,M10.5.4/24","Africa/Cairo","Cairo"],["SAST-2","Africa/Johannesburg","Johannesburg"],["EAT-3","Africa/Nairobi","Nairobi"],["<+0330>-3:30","Asia/Tehran","Tehran"],["<+04>-4","Asia/Dubai","Dubai"],["PKT-5","Asia/Karachi","Karachi"],["IST-5:30","Asia/Kolkata Asia/Calcutta","India"],["<+0545>-5:45","Asia/Kathmandu","Kathmandu"],["<+06>-6","Asia/Dhaka","Dhaka"],["<+07>-7","Asia/Bangkok Asia/Jakarta Asia/Ho_Chi_Minh","Bangkok, Jakarta, Hanoi"],["CST-8","Asia/Shanghai Asia/Hong_Kong Asia/Singapore Asia/Taipei Asia/Kuala_Lumpur Asia/Manila Australia/Perth","China, Singapore, Perth"],["JST-9","Asia/Tokyo Asia/Seoul","Tokyo, Seoul"],["ACST-9:30ACDT,M10.1.0,M4.1.0/3","Australia/Adelaide","Adelaide"],["AEST-10","Australia/Brisbane","Brisbane"],["AEST-10AEDT,M10.1.0,M4.1.0/3","Australia/Sydney Australia/Melbourne Australia/Hobart","Sydney, Melbourne"],["NZST-12NZDT,M9.5.0,M4.1.0/3","Pacific/Auckland","Auckland"],["HST10","Pacific/Honolulu","Honolulu"],["AKST9AKDT,M3.2.0,M11.1.0","America/Anchorage","Anchorage"],["PST8PDT,M3.2.0,M11.1.0","America/Los_Angeles America/Vancouver America/Tijuana","Los Angeles, Vancouver"],["MST7MDT,M3.2.0,M11.1.0","America/Denver America/Edmonton","Denver"],["MST7","America/Phoenix","Phoenix"],["CST6CDT,M3.2.0,M11.1.0","America/Chicago America/Winnipeg","Chicago"],["CST6","America/Mexico_City","Mexico City"],["EST5EDT,M3.2.0,M11.1.0","America/New_York America/Toronto America/Detroit","New York, Toronto"],["<-05>5","America/Bogota America/Lima","Bogotá, Lima"],["AST4ADT,M3.2.0,M11.1.0","America/Halifax","Halifax"],["<-03>3","America/Sao_Paulo America/Argentina/Buenos_Aires America/Montevideo","São Paulo, Buenos Aires"]];
+  function zoneFor(iana) { for (const z of ZONES) if (z[1].split(' ').includes(iana)) return z; return null; }
+  async function setClock() {
+    const st = document.getElementById('clockstatus'), btn = document.getElementById('setclock');
+    let port;
+    try { port = await navigator.serial.requestPort(); } catch (e) { st.textContent = 'No port chosen.'; return; }
+    btn.disabled = true;
+    st.textContent = 'Talking to the board\u2026';
+    try { await port.open({baudRate: 115200}); }
+    catch (e) { st.textContent = 'The port is in use. Close the installer window first, then try again.'; btn.disabled = false; return; }
+    const enc = new TextEncoder(), dec = new TextDecoder();
+    const writer = port.writable.getWriter(), reader = port.readable.getReader();
+    let text = '';
+    (async () => { try { for (;;) { const {value, done} = await reader.read(); if (done) break; text += dec.decode(value, {stream: true}); } } catch (e) {} })();
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    async function waitFor(re, ms) { const until = Date.now() + ms; while (!re.test(text) && Date.now() < until) await sleep(50); return re.test(text); }
+    const send = s => writer.write(enc.encode(s + '\n'));
+    const setLine = () => { const all = text.match(/\[clock\] set to ([^\r\n]*)/g); return all ? all[all.length - 1].slice(15) : ''; };
+    let result = '';
+    try {
+      // Opening the port may have restarted the board: wait for its boot banner, briefly
+      if (await waitFor(/zvukopis starting/, 1500)) await waitFor(/Serial commands:/, 8000);
+      await send('T' + Math.floor(Date.now() / 1000));
+      if (await waitFor(/\[clock\] set to [^\r\n]*\n/, 3000)) {
+        const zone = zoneFor(Intl.DateTimeFormat().resolvedOptions().timeZone);
+        let line = setLine();
+        if (/, zone /.test(line)) { // this firmware takes a time zone too
+          if (zone) {
+            await send('Z' + zone[0]);
+            if (await waitFor(/\[clock\] zone set to [^\r\n]*\n/, 3000)) {
+              await send('T' + Math.floor(Date.now() / 1000)); // once more, printed in the new zone
+              await waitFor(/\[clock\] set to [^\r\n]*\n[\s\S]*\[clock\] set to [^\r\n]*\n/, 3000);
+              line = setLine();
+            }
+          }
+          result = 'Done. The board\u2019s clock reads ' + line.replace(/, zone .*/, '') + (zone ? ', ' + zone[2] + ' time.' : '.') +
+            (zone ? '' : ' No rule for the zone ' + Intl.DateTimeFormat().resolvedOptions().timeZone + ': choose one on the board\u2019s web interface.');
+        } else {
+          result = 'Done. The board\u2019s clock reads ' + line + '. Its time zone is set on its web interface (Central European until then).';
+        }
+      } else {
+        result = 'No answer from the board. Is it awake and running zvukopis? Unplug and replug it, then try again.';
+      }
+    } catch (e) { result = 'The port stopped answering: ' + e.message; }
+    try { await reader.cancel(); } catch (e) {}
+    try { reader.releaseLock(); writer.releaseLock(); } catch (e) {}
+    try { await port.close(); } catch (e) {}
+    st.textContent = result;
+    btn.disabled = false;
+  }
 </script>
 </body>
 </html>

@@ -387,7 +387,7 @@ static bool readMomentHeader(File &f, Moment &moment) {
             moment.recordedAt = extra.recordedAt;
             moment.gain = extra.gain;
             memcpy(moment.waveform, extra.waveform, WAVEFORM_BINS);
-            moment.tag = extra.tag < TAG_COUNT ? extra.tag : TAG_NONE;
+            moment.tag = extra.tag <= CATEGORY_MAX ? extra.tag : TAG_NONE;
             moment.startMs = extra.startMs;
             haveExtra = true;
         } else if (memcmp(id, "data", 4) == 0) {

@@ -53,14 +53,14 @@ While it plays, hold the switch up or down and the speed changes like a tape ree
 
 Hold the switch in on a moment. A menu opens, titled with the moment's number.
 
-- **Tag it.** The first five entries are the tags: sound, music, note, biophony and anthropophony, unless you renamed them on the web interface. A tag helps you find the moment later; it does not mean the recording is about that. Choosing the same tag again removes it.
+- **Tag it.** The first entries are the tags: sound, music, note, biophony and anthropophony, unless you renamed them or added your own on the web interface (up to twelve; with many, the list scrolls). A tag helps you find the moment later; it does not mean the recording is about that. Choosing the same tag again removes it.
 - **Frequency analysis.** A spectrogram of the whole moment, time across and 0 to 20 kHz up, with the loudest point marked and the range that holds most of the sound. Up switches to a spectrum (an FFT graph), down steps through four contrast levels, and press in plays the moment with a playhead on the picture.
 - **Delete.** Asks you first. Deleting takes the file off the card, so be sure.
 - **Cancel.** Or hold the switch in again.
 
 ## The calendar
 
-Move up from *New recording* to the calendar button and press in. Every day with moments has a mark and a count. Choose a day to see only that day's moments; play or hold on them as usual. Hold in to go back.
+Move up from *New recording* to the calendar button and press in. Every day with moments has a mark and a count. The calendar needs the clock: a moment recorded while the clock isn't set has no date and no day, and the calendar says so. Choose a day to see only that day's moments; play or hold on them as usual. Hold in to go back.
 
 ## The library
 
@@ -86,7 +86,7 @@ The page has two tabs.
 
 **Recording.** A big Record button, a length to stop after, mic gain. Below it the calendar of days with moments and the moments themselves, each with play, download and delete. *Download all* saves every moment as WAV files in one ZIP, in a folder per day, which is the way to back zvukopis up; a day chosen in the calendar can be downloaded on its own.
 
-**Settings.** Scheduled recordings (a date, a time and a length; zvukopis wakes up for them), the five tags with their names and icons, varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
+**Settings.** Scheduled recordings (a date, a time and a length; zvukopis wakes up for them), the tags with their names and icons (add more, up to twelve, or remove the last), varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
 
 The web interface stays on until you leave the screen on the device. Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
 

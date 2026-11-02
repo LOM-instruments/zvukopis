@@ -3,12 +3,14 @@
 #include <stdint.h>
 #include <time.h>
 
-// Settings made on the web interface, kept in flash (NVS): the five categories a
+// Settings made on the web interface, kept in flash (NVS): the categories a
 // moment can be tagged with, and scheduled recordings. Safe to use from any task.
 
 // --- Categories ---
 
-static const int CATEGORY_COUNT = 5; // tag slots 1-5; a moment stores the slot
+// Tag slots 1..CATEGORY_MAX; a moment stores its slot. The first
+// configCategoryCount() slots are in use; the rest return an empty name.
+static const int CATEGORY_MAX = 12;
 static const int CATEGORY_NAME_LEN = 16;
 
 enum CategoryIcon : uint8_t {
@@ -33,8 +35,9 @@ struct Category {
 };
 
 void configInit();
-Category configCategory(int slot); // slot 1-5
-void configSetCategory(int slot, const Category &category);
+int configCategoryCount();         // 1..CATEGORY_MAX
+Category configCategory(int slot); // slot 1..configCategoryCount(); an empty name beyond
+bool configSetCategories(const Category *list, int count); // the whole set at once (1..CATEGORY_MAX)
 uint32_t configVersion(); // changes whenever categories or the schedule do
 
 // --- Scheduled recordings ---

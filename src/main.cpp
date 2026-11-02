@@ -335,7 +335,7 @@ void setup() {
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "
-                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, a = dump newest moment, f = list the card's files, "
+                   "r = record start/stop, t = speaker/mic self-test, s = screenshot, p = PWR (sleep), T<unix time> = set clock, Z<posix tz> = time zone, a = dump newest moment, f = list the card's files, "
                    "P = power stats, z = 3 s light sleep test (drops USB); while asleep: q/Q = rocker held 1.5 s / tapped");
 }
 
@@ -359,6 +359,17 @@ void loop() {
         case 'a': dumpNewestMoment(); break;
         case 'f': storageListFiles(); break;
         case 'T': clockSet((time_t)Serial.parseInt()); break;
+        case 'Z': { // a POSIX time zone rule up to the end of the line
+            String tz = Serial.readStringUntil('\n');
+            tz.trim();
+            if (tz.length() >= 1 && tz.length() <= 60) {
+                clockSetTimeZone(tz.c_str());
+                Serial.printf("[clock] zone set to %s\n", clockTimeZone());
+            } else {
+                Serial.println("[clock] bad zone");
+            }
+            break;
+        }
         case 'P': printPowerStats(); break;
         case 'z':
             Serial.println("[power] light sleep for 3 s, then USB reconnect");

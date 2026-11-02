@@ -61,6 +61,7 @@ enum CommandType : uint8_t {
     CMD_SELF_TEST,
     CMD_SUSPEND,
     CMD_TAG,
+    CMD_TAGS_ABOVE, // untag every moment whose slot is above arg
     CMD_FORMAT,
     CMD_GAIN,
 };
@@ -440,7 +441,7 @@ static void deleteMoment(int index) {
 }
 
 static void tagMoment(int index, int tag) {
-    if (index < 0 || index >= momentTotal || tag < 0 || tag >= TAG_COUNT) return;
+    if (index < 0 || index >= momentTotal || tag < 0 || tag > CATEGORY_MAX) return;
     xSemaphoreTake(momentLock, portMAX_DELAY);
     moments[index].tag = tag;
     listVersion++;
@@ -566,6 +567,11 @@ static void handleCommand(const Command &cmd) {
         break;
     case CMD_TAG:
         tagMoment(cmd.arg, cmd.arg2);
+        break;
+    case CMD_TAGS_ABOVE: // a removed category: its moments lose the tag, files renamed
+        for (int i = 0; i < momentTotal; i++) {
+            if (moments[i].tag > cmd.arg) tagMoment(i, TAG_NONE);
+        }
         break;
     case CMD_FORMAT:
         if (state == AUDIO_IDLE || state == AUDIO_PLAYING) formatCard();
@@ -844,7 +850,8 @@ void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
 void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
 void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
-void audioSetTag(int index, MomentTag tag) { sendCommand(CMD_TAG, index, tag); }
+void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
+void audioClearTagsAbove(int count) { sendCommand(CMD_TAGS_ABOVE, count); }
 void audioSpeedHold(int direction) { speedDirection = direction; }
 
 void audioSetVarispeed(int maxSpeed, int ramp) {

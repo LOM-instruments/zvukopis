@@ -10,3 +10,4 @@ __pycache__/
 # Microphone measurements stay local
 measurments/
 measurements/
+graphics/
