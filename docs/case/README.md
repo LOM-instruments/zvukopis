@@ -10,4 +10,5 @@ four countersunk M2.5×6 bolts, hex or Torx. The build steps are on the
 | v1 | 2026-11-02 | [zvukopis-case-v1.stl](zvukopis-case-v1.stl), [zvukopis-case-v1.png](zvukopis-case-v1.png) | The first case. Prints on an FDM or a resin printer. |
 
 A new version gets the next number in both file names, a row here, and a row
-in the case list on the project page (`docs/index.html`, the Build section).
+in the case list on the project page (`docs/index.html`, the Build section,
+under the drawing), where the 3D view and the parts list also name the file.
