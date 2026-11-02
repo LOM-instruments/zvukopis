@@ -978,7 +978,8 @@ static void drawCalendar(const ViewState &v) {
     drawTextCentered(cx, 150, &Bold32, buf, INK);
     // Other months with moments, either side
     if (index.days[0].key / 100 < key / 100) canvas->fillTriangle(MARGIN, 140, MARGIN + 12, 130, MARGIN + 12, 150, INK);
-    if (index.days[index.count - 1].key / 100 > key / 100) {
+    int todayKey = v.clockMinute >= 0 ? dayKey((time_t)v.clockMinute * 60) : 0;
+    if (index.days[index.count - 1].key / 100 > key / 100 || (todayKey && todayKey / 100 > key / 100)) {
         canvas->fillTriangle(SW - MARGIN, 140, SW - MARGIN - 12, 130, SW - MARGIN - 12, 150, INK);
     }
 
@@ -2582,22 +2583,43 @@ static void handleDay(ButtonEvent event) {
     }
 }
 
+// The first day of the month after the one `key` is in
+static int nextMonthStart(int key) {
+    int year = key / 10000, month = key / 100 % 100;
+    if (++month > 12) {
+        month = 1;
+        year++;
+    }
+    return year * 10000 + month * 100 + 1;
+}
+
+// Up and down move between the days with moments; past the last one they go
+// on month by month up to the current month, so a month without moments yet
+// (this one, usually) can be looked at too
 static void handleCalendar(ButtonEvent event) {
     const DayIndex &index = daysWithMoments(loopDays);
     int d = findDay(index, calendarDay);
+    int today = clockValid() ? dayKey(time(nullptr)) : 0;
     switch (event) {
-    case BTN_UP: // earlier day
+    case BTN_UP: { // earlier day
         if (selected == ROW_BACK) break;
-        if (d > 0) calendarDay = index.days[d - 1].key;
+        int before = -1;
+        for (int i = 0; i < index.count && index.days[i].key < calendarDay; i++) before = i;
+        if (before >= 0) calendarDay = index.days[before].key;
         else selected = ROW_BACK;
         break;
-    case BTN_DOWN: // later day
+    }
+    case BTN_DOWN: { // later day, or the next month
         if (selected == ROW_BACK) {
             if (index.count > 0) selected = 0;
-        } else if (d >= 0 && d + 1 < index.count) {
-            calendarDay = index.days[d + 1].key;
+            break;
         }
+        int after = -1;
+        for (int i = index.count - 1; i >= 0 && index.days[i].key > calendarDay; i--) after = i;
+        if (after >= 0) calendarDay = index.days[after].key;
+        else if (today && calendarDay / 100 < today / 100) calendarDay = nextMonthStart(calendarDay);
         break;
+    }
     case BTN_CLICK:
         if (selected == ROW_BACK) showScreen(SCREEN_LIST, ROW_CALENDAR);
         else if (d >= 0) showScreen(SCREEN_DAY, 0);
@@ -2688,11 +2710,11 @@ static void handleReader(ButtonEvent event) {
 
 static void handleSettings(ButtonEvent event) {
     switch (event) {
-    case BTN_UP:
-        if (selected > ROW_BACK) selected = selected - 1;
+    case BTN_UP: // wraps, like the menus: the last row is one press from Back
+        selected = selected > ROW_BACK ? selected - 1 : SET_ROWS - 1;
         break;
     case BTN_DOWN:
-        if (selected < SET_ROWS - 1) selected = selected + 1;
+        selected = selected < SET_ROWS - 1 ? selected + 1 : ROW_BACK;
         break;
     case BTN_LONG_CLICK:
         closeSettings();
@@ -2870,10 +2892,12 @@ void uiTick() {
         if (n == 0) openCalendar();
         else if (selected >= n) selected = n - 1;
     }
-    if (screen == SCREEN_CALENDAR && selected == 0) {
+    static uint32_t calendarVersion = UINT32_MAX;
+    if (screen == SCREEN_CALENDAR && selected == 0 && momentListVersion() != calendarVersion) {
+        calendarVersion = momentListVersion(); // the chosen day's moments may have gone; an empty month is fine otherwise
         const DayIndex &index = daysWithMoments(loopDays);
         if (index.count == 0) selected = ROW_BACK;
-        else if (findDay(index, calendarDay) < 0) calendarDay = index.days[index.count - 1].key;
+        else if (findDay(index, calendarDay) < 0 && calendarDay % 100 != 1) calendarDay = index.days[index.count - 1].key;
     }
     if (screen == SCREEN_TRANSFER && transferInfo().state == TRANSFER_OFF) {
         showScreen(SCREEN_SETTINGS, transferRow); // stopped after 10 minutes unused

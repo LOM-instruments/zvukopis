@@ -7,7 +7,7 @@ const char *const ICON_NAMES[ICON_COUNT] = {"person", "tree", "smiley", "palette
                                             "wave",   "note", "heart",  "drop",    "sun"};
 
 static const Category DEFAULT_CATEGORIES[CATEGORY_COUNT] = {
-    {"Human", ICON_PERSON}, {"Nature", ICON_TREE}, {"Funny", ICON_SMILEY}, {"Art", ICON_PALETTE}, {"Other", ICON_STAR},
+    {"Sound", ICON_WAVE}, {"Music", ICON_NOTE}, {"Note", ICON_STAR}, {"Biophony", ICON_TREE}, {"Anthropophony", ICON_PERSON},
 };
 
 static SemaphoreHandle_t lock;
