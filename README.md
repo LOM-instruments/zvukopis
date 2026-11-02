@@ -108,20 +108,24 @@ What you need:
   battery* (or the kit, which adds a card, a cable and a card reader): the
   speaker is in every box, the battery is not. Any other 3.7 V lithium battery
   with an MX1.25 two-pin plug works too.
-- The case, 3D-printed from the newest STL in [docs/case/](docs/case/) on an
-  ordinary FDM printer or a resin printer.
+- The case, 3D-printed from
+  [docs/case/zvukopis-case-v1.stl](docs/case/zvukopis-case-v1.stl) (the
+  newest; every version is listed in that folder) on an ordinary FDM printer
+  or a resin printer. The project page shows it in 3D.
 - Four countersunk M2.5×6 bolts, hex (Allen) or Torx, and the key that fits
-  them.
-- Thin double-sided acrylic tape, for the battery.
+  them. They go through the case into the board's standoffs.
+- Thin double-sided acrylic tape, for attaching the battery to the case.
 - A microSD card and a USB-C cable.
 
-Putting it together: fit the speaker over the speaker holes in the case (the
-small grille near the top); stick the battery in with the tape, away from the
-speaker and the bolt holes; plug the battery and the speaker into their
-connectors on the board (the plugs fit one way round only); set the board into
-the case, screen out, with the USB port and the microSD slot at the openings
-and the leads tucked so nothing is pinched, and fasten it with the four bolts,
-snug rather than tight.
+Putting it together: peel the backing off the speaker's own tape and stick the
+speaker over the speaker holes in the case (the small grille near the top);
+make sure the battery cable is long enough to be plugged in to the board from
+where the battery will sit, before attaching the battery to the case (there
+is usually just one orientation that works), then attach it with the tape,
+clear of the bolt holes; plug the battery and the speaker into their
+connectors on the board (the plugs fit one way round only); set the case on
+the back of the board, the leads tucked so nothing is pinched, and bolt it to
+the board's four standoffs, snug rather than tight.
 
 ## Flashing
 
