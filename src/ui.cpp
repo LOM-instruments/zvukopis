@@ -744,11 +744,11 @@ static void drawDateTime(const ViewState &v) {
 // First line: name, date and time, battery. Second: moments, time left, and
 // the calendar button.
 static void drawMainHeader(const ViewState &v) {
-    drawText(MARGIN, TITLE_BASELINE, &Bold22, "zvukopis", INK);
+    drawText(MARGIN, TITLE_BASELINE, &Bold22, "Zvukopis", INK);
     int statusLeft = drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     char when[24];
     formatDateTime(when, sizeof(when), v);
-    int titleRight = MARGIN + textWidth(&Bold22, "zvukopis");
+    int titleRight = MARGIN + textWidth(&Bold22, "Zvukopis");
     drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
     char buf[40];
@@ -2109,7 +2109,7 @@ static int drawQuoteMark(int x, int y) {
 // centred between the header (asleep since when, what it holds) and the
 // footer (how to wake)
 static void drawSleepScreen(const ViewState &v) {
-    drawText(MARGIN, TITLE_BASELINE, &Bold22, "zvukopis", INK);
+    drawText(MARGIN, TITLE_BASELINE, &Bold22, "Zvukopis", INK);
     drawStatus(SW - MARGIN, TITLE_BASELINE, v);
     char buf[48];
     if (v.clockMinute >= 0) {
