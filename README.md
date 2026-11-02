@@ -97,13 +97,31 @@ this board with this firmware, measured where it says so.
 ## The case
 
 zvukopis is the Waveshare board with its speaker and battery in a 3D-printed
-case, [docs/zvukopis-case.stl](docs/zvukopis-case.stl), which prints on an
-ordinary FDM printer or a resin printer. Four countersunk M2.5×6 bolts, hex or
-Torx, hold the board in it. To build one: fit the speaker over the speaker
-holes in the case, stick the battery in with double-sided mounting tape
-(acrylic recommended), plug the battery and the speaker into their connectors
-on the board, then set the board into the case and fasten it with the four
-bolts. The exploded view is in [docs/zvukopis-case.png](docs/zvukopis-case.png).
+case. LOM does not sell the board or a kit: you buy the board yourself and
+print the case. The cases are in [docs/case/](docs/case/), an STL and an
+exploded view per version, with a list of the versions.
+
+What you need:
+
+- The Waveshare [ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm)
+  board, from Waveshare or a distributor. Take the version *with lithium
+  battery* (or the kit, which adds a card, a cable and a card reader): the
+  speaker is in every box, the battery is not. Any other 3.7 V lithium battery
+  with an MX1.25 two-pin plug works too.
+- The case, 3D-printed from the newest STL in [docs/case/](docs/case/) on an
+  ordinary FDM printer or a resin printer.
+- Four countersunk M2.5×6 bolts, hex (Allen) or Torx, and the key that fits
+  them.
+- Thin double-sided acrylic tape, for the battery.
+- A microSD card and a USB-C cable.
+
+Putting it together: fit the speaker over the speaker holes in the case (the
+small grille near the top); stick the battery in with the tape, away from the
+speaker and the bolt holes; plug the battery and the speaker into their
+connectors on the board (the plugs fit one way round only); set the board into
+the case, screen out, with the USB port and the microSD slot at the openings
+and the leads tucked so nothing is pinched, and fasten it with the four bolts,
+snug rather than tight.
 
 ## Flashing
 
@@ -140,8 +158,8 @@ For development, `src/wifi_config.example.h` can be copied to
 - `scripts/` tools: `make_fonts.py` renders the UI fonts, `import_quotes.py`
   builds the sleep-screen quotes, `serial_session.py` drives the device over
   USB for testing, `make_release.py` prepares the web flasher.
-- `docs/` the web flasher, served by GitHub Pages, with the case (STL and
-  exploded view).
+- `docs/` the web flasher, served by GitHub Pages; `docs/case/` the case,
+  an STL and an exploded view per version.
 
 ## Licence
 

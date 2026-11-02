@@ -68,17 +68,31 @@
 <section class="band" id="build" aria-labelledby="building">
   <div class="cell c3">
     <h1 class="title" id="building">Building the Zvukopis from scratch</h1>
-    <p class="note">The Waveshare board, its speaker and battery, and a 3D-printed case held by four bolts.</p>
+    <p class="note">The Waveshare board, its speaker and battery, and a 3D-printed case held by four bolts. LOM does not sell the board or
+    a kit: you buy the board yourself and print the case.</p>
+    <dl class="facts" style="margin-top:18px" aria-label="Case versions">
+      <dt>Case v1</dt><dd><a href="case/zvukopis-case-v1.stl" download>STL</a> · <a href="case/zvukopis-case-v1.png">exploded view</a> · 2 Nov 2026, the first case</dd>
+    </dl>
   </div>
-  <div class="cell photo fit c4"><img src="zvukopis-case.png" width="900" height="1200" loading="lazy" alt="Exploded view: the board, the case behind it with a speaker grille, and the four countersunk bolts"></div>
+  <div class="cell photo fit c4"><img src="case/zvukopis-case-v1.png" width="900" height="1200" loading="lazy" alt="Exploded view: the board, the case behind it with a speaker grille, and the four countersunk bolts"></div>
   <div class="cell c5">
-    <p>The case: <a href="zvukopis-case.stl" download>zvukopis-case.stl</a>, which prints on an ordinary FDM printer or a resin printer.
-    Four countersunk M2.5&times;6 bolts, hex or Torx, hold the board in it.</p>
+    <p><b>What you need</b></p>
+    <ul>
+      <li>The Waveshare <a href="https://www.waveshare.com/esp32-s3-epaper-3.97.htm">ESP32-S3-ePaper-3.97</a> board, from Waveshare or a distributor.
+      Take the version <i>with lithium battery</i> (or the kit, which adds a card, a cable and a card reader): the speaker is in every box,
+      the battery is not. Any other 3.7 V lithium battery with an MX1.25 two-pin plug works too.</li>
+      <li>The case, 3D-printed from the newest STL in the case list by the title, on an ordinary FDM printer or a resin printer.</li>
+      <li>Four countersunk M2.5&times;6 bolts, hex (Allen) or Torx, and the key that fits them.</li>
+      <li>Thin double-sided acrylic tape, for the battery.</li>
+      <li>A microSD card and a USB-C cable, for recording and for the install below.</li>
+    </ul>
+    <p><b>Putting it together</b></p>
     <ol>
-      <li>Fit the speaker over the speaker holes in the case.</li>
-      <li>Stick the battery in with double-sided mounting tape (acrylic tape is recommended).</li>
-      <li>Plug the battery and the speaker into their connectors on the board.</li>
-      <li>Set the board into the case and fasten it with the four countersunk bolts.</li>
+      <li>Fit the speaker over the speaker holes in the case, the small grille near the top.</li>
+      <li>Stick the battery in with the tape, away from the speaker and the bolt holes.</li>
+      <li>Plug the battery and the speaker into their connectors on the board; the plugs fit one way round only.</li>
+      <li>Set the board into the case, screen out, with the USB port and the microSD slot at the openings, the leads tucked so nothing is pinched,
+      and fasten it with the four countersunk bolts, snug rather than tight.</li>
     </ol>
     <p class="note">Then install the firmware, below.</p>
   </div>

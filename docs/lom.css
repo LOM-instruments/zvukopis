@@ -56,7 +56,7 @@ pre code { border: 0; padding: 0; background: none; }
 .cell p { max-width: 66ch; }
 .cell p:first-child { margin-top: 0; }
 .cell p:last-child, .cell ol:last-child, .cell ul:last-child { margin-bottom: 0; }
-.cell ol { padding-left: 1.4em; max-width: 66ch; }
+.cell ol, .cell ul { padding-left: 1.4em; max-width: 66ch; }
 .cell li { margin-bottom: .6em; }
 .status { display: inline-block; margin: 0 0 16px; padding: 3px 10px 4px; background: var(--text); color: #fff; font-size: 15px; }
 .status::before { content: ""; display: inline-block; width: .6em; height: .6em; margin-right: .5em; background: var(--accent); vertical-align: .05em; }

@@ -17,7 +17,7 @@ coupler), the relative ones are solid.
 | Storage | microSD over SDMMC (4-bit), FAT32 (the firmware formats cards over 32 GB) |
 | Power | LiPo battery through an AXP2101 PMIC, USB-C charging, light sleep between presses |
 | Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started |
-| Case | 3D-printed (`docs/zvukopis-case.stl`, FDM or resin), the board held by four countersunk M2.5×6 bolts, hex or Torx |
+| Case | 3D-printed (`docs/case/`, an STL per version, FDM or resin), the board held by four countersunk M2.5×6 bolts, hex or Torx |
 
 ## Audio chain
 
