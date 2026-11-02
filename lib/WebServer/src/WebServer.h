@@ -109,7 +109,7 @@ public:
 
   String uri() { return _currentUri; }
   HTTPMethod method() { return _currentMethod; }
-  virtual WiFiClient client() { return _currentClient; }
+  virtual WiFiClient client() { _flushOut(); return _currentClient; } // flushed, so direct writes follow what was sent
   HTTPUpload& upload() { return *_currentUpload; }
   HTTPRaw& raw() { return *_currentRaw; }
 
@@ -158,12 +158,18 @@ public:
   template<typename T>
   size_t streamFile(T &file, const String& contentType, const int code = 200) {
     _streamFileCore(file.size(), file.name(), contentType, code);
+    _flushOut();
     return _currentClient.write(file);
   }
 
 protected:
-  virtual size_t _currentClientWrite(const char* b, size_t l) { return _currentClient.write( b, l ); }
-  virtual size_t _currentClientWrite_P(PGM_P b, size_t l) { return _currentClient.write_P( b, l ); }
+  // Writes gather into one TCP segment before they go out: a page built from
+  // hundreds of small pieces would otherwise cross the air in as many packets
+  virtual size_t _currentClientWrite(const char* b, size_t l);
+  virtual size_t _currentClientWrite_P(PGM_P b, size_t l) { return _currentClientWrite((const char*)b, l); }
+  void _flushOut();
+  char*            _outBuf = nullptr;
+  size_t           _outLen = 0;
   void _addRequestHandler(RequestHandler* handler);
   void _handleRequest();
   void _finalizeResponse();

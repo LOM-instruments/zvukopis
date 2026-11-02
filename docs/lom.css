@@ -126,6 +126,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
   .pages a { padding: 11px 4px 12px; text-align: center; border-left: var(--line) solid var(--text); }
   .pages a:nth-child(2n+1) { border-left: 0; }
   .pages a:nth-child(n+3) { border-top: var(--line) solid var(--text); }
+  .pages a:last-child:nth-child(odd) { grid-column: span 2; }
   .site-nav .pages a[aria-current] { background: var(--text); color: #fff; text-decoration: none; }
   .site-nav .gap { display: none; }
 }

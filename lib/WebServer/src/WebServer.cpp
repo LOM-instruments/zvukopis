@@ -90,6 +90,7 @@ WebServer::WebServer(int port)
 
 WebServer::~WebServer() {
   _server.close();
+  free(_outBuf);
   if (_currentHeaders)
     delete[]_currentHeaders;
   RequestHandler* handler = _firstHandler;
@@ -305,6 +306,7 @@ void WebServer::handleClient() {
           _currentClient.setTimeout(HTTP_MAX_SEND_WAIT / 1000);
           _contentLength = CONTENT_LENGTH_NOT_SET;
           _handleRequest();
+          _flushOut();
 
 // Fix for issue with Chrome based browsers: https://github.com/espressif/arduino-esp32/issues/3652
 //           if (_currentClient.connected()) {
@@ -330,6 +332,7 @@ void WebServer::handleClient() {
   }
 
   if (!keepCurrentClient) {
+    _flushOut();
     _currentClient = WiFiClient();
     _currentStatus = HC_NONE;
     _currentUpload.reset();
@@ -487,10 +490,30 @@ void WebServer::sendContent(const char* content, size_t contentLength) {
   }
   _currentClientWrite(content, contentLength);
   if(_chunked){
-    _currentClient.write(footer, 2);
+    _currentClientWrite(footer, 2);
     if (contentLength == 0) {
       _chunked = false;
     }
+  }
+}
+
+static const size_t OUT_BUF = 1436; // one TCP segment on this stack
+
+size_t WebServer::_currentClientWrite(const char* b, size_t l) {
+  if (!_outBuf) _outBuf = (char*)malloc(OUT_BUF);
+  if (!_outBuf) return _currentClient.write(b, l);
+  if (_outLen + l > OUT_BUF) _flushOut();
+  if (l >= OUT_BUF) return _currentClient.write(b, l);
+  memcpy(_outBuf + _outLen, b, l);
+  _outLen += l;
+  return l;
+}
+
+void WebServer::_flushOut() {
+  if (_outLen) {
+    size_t n = _outLen;
+    _outLen = 0;
+    _currentClient.write(_outBuf, n);
   }
 }
 
@@ -510,7 +533,7 @@ void WebServer::sendContent_P(PGM_P content, size_t size) {
   }
   _currentClientWrite_P(content, size);
   if(_chunked){
-    _currentClient.write(footer, 2);
+    _currentClientWrite(footer, 2);
     if (size == 0) {
       _chunked = false;
     }

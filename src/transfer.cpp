@@ -1049,6 +1049,31 @@ static void addRoutes() {
     });
 }
 
+// A byte range from a request's Range header: 1 with from and to set, 0 for
+// none (or one not understood: the whole file goes), -1 for one that can't be met
+static int parseRange(const String &range, size_t total, size_t &from, size_t &to) {
+    if (!range.startsWith("bytes=")) return 0;
+    const char *s = range.c_str() + 6;
+    char *end;
+    if (*s == '-') { // the last n bytes
+        size_t n = strtoul(s + 1, &end, 10);
+        if (*end || n == 0) return 0;
+        from = n < total ? total - n : 0;
+        to = total - 1;
+    } else {
+        from = strtoul(s, &end, 10);
+        if (*end != '-') return 0;
+        if (end[1] == 0) to = total - 1;
+        else {
+            to = strtoul(end + 1, &end, 10);
+            if (*end) return 0;
+        }
+    }
+    if (from >= total) return -1;
+    if (to >= total) to = total - 1;
+    return from <= to ? 1 : -1;
+}
+
 static void handleMoment() {
     noteRequest();
     int index;
@@ -1057,39 +1082,72 @@ static void handleMoment() {
         server.send(404, "text/plain", "No such moment");
         return;
     }
-    char name[48], disposition[80];
-    downloadName(moment, name, sizeof(name));
-    snprintf(disposition, sizeof(disposition), "%s; filename=\"%s\"", server.hasArg("play") ? "inline" : "attachment", name);
-    server.sendHeader("Content-Disposition", disposition);
-
-    if (!moment.samples) {
-        File f = storageOpenMoment(moment);
+    // In memory the header is made here and the samples follow it; on the card
+    // the file holds both
+    uint8_t header[WAV_HEADER_BYTES];
+    size_t headerSize = 0, total;
+    File f;
+    if (moment.samples) {
+        headerSize = storageWavHeader(moment, header);
+        total = headerSize + moment.length * sizeof(int16_t);
+    } else {
+        f = storageOpenMoment(moment);
         if (!f) {
             server.send(500, "text/plain", "Can't open the file on the SD card");
             return;
         }
-        f.seek(0);
-        server.streamFile(f, "audio/wav");
-        f.close();
+        total = f.size();
+    }
+    // Phones' players ask for byte ranges, and play nothing from a server that ignores them
+    size_t from = 0, to = total - 1;
+    char line[96];
+    int ranged = parseRange(server.header("Range"), total, from, to);
+    if (ranged < 0) {
+        snprintf(line, sizeof(line), "bytes */%u", (unsigned)total);
+        server.sendHeader("Content-Range", line);
+        server.send(416, "text/plain", "Range not satisfiable");
         return;
     }
-
-    uint8_t header[WAV_HEADER_BYTES];
-    size_t headerSize = storageWavHeader(moment, header);
-    size_t dataSize = moment.length * sizeof(int16_t);
-    server.setContentLength(headerSize + dataSize);
-    server.send(200, "audio/wav", "");
-    WiFiClient client = server.client();
-    client.write(header, headerSize);
-    // Its samples stay put unless the moment is deleted, which only this server
-    // can do while the transfer screen is up (from another browser tab, say)
-    const uint8_t *data = (const uint8_t *)moment.samples;
-    for (size_t sent = 0; sent < dataSize && client.connected();) {
-        size_t n = client.write(data + sent, min(SEND_CHUNK, dataSize - sent));
-        if (n == 0) break;
-        sent += n;
-        lastRequestAt = millis();
+    char name[48];
+    downloadName(moment, name, sizeof(name));
+    snprintf(line, sizeof(line), "%s; filename=\"%s\"", server.hasArg("play") ? "inline" : "attachment", name);
+    server.sendHeader("Content-Disposition", line);
+    server.sendHeader("Accept-Ranges", "bytes");
+    if (ranged) {
+        snprintf(line, sizeof(line), "bytes %u-%u/%u", (unsigned)from, (unsigned)to, (unsigned)total);
+        server.sendHeader("Content-Range", line);
     }
+    size_t length = to - from + 1;
+    server.setContentLength(length);
+    server.send(ranged ? 206 : 200, "audio/wav", "");
+    WiFiClient client = server.client();
+    client.setNoDelay(true);
+    uint8_t *chunk = (uint8_t *)malloc(SEND_CHUNK * 2);
+    if (!f || f.seek(from)) {
+        for (size_t sent = 0; sent < length && client.connected();) {
+            size_t pos = from + sent, n = min(SEND_CHUNK * 2, length - sent), written;
+            if (moment.samples) {
+                // Its samples stay put unless the moment is deleted, which only this server
+                // can do while the transfer screen is up (from another browser tab, say)
+                if (pos < headerSize) {
+                    n = min(n, headerSize - pos);
+                    written = client.write(header + pos, n);
+                } else {
+                    written = client.write((const uint8_t *)moment.samples + (pos - headerSize), n);
+                }
+            } else {
+                if (!chunk) break;
+                n = f.read(chunk, n);
+                if (n == 0) break;
+                written = client.write(chunk, n);
+            }
+            if (written == 0) break;
+            sent += written;
+            lastRequestAt = millis();
+        }
+    }
+    free(chunk);
+    if (f) f.close();
 }
 
 // --- Backup: every moment (or one day's) as WAV files in one ZIP ---
@@ -1370,6 +1428,8 @@ static void transferTask(void *) {
         MDNS.addService("http", "tcp", 80);
         if (!routesAdded) addRoutes();
         routesAdded = true;
+        static const char *HEADERS[] = {"Range"};
+        server.collectHeaders(HEADERS, 1); // the only request header read: byte ranges for playback
         server.begin();
         lastRequestAt = millis();
         info.state = TRANSFER_READY;
