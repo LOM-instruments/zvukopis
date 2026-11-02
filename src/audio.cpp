@@ -51,7 +51,9 @@ static const uint32_t STANDBY_AFTER_MS = 2000;        // idle time before the co
 static volatile int maxSpeedSetting = 3;
 static volatile int rampSetting = RAMP_NORMAL;
 static volatile bool holdSetting = false;
-static volatile bool returning = false; // in hold mode, after a tap: gliding back to 1x
+static volatile bool returning = false;     // in hold mode, after a tap: gliding back to 1x
+static volatile float speedAtPress = 1;     // where the speed was when the rocker went down
+static volatile bool restoreSpeed = false;  // a tap: back to speedAtPress first, then the glide
 static const float SPEED_STEP[RAMP_COUNT] = {1.02f, 1.04f, 1.08f};   // normal: 2x after ~0.3 s held, 3x after ~0.45 s
 static const float SPEED_RETURN[RAMP_COUNT] = {0.92f, 0.85f, 0.75f}; // fraction of the distance to 1x left after each chunk
 // Below this the speed stops shrinking by steps and slides straight through
@@ -130,6 +132,7 @@ static volatile bool readerFailed = false;      // the file didn't open
 static File playFile;
 static TaskHandle_t readerTaskHandle = nullptr;
 static SemaphoreHandle_t firstBlock;            // given by the reader once a new playback has sound
+static SemaphoreHandle_t readerIdle;            // given by the reader once it has let go of a file
 static volatile uint32_t underruns = 0;
 static float stepBefore;                        // playbackChunk's glide
 
@@ -419,16 +422,16 @@ static void startPlayback(int index) {
     if (index < 0 || index >= momentTotal) return;
     playPos = 0;
     speed = 1;
-    stepBefore = 1;
+    stepBefore = (float)(moments[index].sampleRate ? moments[index].sampleRate : SAMPLE_RATE) / SAMPLE_RATE;
     speedDirection = 0;
     returning = false;
+    restoreSpeed = false;
     underruns = 0;
     fileEnd = moments[index].length;
     if (!moments[index].samples) {
-        // The reader opens the file and loads the first half second; wait for it
+        // The reader opens the file, resets the window and loads the first half second; wait for it
         xSemaphoreTake(firstBlock, 0);
         readerFailed = false;
-        winStart = winEnd = 0;
         readerMoment = index;
         readerSeq++;
         xTaskNotifyGive(readerTaskHandle);
@@ -448,9 +451,14 @@ static void startPlayback(int index) {
 static void stopPlayback() {
     digitalWrite(PA_ENABLE_PIN, LOW);
     if (underruns) Serial.printf("[play] %lu chunks waited on the card\n", (unsigned long)underruns);
+    bool onCard = readerMoment >= 0;
+    xSemaphoreTake(readerIdle, 0);
     readerMoment = -1;
     readerSeq++;
     xTaskNotifyGive(readerTaskHandle);
+    if (onCard && xSemaphoreTake(readerIdle, pdMS_TO_TICKS(600)) != pdTRUE) {
+        Serial.println("[play] the reader didn't let go of the file"); // a block read takes tens of ms; this shouldn't happen
+    }
     playingIndex = -1;
     state = AUDIO_IDLE;
 }
@@ -466,6 +474,7 @@ static void deleteMoment(int index) {
     memmove(&moments[index], &moments[index + 1], (momentTotal - index - 1) * sizeof(Moment));
     momentTotal--;
     if (playingIndex > index) playingIndex--;
+    if (readerMoment > index) readerMoment--; // the reader has its own copy of the moment; only the index moves
     listVersion++;
     xSemaphoreGive(momentLock);
     Serial.printf("Deleted Moment %d\n", number);
@@ -641,25 +650,29 @@ static size_t readIntoRing(const Moment &moment, size_t from, size_t want) {
 static void readerTask(void *) {
     int current = -1;
     uint32_t seq = 0;
+    Moment moment = {}; // its own copy: the list may shift under it
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
-        int index = readerMoment;
         uint32_t s = readerSeq;
-        if (index != current || s != seq) {
-            if (playFile) playFile.close();
-            current = index;
+        if (s != seq) { // a start or a stop
             seq = s;
-            if (index >= 0) {
-                playFile = storageOpenMoment(moments[index]);
+            if (playFile) playFile.close();
+            current = readerMoment;
+            if (current >= 0) {
+                xSemaphoreTake(momentLock, portMAX_DELAY);
+                moment = moments[current];
+                xSemaphoreGive(momentLock);
+                winStart = winEnd = 0;
+                playFile = storageOpenMoment(moment);
                 if (!playFile) {
                     readerFailed = true;
                     xSemaphoreGive(firstBlock);
                     current = -1;
                 }
             }
+            if (current < 0) xSemaphoreGive(readerIdle); // the file is let go of
         }
         if (current < 0) continue;
-        const Moment &moment = moments[current];
         double pos = playPos;
         size_t p = pos < 0 ? 0 : (size_t)pos;
         size_t ws = winStart, we = winEnd, end = fileEnd;
@@ -673,6 +686,7 @@ static void readerTask(void *) {
             size_t want = min(READ_BLOCK, end - we);
             if (we + want > ws + RING_SAMPLES) winStart = we + want - RING_SAMPLES; // the back is overwritten: let go of it first
             size_t n = readIntoRing(moment, we, want);
+            if (readerSeq != seq) continue; // the playback changed under the read: nothing of it counts
             if (n < want) fileEnd = we + n; // shorter than its header says
             winEnd = we + n;
             if (ws == we && n > 0) xSemaphoreGive(firstBlock);
@@ -683,6 +697,7 @@ static void readerTask(void *) {
             size_t want = min(READ_BLOCK, ws), from = ws - want;
             if (we > from + RING_SAMPLES) winEnd = from + RING_SAMPLES; // the front goes first
             size_t n = readIntoRing(moment, from, want);
+            if (readerSeq != seq) continue;
             if (n == want) winStart = from;
         }
     }
@@ -691,6 +706,10 @@ static void readerTask(void *) {
 static void updateSpeed() {
     int direction = speedDirection;
     float s = speed;
+    if (direction == 0 && restoreSpeed) {
+        s = speedAtPress; // a tap moved the speed a little before it was known as a tap: undo that
+        restoreSpeed = false;
+    }
     if (direction != 0) {
         // Towards the held direction: by steps away from zero, straight through
         // zero inside the scrub band, like a reel slowed to a stop and turned
@@ -937,6 +956,7 @@ bool audioInit() {
     xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 5, NULL, 0);
     ring = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
     firstBlock = xSemaphoreCreateBinary();
+    readerIdle = xSemaphoreCreateBinary();
     if (!ring) Serial.println("Can't allocate the playback ring");
     else xTaskCreatePinnedToCore(readerTask, "reader", 4096, NULL, 2, &readerTaskHandle, 1); // core 1, with the SD writer
     return true;
@@ -956,8 +976,14 @@ void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
 void audioClearTagsAbove(int count) { sendCommand(CMD_TAGS_ABOVE, count); }
-void audioSpeedHold(int direction) { speedDirection = direction; }
-void audioSpeedTap() { returning = true; }
+void audioSpeedHold(int direction) {
+    if (direction != 0 && speedDirection == 0) speedAtPress = speed;
+    speedDirection = direction;
+}
+void audioSpeedTap() {
+    restoreSpeed = true;
+    returning = true;
+}
 
 void audioSetVarispeed(int maxSpeed, int ramp, int hold) {
     if (maxSpeed > 0) maxSpeedSetting = constrain(maxSpeed, 1, 8);

@@ -314,9 +314,10 @@ static ViewState currentView() {
     // Playback: the position and speed are sampled once a second, so the
     // screen refreshes that often at most (each refresh is half a second of work)
     static uint32_t playSampledAt = 0;
-    static int playSeconds = 0, speedTenths = 10, playTicks = 0;
-    if (audioState() != AUDIO_PLAYING || millis() - playSampledAt >= 1000) {
+    static int playSeconds = 0, speedTenths = 10, playTicks = 0, sampledIndex = -1;
+    if (audioState() != AUDIO_PLAYING || millis() - playSampledAt >= 1000 || audioPlayingIndex() != sampledIndex) {
         playSampledAt = millis();
+        sampledIndex = audioPlayingIndex();
         playSeconds = (int)audioPlaybackSeconds();
         speedTenths = (int)roundf(audioPlaybackSpeed() * 10);
         playTicks = (int)(audioPlaybackSeconds() * 8);
