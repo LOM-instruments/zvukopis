@@ -46,6 +46,7 @@ pre code { border: 0; padding: 0; background: none; }
 .col > .cell:last-child { flex: 1 0 auto; }
 .cell + .col, .col + .cell, .col + .col { border-top: var(--line) solid var(--text); }
 .band.hero .cell:not(.photo) { display: flex; flex-direction: column; justify-content: center; }
+.band.hero .note { max-width: none; }
 /* The four points: a colour each, the lines between them drawn by the grid's gaps */
 .band.four { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--line); background: var(--text); }
 .band.four .cell { border: 0; background: var(--bg); }
