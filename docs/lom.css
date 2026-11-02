@@ -33,13 +33,13 @@ pre code { border: 0; padding: 0; background: none; }
 /* Bands of cells */
 .band { border-bottom: var(--line) solid var(--text); }
 .cell.black { background: var(--text); color: #fff; }
-.cell.black .display { max-width: 40ch; }
 .cell.black .note { color: #bbb; }
 .cell.photo { padding: 0; background: #fff; line-height: 0; }
 .cell.photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 /* A square cell: a drawing shown whole, or the 3D view */
-.cell.photo.fit { display: flex; flex-direction: column; flex: 0 0 auto; aspect-ratio: 1; }
+.cell.photo.fit { display: flex; flex-direction: column; flex: 0 0 auto; aspect-ratio: 1; position: relative; }
 .cell.photo.fit img, .cell.photo.fit canvas { flex: 1 1 0; min-height: 0; width: 100%; height: auto; object-fit: contain; touch-action: pan-y; }
+.cell.photo.fit .note { position: absolute; left: var(--edge); right: var(--edge); bottom: 12px; margin: 0; line-height: 1.4; }
 /* A column of cells inside a band; its last cell stretches, so the lattice stays whole whatever the band's height */
 .col { display: flex; flex-direction: column; min-width: 0; }
 .col > .cell:last-child { flex: 1 0 auto; }
@@ -57,7 +57,7 @@ pre code { border: 0; padding: 0; background: none; }
 .title { margin: 0; font-size: 22px; font-weight: 400; line-height: 1.2; overflow-wrap: break-word; }
 .note { margin: 6px 0 0; font-size: 15px; line-height: 1.4; color: var(--muted); }
 .note a { color: inherit; }
-.display { margin: 0; font-size: clamp(26px, 3.4vw, 44px); font-weight: 400; line-height: 1.08; letter-spacing: -.015em; overflow-wrap: anywhere; max-width: 30ch; }
+.display { margin: 0; font-size: clamp(26px, 3.4vw, 44px); font-weight: 400; line-height: 1.08; letter-spacing: -.015em; overflow-wrap: anywhere; }
 .lead { margin: 0; max-width: 40ch; font-size: clamp(20px, 2.1vw, 27px); line-height: 1.3; letter-spacing: -.005em; }
 .cell p { max-width: 66ch; }
 .cell p:first-child { margin-top: 0; }

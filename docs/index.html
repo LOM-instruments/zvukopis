@@ -69,25 +69,22 @@
 <section class="band" id="build" aria-labelledby="building">
   <div class="cell c3">
     <h1 class="title" id="building">Building the Zvukopis from scratch</h1>
-    <p class="note">The Waveshare board, its speaker and battery, and a 3D-printed case bolted to the board's standoffs. LOM does not sell the board or
-    a kit: you buy the board yourself and print the case.</p>
+    <dl class="facts" style="margin-top:18px" aria-label="Case versions">
+      <dt>Case v1</dt><dd><a href="case/zvukopis-case-v1.stl" download>STL</a> · <a href="case/zvukopis-case-v1.png">exploded view</a> · 2 Nov 2026, the first case</dd>
+    </dl>
   </div>
-  <div class="col c3">
+  <div class="col c4">
     <div class="cell photo fit"><img src="case/zvukopis-case-v1.png" width="1200" height="1200" loading="lazy" alt="Exploded view: the board, the case behind it with a speaker grille, and the four countersunk bolts"></div>
-    <div class="cell">
-      <dl class="facts" aria-label="Case versions">
-        <dt>Case v1</dt><dd><a href="case/zvukopis-case-v1.stl" download>STL</a> · <a href="case/zvukopis-case-v1.png">exploded view</a> · 2 Nov 2026, the first case</dd>
-      </dl>
-    </div>
+    <div class="cell photo fit" id="casecell" data-stl="case/zvukopis-case-v1.stl" aria-label="The case, turning in 3D"><p class="note" id="casehint">The case in 3D, loading&hellip;</p></div>
   </div>
-  <div class="cell c4">
+  <div class="cell c5">
     <p><b>What you need</b></p>
     <ul>
       <li>The Waveshare <a href="https://www.waveshare.com/esp32-s3-epaper-3.97.htm">ESP32-S3-ePaper-3.97</a> board, from Waveshare or a distributor.
       Take the version <i>with lithium battery</i> (or the kit, which adds a card, a cable and a card reader): the speaker is in every box,
       the battery is not. Any other 3.7 V lithium battery with an MX1.25 two-pin plug works too.</li>
       <li>The case, 3D-printed from <a href="case/zvukopis-case-v1.stl" download>zvukopis-case-v1.stl</a> (the newest; every version is listed
-      under the drawing) on an ordinary FDM printer or a resin printer.</li>
+      by the title) on an ordinary FDM printer or a resin printer.</li>
       <li>Four countersunk M2.5&times;6 bolts, hex (Allen) or Torx, and the key that fits them. They go through the case into the board's standoffs.</li>
       <li>Thin double-sided acrylic tape, for attaching the battery to the case.</li>
       <li>A microSD card and a USB-C cable, for recording and for the install below.</li>
@@ -102,10 +99,6 @@
       countersunk bolts, snug rather than tight.</li>
     </ol>
     <p class="note">Then install the firmware, below.</p>
-  </div>
-  <div class="col c2">
-    <div class="cell photo fit" id="casecell" data-stl="case/zvukopis-case-v1.stl" aria-label="The case, turning in 3D"></div>
-    <div class="cell"><p class="note" id="casehint">The case in 3D, loading&hellip;</p></div>
   </div>
 </section>
 
@@ -180,9 +173,9 @@
   } else viewCase();
   async function viewCase() {
     const hint = document.getElementById('casehint');
-    let THREE, STLLoader, OrbitControls, geometry;
+    let THREE, STLLoader, OrbitControls, mergeVertices, geometry;
     try {
-      [THREE, {STLLoader}, {OrbitControls}] = await Promise.all([import('three'), import('three/addons/loaders/STLLoader.js'), import('three/addons/controls/OrbitControls.js')]);
+      [THREE, {STLLoader}, {OrbitControls}, {mergeVertices}] = await Promise.all([import('three'), import('three/addons/loaders/STLLoader.js'), import('three/addons/controls/OrbitControls.js'), import('three/addons/utils/BufferGeometryUtils.js')]);
       geometry = await new STLLoader().loadAsync(caseCell.dataset.stl);
     } catch (e) { hint.textContent = 'The 3D view did not load (' + (e.message || 'a newer browser is needed') + ').'; return; }
     let renderer;
@@ -194,9 +187,16 @@
     geometry.center(); geometry.computeBoundingSphere();
     const r = geometry.boundingSphere.radius;
     const scene = new THREE.Scene();
-    // A white body hides what is behind it, black edges draw what is in front: a line drawing
-    scene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0xffffff, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1})));
+    // A white body hides what is behind it, black lines draw what is in front: a line drawing.
+    // Creases are the edges between faces that meet at an angle; the silhouette, which also
+    // follows the rounded corners, is the body once more in black, back faces only, pushed
+    // out a little along smoothed normals so it shows as a line around the white.
+    scene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0xffffff, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2})));
     scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 20), new THREE.LineBasicMaterial({color: 0x000000})));
+    const smooth = mergeVertices(geometry); smooth.computeVertexNormals();
+    const hull = new THREE.MeshBasicMaterial({color: 0x000000, side: THREE.BackSide});
+    hull.onBeforeCompile = sh => { sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normal * 0.3;'); };
+    scene.add(new THREE.Mesh(smooth, hull));
     // Parallel projection, seen from a corner, as the diagram is
     const camera = new THREE.OrthographicCamera(-r, r, r, -r, 0.1, r * 10);
     camera.position.set(r * 2, r * 2, r * 2); camera.lookAt(0, 0, 0);
