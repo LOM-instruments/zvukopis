@@ -67,6 +67,7 @@ enum Screen {
     SCREEN_SPECTRUM,    // frequency analysis of one moment
     SCREEN_LIBRARY,     // the documents on the card
     SCREEN_READER,      // one of them, page by page
+    SCREEN_UPDATE,      // how to get the newest firmware
 };
 
 enum Overlay {
@@ -86,7 +87,8 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
-enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_RESET, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_UPDATE, SET_RESET, SET_ROWS };
+static const char *const UPDATE_URL = "https://zvukopis.lom.audio"; // the project page with the web flasher
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
 static const int MENU_ANALYSIS = TAG_COUNT - 1; // after the five tags
@@ -1112,6 +1114,10 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         else if (!v.sdCard) snprintf(detail, len, "No SD card");
         else snprintf(detail, len, "Erases everything on the card");
         break;
+    case SET_UPDATE:
+        title = "Firmware update";
+        snprintf(detail, len, "%s; press in for how", FIRMWARE_VERSION);
+        break;
     case SET_RESET:
         title = "Reset settings";
         snprintf(detail, len, "Forgets Wi-Fi, tags, schedule, gain; moments stay");
@@ -1804,6 +1810,23 @@ static void drawReader(const ViewState &v) {
     }
 }
 
+// How to update: the project page, as a QR code and three steps
+static void drawUpdate(const ViewState &v) {
+    drawSubHeader(v, "Firmware update", "This is " FIRMWARE_VERSION, false);
+    int cx = SW / 2;
+    const int qrSize = 200, qrY = LIST_TOP + 16;
+    drawQr(UPDATE_URL, cx - qrSize / 2, qrY, qrSize);
+    int y = qrY + qrSize + 36;
+    drawTextCentered(cx, y, &Bold22, "zvukopis.lom.audio", INK);
+    y += 44;
+    drawText(MARGIN, y, &Text22, "1. Open that page in Chrome or Edge", INK);
+    drawText(MARGIN + 26, y + 28, &Text22, "on a computer.", INK);
+    drawText(MARGIN, y + 68, &Text22, "2. Connect zvukopis with the USB cable.", INK);
+    drawText(MARGIN, y + 108, &Text22, "3. Press Install on the page.", INK);
+    drawText(MARGIN, y + 160, &Text17, "The newest version goes on; moments and settings stay.", INK);
+    drawText(MARGIN, y + 184, &Text17, "Afterwards, unplug and replug the cable.", INK);
+}
+
 static void drawCardReader(const ViewState &v) {
     drawSubHeader(v, "USB card reader", "Open on the computer", false);
     int cx = SW / 2;
@@ -2070,16 +2093,18 @@ static void drawSleepScreen(const ViewState &v) {
     canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 
     // How to wake: the PWR button is on the right edge, about 5 mm above the
-    // rocker (which sits beside the first list row), so the pointer goes there
-    const int py = LIST_TOP + 4;
-    canvas->fillRect(SW - 30, py - 2, 16, 5, INK);
-    canvas->fillTriangle(SW - 14, py - 8, SW - 14, py + 8, SW - 4, py, INK);
-    drawTextRight(SW - 42, py + 8, &Text22, "Hold 1 s to wake", INK);
-    // ... and the rocker, beside the first row: holding it in records at once
-    const int ry = LIST_TOP + 48;
-    canvas->fillRect(14, ry - 2, 16, 5, INK);
-    canvas->fillTriangle(14, ry - 8, 14, ry + 8, 4, ry, INK);
-    drawText(42, ry + 8, &Text22, "Hold in to record", INK);
+    // rocker (which sits beside the first list row), so the pointer goes there;
+    // and the rocker itself: holding it in records at once. Both are part of
+    // the button guide, so they go with it.
+    const int py = LIST_TOP + 4, ry = LIST_TOP + 48;
+    if (v.guide) {
+        canvas->fillRect(SW - 30, py - 2, 16, 5, INK);
+        canvas->fillTriangle(SW - 14, py - 8, SW - 14, py + 8, SW - 4, py, INK);
+        drawTextRight(SW - 42, py + 8, &Text22, "Hold 1 s to wake", INK);
+        canvas->fillRect(14, ry - 2, 16, 5, INK);
+        canvas->fillTriangle(14, ry - 8, 14, ry + 8, 4, ry, INK);
+        drawText(42, ry + 8, &Text22, "Hold in to record", INK);
+    }
 
     // "Pauline Oliveros, Deep Listening" -> author, then the work below
     const Quote &quote = QUOTES[v.quote % QUOTE_COUNT];
@@ -2093,7 +2118,7 @@ static void drawSleepScreen(const ViewState &v) {
         while (*work == ' ') work++;
     }
 
-    const int top = ry + 30, bottom = SH - 36, width = SW - 2 * MARGIN; // below both pointers
+    const int top = v.guide ? ry + 30 : LIST_TOP + 36, bottom = SH - 36, width = SW - 2 * MARGIN; // below both pointers
     struct Size {
         const GFXfont *font;
         int lineHeight;
@@ -2167,7 +2192,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format...", "Reset..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format...", "How", "Reset..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2176,6 +2201,9 @@ static void drawFooter(const ViewState &v) {
         else rocker[nr++] = {HINT_UPDOWN, "Contrast"};
         rocker[nr++] = {HINT_CLICK, playing ? "Stop" : "Play"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: options"};
+    } else if (v.screen == SCREEN_UPDATE) {
+        rocker[nr++] = {HINT_CLICK, "Back"};
+        rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
     } else if (v.screen == SCREEN_LIBRARY) {
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Read"};
@@ -2268,6 +2296,7 @@ static void render(const ViewState &v) {
         case SCREEN_SCHEDULE: drawScheduleScreen(v); break;
         case SCREEN_SPECTRUM: drawSpectrum(v); break;
         case SCREEN_LIBRARY: drawLibrary(v); break;
+        case SCREEN_UPDATE: drawUpdate(v); break;
         case SCREEN_READER: drawReader(v); break;
         }
         switch (v.overlay) {
@@ -2769,6 +2798,9 @@ static void handleSettings(ButtonEvent event) {
         case SET_FORMAT:
             if (storageCardState() != SD_ABSENT && audioState() != AUDIO_FORMATTING) openOverlay(OVERLAY_CONFIRM_FORMAT, 0);
             break;
+        case SET_UPDATE:
+            showScreen(SCREEN_UPDATE, 0);
+            break;
         case SET_RESET:
             openOverlay(OVERLAY_CONFIRM_RESET, 0);
             break;
@@ -2838,6 +2870,9 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_SETTINGS: handleSettings(event); break;
     case SCREEN_SCHEDULE: handleSchedule(event); break;
     case SCREEN_LIBRARY: handleLibrary(event); break;
+    case SCREEN_UPDATE:
+        if (event == BTN_CLICK || event == BTN_LONG_CLICK) showScreen(SCREEN_SETTINGS, SET_UPDATE);
+        break;
     case SCREEN_READER: handleReader(event); break;
     case SCREEN_SPECTRUM:
         if (event == BTN_UP) {

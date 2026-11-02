@@ -10,7 +10,7 @@ zvukopis is a pocket recorder for sonic moments. A moment is a recording: the so
 - **The Settings button.** The small button next to the USB port. It opens the settings from any screen, and closes them again.
 - **The Sleep button.** On the right edge, a little above the side switch. Hold it for a second to send zvukopis to sleep, or to wake it.
 
-The guide at the bottom of every screen says what the switch does right there: "Up or down", "Press in" and "Hold in". Once you know your way around, turn it off in Settings > Button guide and the screens get the room.
+The guide at the bottom of every screen says what the switch does right there: "Up or down", "Press in" and "Hold in". Once you know your way around, turn it off in Settings > Button guide and the screens get the room; the pointers on the sleep screen go with it.
 
 ## The main screen
 
@@ -102,6 +102,7 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 - **Button guide.** The hints at the bottom of the screens, on or off.
 - **USB card reader.** The card on a computer.
 - **Format SD card.** Erases it.
+- **Firmware update.** Which version this is, and how to install the newest (a code to scan, three steps).
 - **Reset settings.** Forgets the Wi-Fi networks, tags, schedule, gain and the rest; the moments on the card stay. For handing zvukopis on.
 
 Hold the side switch in, or press the Settings button again, to leave.

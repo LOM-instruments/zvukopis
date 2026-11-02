@@ -4,6 +4,13 @@ A pocket recorder for sonic moments, built on the Waveshare ESP32-S3-ePaper-3.97
 board: a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
 a microSD slot and a battery.
 
+> **Warning: experimental firmware.** The idea and concept are
+> [Jonáš Gruska](https://lom.audio)'s; the programming was done by Claude
+> (Anthropic's AI) in conversation with him. The code was tested on the device
+> as it went and never audited. It may lose a recording, drain the battery or
+> fail in a way nobody has seen yet. It comes with no warranty of any kind; see
+> the licence.
+
 A recording is a *moment*: the sound of here and now. Moments are listed with
 the time they were taken, a waveform and a tag, and can be played back,
 browsed by day in a calendar, tagged, deleted, analysed (spectrogram and
@@ -131,6 +138,8 @@ licences, listed below.
 
 ## Credits
 
+- Idea and concept: Jonáš Gruska ([LOM](https://lom.audio)).
+- Programming: Claude, Anthropic's AI, working with him in Claude Code.
 - Fonts: [Atkinson Hyperlegible Next and Mono](https://www.brailleinstitute.org/freefont/)
   by the Braille Institute of America, rendered to bitmaps unaltered.
 - Sleep-screen quotes: Pauline Oliveros.

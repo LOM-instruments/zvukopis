@@ -158,39 +158,43 @@ static void noteRequest() {
 static const char PAGE_HEAD[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>zvukopis</title>
 <style>
-body{font-family:"Atkinson Hyperlegible Next","Atkinson Hyperlegible",-apple-system,system-ui,sans-serif;
-max-width:40rem;margin:0 auto;padding:1rem;color:#111;background:#fff;line-height:1.4}
-h1{margin:.2rem 0}h2{margin:1.6rem 0 .4rem;font-size:1.15rem}.sub,small,.note{color:#555}.note{font-size:.9rem}
-.tabs{display:flex;gap:.3rem;margin:1rem 0 0;border-bottom:1px solid #ddd}
-.tabs button{border:none;border-bottom:3px solid transparent;border-radius:0;padding:.5rem 1rem;background:none;color:inherit;font-weight:600;opacity:.55}
-.tabs button.on{border-bottom-color:currentColor;opacity:1}.tab{display:none}.tab.on{display:block}
-.big{width:100%;padding:.85rem;font-size:1.25rem;font-weight:600;border-radius:.7rem;background:#111;color:#fff;border:1px solid #111;
-display:flex;justify-content:center;align-items:center;gap:.6rem}.big:disabled{opacity:.5;cursor:default}
-.big .dot{width:.9rem;height:.9rem;border-radius:50%;background:#e4312b;display:inline-block}.big.rec .dot{border-radius:2px;background:#fff}
-.mono{font-variant-numeric:tabular-nums}.opts{display:flex;gap:1.2rem;flex-wrap:wrap;margin:.7rem 0 .2rem}.opts label{display:inline-flex;gap:.4rem;align-items:center}
-.ic{border:1px solid #999;background:none;color:inherit;border-radius:.45rem;width:2.2rem;height:2.2rem;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
-.ic svg{width:1rem;height:1rem;fill:currentColor}td.c{width:2.4rem;padding-left:0;padding-right:.25rem}
-table{width:100%;border-collapse:collapse}td{padding:.55rem .3rem;border-top:1px solid #ddd;vertical-align:middle}
-td.r{text-align:right;white-space:nowrap}a,button,input,select{font:inherit}
+:root{--bg:#ececec;--text:#000;--muted:#595959;--tile:#d8d8d8;--accent:#3a86ff;--edge:16px;--line:1px}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased;padding-bottom:40px}
+a{color:inherit;text-underline-offset:.15em;text-decoration-thickness:1px}a:hover{color:var(--accent)}
+h1{margin:0;padding:16px var(--edge) 12px;border-bottom:var(--line) solid var(--text);font-size:46px;font-weight:700;line-height:.95;letter-spacing:.01em;color:transparent;-webkit-text-stroke:1.5px var(--text)}@supports not (-webkit-text-stroke:1px #000){h1{color:var(--text)}}
+div.sub{margin:0;padding:8px var(--edge) 9px;border-bottom:var(--line) solid var(--text);font-size:15px;color:var(--muted)}span.sub{color:var(--muted)}
+small,.note{color:var(--muted)}.note{font-size:15px;line-height:1.4;max-width:66ch}
+.tabs{display:grid;grid-template-columns:1fr 1fr;margin:0;border-bottom:var(--line) solid var(--text)}
+.tabs button{border:0;border-left:var(--line) solid var(--text);border-radius:0;padding:11px 4px 12px;background:transparent;color:var(--text);font:inherit;font-size:15px}
+.tabs button:first-child{border-left:0}.tabs button.on{background:var(--text);color:#fff}.tab{display:none}.tab.on{display:block}
+.tab{padding:0 var(--edge)}
+h2{margin:26px 0 10px;font-size:22px;font-weight:400;line-height:1.2}
+h2::before{content:"";display:inline-block;width:.5em;height:.5em;margin-right:.45em;background:var(--text);vertical-align:.08em}
+.big{width:100%;padding:12px;font-size:17px;font-weight:400;border-radius:0;background:var(--text);color:#fff;border:var(--line) solid var(--text);display:flex;justify-content:center;align-items:center;gap:.6rem;cursor:pointer}
+.big:hover{background:var(--accent);color:#000}.big:disabled{opacity:.5;cursor:default}
+.big .dot{width:.7em;height:.7em;background:var(--accent);display:inline-block}.big.rec .dot{background:#fff}.big:hover .dot{background:#000}
+.mono{font-variant-numeric:tabular-nums}.opts{display:flex;gap:12px 18px;flex-wrap:wrap;margin:12px 0 4px;font-size:14px;color:var(--muted)}.opts label{display:inline-flex;gap:.4rem;align-items:center}
+.ic{border:var(--line) solid var(--text);background:#fff;color:var(--text);border-radius:0;width:2.2rem;height:2.2rem;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
+.ic:hover{background:var(--accent)}.ic svg{width:1rem;height:1rem;fill:currentColor}td.c{width:2.4rem;padding-left:0;padding-right:.25rem}
+table{width:100%;border-collapse:collapse;background:#fff;border-top:var(--line) solid var(--text);border-bottom:var(--line) solid var(--text)}
+td{padding:9px .5rem;border-top:var(--line) solid var(--text);vertical-align:middle}tr:first-child td{border-top:0}
+td.r{text-align:right;white-space:nowrap}button,input,select{font:inherit}
 .icon{vertical-align:-4px}.pick{display:inline-flex;gap:2px;flex-wrap:wrap}
-.pick label{cursor:pointer;padding:5px;border-radius:.4rem;border:1px solid transparent;line-height:0}
-.pick input{display:none}.pick input:checked+svg{color:#fff;background:#111;border-radius:.3rem;box-shadow:0 0 0 4px #111}
-button{border:1px solid #111;background:#fff;color:#111;border-radius:.4rem;padding:.3rem .7rem;cursor:pointer}
-input,select{border:1px solid #888;border-radius:.4rem;padding:.25rem .4rem;background:inherit;color:inherit;max-width:100%}
-.tag{font-size:.85rem;border:1px solid #888;border-radius:1rem;padding:0 .45rem;white-space:nowrap}
-.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
-.cal{margin:.6rem 0 .2rem;max-width:22rem}.cal .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem}
-.cal .head b{font-size:1.05rem}.cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
-.cal .wd{text-align:center;font-size:.75rem;color:#777;padding:.2rem 0}
-.cal .day{aspect-ratio:1;border:1px solid transparent;border-radius:.45rem;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default}
-.cal .day.has{border-color:#999;cursor:pointer}.cal .day.has small{font-size:.7rem;color:#555}.cal .day.on{background:#111;color:#fff}
-.cal .day.on small{color:#ccc}.cal .day.off{opacity:.35}
-@media (prefers-color-scheme:dark){.cal .day.on{background:#eee;color:#111}.cal .day.on small{color:#444}.cal .day.has small{color:#aaa}}
+.pick label{cursor:pointer;padding:5px;border:var(--line) solid transparent;line-height:0}
+.pick input{display:none}.pick input:checked+svg{color:#fff;background:var(--text);box-shadow:0 0 0 4px var(--text)}
+button{border:var(--line) solid var(--text);background:#fff;color:var(--text);border-radius:0;padding:7px 12px 8px;cursor:pointer}button:hover{background:var(--accent)}
+input,select{border:var(--line) solid var(--text);border-radius:0;padding:7px 9px 8px;background:#fff;color:var(--text);max-width:100%}
+.tag{padding:1px 7px 2px;border:var(--line) solid var(--text);font-size:13px;line-height:1.35;white-space:nowrap}
+.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:10px 0}
 input[type=number]{width:4.5rem}
-@media (prefers-color-scheme:dark){body{background:#111;color:#eee}td{border-color:#333}.tabs{border-color:#333}
-.pick input:checked+svg{color:#111;background:#eee;box-shadow:0 0 0 4px #eee}
-.big{background:#eee;color:#111;border-color:#eee}.big.rec .dot{background:#111}
-button{background:#111;color:#eee;border-color:#eee}.sub,small,.note{color:#aaa}a{color:#9cf}}
+.cal{margin:10px 0 4px;max-width:22rem;background:#fff;outline:var(--line) solid var(--text);padding:8px}.cal .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.cal .head b{font-size:17px;font-weight:400}.cal .head button{padding:3px 10px 4px}.cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal .wd{text-align:center;font-size:12px;color:var(--muted);padding:.2rem 0}
+.cal .day{aspect-ratio:1;border:var(--line) solid transparent;border-radius:0;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default;font-size:15px}
+.cal .day.has{border-color:var(--text);cursor:pointer}.cal .day.has:hover{background:var(--accent)}.cal .day.has small{font-size:11px;color:var(--muted)}.cal .day.on{background:var(--text);color:#fff}
+.cal .day.on small{color:#ccc}.cal .day.off{opacity:.35}
+@media (min-width:720px){:root{--edge:20px}body{max-width:60rem;margin:0 auto}h1{font-size:72px}}
 </style></head><body><h1>zvukopis</h1>
 )";
 
