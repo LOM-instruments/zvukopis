@@ -270,6 +270,7 @@ struct ViewState {
     int cardEjected;
     int gainSetting;
     int varispeedMax, varispeedRamp;
+    bool varispeedHold;
     int gainNow;
     uint32_t configVersion; // categories or schedule edited on the web interface
     int scheduleCount;
@@ -310,8 +311,18 @@ static ViewState currentView() {
     v.listVersion = momentListVersion();
     v.audio = audioState();
     v.playingIndex = audioPlayingIndex();
-    v.playSeconds = (int)audioPlaybackSeconds();
-    v.speedTenths = (int)roundf(audioPlaybackSpeed() * 10);
+    // Playback: the position and speed are sampled once a second, so the
+    // screen refreshes that often at most (each refresh is half a second of work)
+    static uint32_t playSampledAt = 0;
+    static int playSeconds = 0, speedTenths = 10, playTicks = 0;
+    if (audioState() != AUDIO_PLAYING || millis() - playSampledAt >= 1000) {
+        playSampledAt = millis();
+        playSeconds = (int)audioPlaybackSeconds();
+        speedTenths = (int)roundf(audioPlaybackSpeed() * 10);
+        playTicks = (int)(audioPlaybackSeconds() * 8);
+    }
+    v.playSeconds = playSeconds;
+    v.speedTenths = speedTenths;
     v.secondsLeft = (int)audioSecondsLeft();
     v.battery = battery;
     v.usb = usb;
@@ -331,6 +342,7 @@ static ViewState currentView() {
     v.gainSetting = audioMicGainSetting();
     v.varispeedMax = audioVarispeedMax();
     v.varispeedRamp = audioVarispeedRamp();
+    v.varispeedHold = audioVarispeedHold();
     v.gainNow = audioMicGain();
     v.configVersion = configVersion();
     Schedule next;
@@ -346,7 +358,7 @@ static ViewState currentView() {
     v.quickRecord = quickRecordScreen;
     v.libraryCount = libraryCount();
     v.readerPage = readerPage;
-    if (v.audio == AUDIO_PLAYING) v.playTicks = (int)(audioPlaybackSeconds() * 8);
+    if (v.audio == AUDIO_PLAYING) v.playTicks = playTicks;
     return v;
 }
 
@@ -1086,7 +1098,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         break;
     case SET_VARISPEED:
         title = "Varispeed";
-        snprintf(detail, len, "Up to %dx, %s ramp", v.varispeedMax, varispeedRampName(v.varispeedRamp));
+        snprintf(detail, len, "Up to %dx, %s ramp%s", v.varispeedMax, varispeedRampName(v.varispeedRamp), v.varispeedHold ? ", keeps speed" : "");
         break;
     case SET_SCHEDULE:
         title = "Scheduled recordings";
@@ -1971,35 +1983,41 @@ static void drawGainPicker(const ViewState &v) {
     }
 }
 
-// Varispeed: the top speed, then the ramp; both are set in the same dialog,
-// which stays open until it's left (hold in, or the Settings button)
-static const int VARISPEED_ITEMS = VARISPEED_MAX_CHOICE_COUNT + RAMP_COUNT;
+// Varispeed: the top speed, the ramp, and what letting go does; all three
+// are set in the same dialog, which stays open until it's left (hold in, or
+// the Settings button)
+static const int VARISPEED_HOLD_FIRST = VARISPEED_MAX_CHOICE_COUNT + RAMP_COUNT;
+static const int VARISPEED_ITEMS = VARISPEED_HOLD_FIRST + 2;
 
 static void drawVarispeedPicker(const ViewState &v) {
     shadeBehindDialog();
-    const int itemH = 40, y = 150, h = 70 + VARISPEED_ITEMS * itemH + 30;
+    const int itemH = 40, y = 150, h = 70 + VARISPEED_ITEMS * itemH + 48;
     const int w = SW - 2 * MARGIN - 16, x = (SW - w) / 2;
     dialogBox(y, h);
     drawText(x + 24, y + 44, &Bold32, "Varispeed", INK);
     for (int i = 0; i < VARISPEED_ITEMS; i++) {
-        bool isRamp = i >= VARISPEED_MAX_CHOICE_COUNT;
-        int iy = y + 62 + i * itemH + (isRamp ? 18 : 0);
+        int group = i < VARISPEED_MAX_CHOICE_COUNT ? 0 : i < VARISPEED_HOLD_FIRST ? 1 : 2;
+        int iy = y + 62 + i * itemH + group * 18;
         bool chosen = i == v.overlayChoice;
         uint16_t fg = chosen ? PAPER : INK;
         if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
         char label[48];
         bool current;
-        if (!isRamp) {
+        if (group == 0) {
             int top = VARISPEED_MAX_CHOICES[i];
             snprintf(label, sizeof(label), "Up to %dx%s", top, top == 2 ? "  (tape-like)" : top == 6 ? "  (wild)" : "");
             current = top == v.varispeedMax;
-        } else {
+        } else if (group == 1) {
             int ramp = i - VARISPEED_MAX_CHOICE_COUNT;
             const char *name = varispeedRampName(ramp);
             snprintf(label, sizeof(label), "%c%s ramp", toupper((uint8_t)name[0]), name + 1);
             current = ramp == v.varispeedRamp;
+        } else {
+            bool hold = i == VARISPEED_HOLD_FIRST + 1;
+            snprintf(label, sizeof(label), hold ? "Let go: speed stays" : "Let go: back to normal");
+            current = hold == v.varispeedHold;
         }
-        if (i == VARISPEED_MAX_CHOICE_COUNT) dottedLine(x + 24, x + w - 24, iy - 10);
+        if (i == VARISPEED_MAX_CHOICE_COUNT || i == VARISPEED_HOLD_FIRST) dottedLine(x + 24, x + w - 24, iy - 10);
         drawText(x + 56, iy + 26, &Text22, label, fg);
         if (current) canvas->fillCircle(x + 34, iy + 18, 5, fg);
     }
@@ -2537,8 +2555,9 @@ static void handleOverlay(ButtonEvent event) {
             overlay = OVERLAY_NONE;
         } else if (overlay == OVERLAY_VARISPEED) {
             // Sets one of the two and stays open for the other
-            if (overlayChoice < VARISPEED_MAX_CHOICE_COUNT) audioSetVarispeed(VARISPEED_MAX_CHOICES[overlayChoice], -1);
-            else audioSetVarispeed(-1, overlayChoice - VARISPEED_MAX_CHOICE_COUNT);
+            if (overlayChoice < VARISPEED_MAX_CHOICE_COUNT) audioSetVarispeed(VARISPEED_MAX_CHOICES[overlayChoice], -1, -1);
+            else if (overlayChoice < VARISPEED_HOLD_FIRST) audioSetVarispeed(-1, overlayChoice - VARISPEED_MAX_CHOICE_COUNT, -1);
+            else audioSetVarispeed(-1, -1, overlayChoice - VARISPEED_HOLD_FIRST);
             overlaySince = millis();
         } else if (overlay == OVERLAY_VIEW) {
             overlay = OVERLAY_NONE;
@@ -2839,6 +2858,10 @@ void uiHandleEvent(ButtonEvent event) {
     if (displayTaskHandle) xTaskNotifyGive(displayTaskHandle);
 }
 
+// Up or down held while a moment plays: when it was a tap, the speed comes back
+static uint32_t speedHeldSince = 0;
+static const uint32_t SPEED_TAP_MS = 250;
+
 static void handleEvent(ButtonEvent event) {
     AudioState audio = audioState();
     Serial.printf("[ui] %lu ms: %s (screen %d, selected %d, audio %d, overlay %d)\n",
@@ -2860,6 +2883,8 @@ static void handleEvent(ButtonEvent event) {
     }
     if (event == BTN_UP_RELEASE || event == BTN_DOWN_RELEASE) {
         audioSpeedHold(0);
+        if (speedHeldSince && millis() - speedHeldSince < SPEED_TAP_MS) audioSpeedTap(); // a tap: back to normal
+        speedHeldSince = 0;
         return;
     }
     if (overlay != OVERLAY_NONE) {
@@ -2881,6 +2906,7 @@ static void handleEvent(ButtonEvent event) {
     if (audio == AUDIO_PLAYING && (event == BTN_UP || event == BTN_DOWN) &&
         (screen == SCREEN_LIST || screen == SCREEN_DAY || screen == SCREEN_SPECTRUM)) {
         audioSpeedHold(event == BTN_UP ? 1 : -1);
+        speedHeldSince = millis();
         return;
     }
 

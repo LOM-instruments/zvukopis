@@ -35,15 +35,23 @@ static const size_t MIN_MOMENT_SAMPLES = SAMPLE_RATE / 4; // anything shorter is
 static const size_t PSRAM_RESERVE = 256 * 1024;         // left free for the rest of the app
 static const uint64_t SD_RESERVE = 1024 * 1024;         // for file system overhead
 static const int CHUNK_FRAMES = SAMPLE_RATE / 1000 * 16; // 16 ms
-static const size_t PLAY_BUFFER_SAMPLES = 16 * CHUNK_FRAMES; // read from the SD card 256 ms at a time
-static const uint32_t STANDBY_AFTER_MS = 2000;               // idle time before the codec powers down
+// Playback from the card goes through a ring in PSRAM that a reader task
+// (core 1) keeps filled around the playhead, half a second per card read, so
+// the audio task never waits on the card
+static const size_t RING_SAMPLES = SAMPLE_RATE * 4;   // 4 s
+static const size_t READ_BLOCK = SAMPLE_RATE / 2;     // per card read
+static const size_t AHEAD_SAMPLES = SAMPLE_RATE * 2;  // kept loaded in the direction of travel
+static const uint32_t STANDBY_AFTER_MS = 2000;        // idle time before the codec powers down
 // Varispeed, per 16 ms chunk: holding a key multiplies or divides the speed by
 // SPEED_STEP (so it keeps accelerating, like a tape reel), and on release it
 // eases back to normal
-// Settings (Settings > Varispeed, or the web interface): the top speed and the
-// ramp, which picks a column below
+// Settings (Settings > Varispeed, or the web interface): the top speed, the
+// ramp, which picks a column below, and what letting go does: back to normal,
+// or the speed stays (a tap brings it back then)
 static volatile int maxSpeedSetting = 3;
 static volatile int rampSetting = RAMP_NORMAL;
+static volatile bool holdSetting = false;
+static volatile bool returning = false; // in hold mode, after a tap: gliding back to 1x
 static const float SPEED_STEP[RAMP_COUNT] = {1.02f, 1.04f, 1.08f};   // normal: 2x after ~0.3 s held, 3x after ~0.45 s
 static const float SPEED_RETURN[RAMP_COUNT] = {0.92f, 0.85f, 0.75f}; // fraction of the distance to 1x left after each chunk
 // Below this the speed stops shrinking by steps and slides straight through
@@ -109,11 +117,21 @@ static volatile int gainNow = DEFAULT_AUTO_GAIN_DB; // what the codec is set to
 static int agcQuietChunks = 0;
 static int agcChanges = 0;
 
-// Playback of moments on the SD card streams through this buffer
+// Playback of moments on the SD card: the reader task owns the file and
+// loads the ring; the window [winStart, winEnd) is what's loaded, in samples
+// of the moment. The reader moves one end, then the other, so that the two
+// read separately by the audio task always bound a loaded range.
+static int16_t *ring = nullptr;                 // RING_SAMPLES, in PSRAM
+static volatile size_t winStart = 0, winEnd = 0;
+static volatile size_t fileEnd = 0;             // the moment's length, less if the file is shorter
+static volatile int readerMoment = -1;          // the index the reader serves, -1 none
+static volatile uint32_t readerSeq = 0;         // bumped on every start or stop
+static volatile bool readerFailed = false;      // the file didn't open
 static File playFile;
-static int16_t playBuffer[PLAY_BUFFER_SAMPLES];
-static size_t playBufferStart = 0, playBufferLength = 0; // in samples of the moment
-static bool playFileEnded = false;
+static TaskHandle_t readerTaskHandle = nullptr;
+static SemaphoreHandle_t firstBlock;            // given by the reader once a new playback has sound
+static volatile uint32_t underruns = 0;
+static float stepBefore;                        // playbackChunk's glide
 
 static es8311_handle_t codec = nullptr;
 
@@ -399,19 +417,29 @@ static void finishRecording() {
 
 static void startPlayback(int index) {
     if (index < 0 || index >= momentTotal) return;
-    if (!moments[index].samples) {
-        playFile = storageOpenMoment(moments[index]);
-        if (!playFile) {
-            Serial.printf("Can't open Moment %d on the SD card\n", moments[index].number);
-            return;
-        }
-        playBufferStart = playBufferLength = 0;
-        playFileEnded = false;
-    }
-    playingIndex = index;
     playPos = 0;
     speed = 1;
+    stepBefore = 1;
     speedDirection = 0;
+    returning = false;
+    underruns = 0;
+    fileEnd = moments[index].length;
+    if (!moments[index].samples) {
+        // The reader opens the file and loads the first half second; wait for it
+        xSemaphoreTake(firstBlock, 0);
+        readerFailed = false;
+        winStart = winEnd = 0;
+        readerMoment = index;
+        readerSeq++;
+        xTaskNotifyGive(readerTaskHandle);
+        if (xSemaphoreTake(firstBlock, pdMS_TO_TICKS(400)) != pdTRUE || readerFailed) {
+            Serial.printf("Can't open Moment %d on the SD card\n", moments[index].number);
+            readerMoment = -1;
+            readerSeq++;
+            return;
+        }
+    }
+    playingIndex = index;
     digitalWrite(PA_ENABLE_PIN, HIGH);
     state = AUDIO_PLAYING;
     Serial.printf("Playing Moment %d\n", moments[index].number);
@@ -419,7 +447,10 @@ static void startPlayback(int index) {
 
 static void stopPlayback() {
     digitalWrite(PA_ENABLE_PIN, LOW);
-    if (playFile) playFile.close();
+    if (underruns) Serial.printf("[play] %lu chunks waited on the card\n", (unsigned long)underruns);
+    readerMoment = -1;
+    readerSeq++;
+    xTaskNotifyGive(readerTaskHandle);
     playingIndex = -1;
     state = AUDIO_IDLE;
 }
@@ -584,22 +615,77 @@ static void handleCommand(const Command &cmd) {
     }
 }
 
-// One sample of the playing moment; from the card through playBuffer
-static int16_t sampleAt(const Moment &moment, size_t i) {
+// One sample of the playing moment: from memory, or from the ring. Outside
+// the loaded window it's silence, and the reader is nudged.
+static int16_t sampleAt(const Moment &moment, size_t i, bool &missed) {
     if (moment.samples) return moment.samples[i];
-    if (i < playBufferStart || i >= playBufferStart + playBufferLength) {
-        // Load the window around i, so playing backwards stays inside it too
-        size_t start = i > PLAY_BUFFER_SAMPLES / 2 ? i - PLAY_BUFFER_SAMPLES / 2 : 0;
-        size_t want = min(PLAY_BUFFER_SAMPLES, moment.length - start);
-        playFile.seek(moment.dataOffset + start * sizeof(int16_t));
-        playBufferStart = start;
-        playBufferLength = playFile.read((uint8_t *)playBuffer, want * sizeof(int16_t)) / sizeof(int16_t);
-        if (playBufferLength == 0) {
-            playFileEnded = true; // the file is shorter than its header says
-            return 0;
+    size_t ws = winStart, we = winEnd;
+    if (i < ws || i >= we) {
+        missed = true;
+        return 0;
+    }
+    return ring[i % RING_SAMPLES];
+}
+
+// --- The reader task: keeps the ring loaded around the playhead ---
+
+// `want` samples from `from` into the ring, which may wrap; how many came
+static size_t readIntoRing(const Moment &moment, size_t from, size_t want) {
+    if (!playFile.seek(moment.dataOffset + from * sizeof(int16_t))) return 0;
+    size_t off = from % RING_SAMPLES, first = min(want, RING_SAMPLES - off);
+    size_t n = playFile.read((uint8_t *)(ring + off), first * sizeof(int16_t)) / sizeof(int16_t);
+    if (n < first || want == first) return n;
+    return n + playFile.read((uint8_t *)ring, (want - first) * sizeof(int16_t)) / sizeof(int16_t);
+}
+
+static void readerTask(void *) {
+    int current = -1;
+    uint32_t seq = 0;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+        int index = readerMoment;
+        uint32_t s = readerSeq;
+        if (index != current || s != seq) {
+            if (playFile) playFile.close();
+            current = index;
+            seq = s;
+            if (index >= 0) {
+                playFile = storageOpenMoment(moments[index]);
+                if (!playFile) {
+                    readerFailed = true;
+                    xSemaphoreGive(firstBlock);
+                    current = -1;
+                }
+            }
+        }
+        if (current < 0) continue;
+        const Moment &moment = moments[current];
+        double pos = playPos;
+        size_t p = pos < 0 ? 0 : (size_t)pos;
+        size_t ws = winStart, we = winEnd, end = fileEnd;
+        if (p < ws || p > we) { // the playhead left the window: start afresh at it
+            winStart = winEnd = ws = we = p;
+        }
+        // Ahead: always a little, and two seconds when running forward
+        float sp = speed;
+        size_t ahead = sp >= 0 ? AHEAD_SAMPLES : 4 * CHUNK_FRAMES;
+        if (we < end && we < p + ahead) {
+            size_t want = min(READ_BLOCK, end - we);
+            if (we + want > ws + RING_SAMPLES) winStart = we + want - RING_SAMPLES; // the back is overwritten: let go of it first
+            size_t n = readIntoRing(moment, we, want);
+            if (n < want) fileEnd = we + n; // shorter than its header says
+            winEnd = we + n;
+            if (ws == we && n > 0) xSemaphoreGive(firstBlock);
+            continue; // one block per turn, then look again
+        }
+        // Behind: two seconds when running backwards
+        if (sp < 0 && ws > 0 && ws + AHEAD_SAMPLES > p) {
+            size_t want = min(READ_BLOCK, ws), from = ws - want;
+            if (we > from + RING_SAMPLES) winEnd = from + RING_SAMPLES; // the front goes first
+            size_t n = readIntoRing(moment, from, want);
+            if (n == want) winStart = from;
         }
     }
-    return playBuffer[i - playBufferStart];
 }
 
 static void updateSpeed() {
@@ -615,38 +701,51 @@ static void updateSpeed() {
         else if (s * towards <= -SCRUB_SPEED) s /= SPEED_STEP[ramp];    // other way: slower
         else s += towards * SCRUB_STEP[ramp];                           // through zero
         s = constrain(s, -top, top);
+        returning = false;
+    } else if (holdSetting && !returning) {
+        // Let go: the speed stays, until a tap
     } else if (fabsf(s - 1) > 0.01f) {
         s = 1 + (s - 1) * SPEED_RETURN[constrain((int)rampSetting, 0, RAMP_COUNT - 1)]; // let go: back to normal, forward
     } else {
         s = 1;
+        returning = false;
     }
     speed = s;
 }
 
 // Fills `out` (stereo) with up to `frames` frames of the playing moment at the
-// current speed, by linear interpolation; fewer at the end
+// current speed, by linear interpolation; fewer at the end. The speed glides
+// from the last chunk's to this one's across the chunk, so a ramp has no steps.
 static volatile uint32_t playRate = SAMPLE_RATE; // the playing moment's
 
 static size_t playbackChunk(const Moment &moment, int16_t *out, size_t frames) {
     updateSpeed();
     double pos = playPos;
     playRate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
-    float step = speed * (float)playRate / SAMPLE_RATE; // a 48 kHz moment steps half as fast
+    float stepAfter = speed * (float)playRate / SAMPLE_RATE; // a 48 kHz moment steps half as fast
+    size_t length = min(moment.length, (size_t)fileEnd);
     size_t n = 0;
-    while (n < frames && !playFileEnded) {
+    bool missed = false;
+    while (n < frames && length >= 2) {
+        float step = stepBefore + (stepAfter - stepBefore) * (n + 1) / frames;
         if (pos < 0) pos = 0; // backwards to the start: wait there
         size_t i = (size_t)pos;
-        if (i + 1 >= moment.length) {
-            if (step < 0) i = moment.length - 2; // at the end but running back: carry on from there
+        if (i + 1 >= length) {
+            if (step < 0) i = length - 2; // at the end but running back: carry on from there
             else break;
         }
         float frac = (float)(pos - i);
-        float s = (sampleAt(moment, i) * (1 - frac) + sampleAt(moment, i + 1) * frac) * moment.gain;
+        float s = (sampleAt(moment, i, missed) * (1 - frac) + sampleAt(moment, i + 1, missed) * frac) * moment.gain;
         out[2 * n] = out[2 * n + 1] = (int16_t)constrain(s, -32768.0f, 32767.0f);
         pos += step;
         n++;
     }
+    stepBefore = stepAfter;
     playPos = pos;
+    if (missed) {
+        underruns++;
+        xTaskNotifyGive(readerTaskHandle);
+    }
     return n;
 }
 
@@ -791,6 +890,7 @@ bool audioInit() {
     gainSetting = prefs.getInt("gain", GAIN_AUTO);
     maxSpeedSetting = prefs.getInt("vmax", 3);
     rampSetting = constrain(prefs.getInt("vramp", RAMP_NORMAL), 0, RAMP_COUNT - 1);
+    holdSetting = prefs.getInt("vhold", 0) != 0;
     if (gainSetting != GAIN_AUTO && gainSetting < MIN_GAIN_DB) gainSetting = MIN_GAIN_DB; // saved by a firmware that allowed less
     prefs.end();
 
@@ -835,6 +935,10 @@ bool audioInit() {
     // 8 KB: saving builds the WAV header and card paths on this stack, and the
     // card's long-file-name code adds its own buffers
     xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 5, NULL, 0);
+    ring = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
+    firstBlock = xSemaphoreCreateBinary();
+    if (!ring) Serial.println("Can't allocate the playback ring");
+    else xTaskCreatePinnedToCore(readerTask, "reader", 4096, NULL, 2, &readerTaskHandle, 1); // core 1, with the SD writer
     return true;
 }
 
@@ -853,19 +957,23 @@ void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
 void audioClearTagsAbove(int count) { sendCommand(CMD_TAGS_ABOVE, count); }
 void audioSpeedHold(int direction) { speedDirection = direction; }
+void audioSpeedTap() { returning = true; }
 
-void audioSetVarispeed(int maxSpeed, int ramp) {
+void audioSetVarispeed(int maxSpeed, int ramp, int hold) {
     if (maxSpeed > 0) maxSpeedSetting = constrain(maxSpeed, 1, 8);
     if (ramp >= 0) rampSetting = constrain(ramp, 0, RAMP_COUNT - 1);
+    if (hold >= 0) holdSetting = hold != 0;
     Preferences prefs;
     prefs.begin("zvukopis", false);
     prefs.putInt("vmax", maxSpeedSetting);
     prefs.putInt("vramp", rampSetting);
+    prefs.putInt("vhold", holdSetting ? 1 : 0);
     prefs.end();
 }
 
 int audioVarispeedMax() { return maxSpeedSetting; }
 int audioVarispeedRamp() { return rampSetting; }
+bool audioVarispeedHold() { return holdSetting; }
 
 const char *varispeedRampName(int ramp) {
     static const char *const names[RAMP_COUNT] = {"gentle", "normal", "quick"};

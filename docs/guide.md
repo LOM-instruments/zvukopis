@@ -47,7 +47,7 @@ Asleep in your pocket and something is happening? Hold the side switch in. The r
 
 Move to a moment and press in. It plays through the small speaker, and a playhead runs along the waveform. Press in again to stop.
 
-While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal. How far it goes (two to six times) and how quickly is *Varispeed* in Settings, on the device or on the web interface.
+While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal, or, if you prefer, the speed stays where you left it and a tap of the switch brings it back. How far it goes (two to six times), how quickly, and what letting go does is *Varispeed* in Settings, on the device or on the web interface.
 
 ## What else you can do with a moment
 
@@ -105,7 +105,7 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 ## Settings, in order
 
 - **Mic gain.** Auto, or a fixed value.
-- **Varispeed.** The top speed and the ramp.
+- **Varispeed.** The top speed, the ramp, and whether letting go brings the speed back or keeps it.
 - **Scheduled recordings.** The list of what is planned; they are set up on the web interface.
 - **Web interface.** On your Wi-Fi.
 - **Web interface on own hotspot.** zvukopis makes its own network.

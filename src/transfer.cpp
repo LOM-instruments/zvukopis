@@ -68,11 +68,11 @@ struct Zone {
 static const Zone ZONES[] = {
     {"UTC", "UTC0", "UTC Etc/UTC"},
     {"London, Dublin, Lisbon", "GMT0BST,M3.5.0/1,M10.5.0", "Europe/London Europe/Dublin Europe/Lisbon Atlantic/Canary"},
-    {"Central Europe (Berlin, Paris, Prague, Bratislava, Rome, Madrid)", "CET-1CEST,M3.5.0,M10.5.0/3",
+    {"Central Europe (Berlin, Prague)", "CET-1CEST,M3.5.0,M10.5.0/3",
      "Europe/Berlin Europe/Paris Europe/Prague Europe/Bratislava Europe/Vienna Europe/Rome Europe/Madrid "
      "Europe/Warsaw Europe/Amsterdam Europe/Brussels Europe/Budapest Europe/Copenhagen Europe/Oslo "
      "Europe/Stockholm Europe/Zurich Europe/Belgrade Europe/Zagreb Europe/Ljubljana"},
-    {"Eastern Europe (Athens, Helsinki, Kyiv, Bucharest)", "EET-2EEST,M3.5.0/3,M10.5.0/4",
+    {"Eastern Europe (Athens, Kyiv)", "EET-2EEST,M3.5.0/3,M10.5.0/4",
      "Europe/Athens Europe/Helsinki Europe/Kiev Europe/Kyiv Europe/Bucharest Europe/Sofia Europe/Riga "
      "Europe/Tallinn Europe/Vilnius"},
     {"Istanbul", "<+03>-3", "Europe/Istanbul"},
@@ -159,57 +159,71 @@ static void noteRequest() {
 static const char PAGE_HEAD[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>zvukopis</title>
 <style>
-:root{--bg:#ececec;--text:#000;--muted:#595959;--tile:#d8d8d8;--accent:#ffc72c;--warn:#f15656;--edge:16px;--line:1px}
+:root{--bg:#ececec;--text:#000;--muted:#595959;--accent:#ffc72c;--warn:#f15656;--edge:16px;--line:1px;--unit:3rem}
 *{box-sizing:border-box}html,body{margin:0}
 body{background:var(--bg);color:var(--text);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased;padding-bottom:40px}
-a{color:inherit;text-underline-offset:.15em;text-decoration-thickness:1px}a:hover{color:var(--accent)}
-h1{margin:0;padding:0;font-size:46px;font-weight:700;line-height:.95;letter-spacing:.01em;color:transparent;-webkit-text-stroke:1.5px var(--text)}@supports not (-webkit-text-stroke:1px #000){h1{color:var(--text)}}
-.head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}.head .cell:first-child{grid-column:1/-1}.head .stat+.stat{border-top:0;border-left:var(--line) solid var(--text)}
-.stat{display:flex;flex-direction:column;justify-content:center;gap:2px;font-size:15px;line-height:1.3;padding:12px var(--edge) 13px}.stat>*{border:0}.stat small{color:var(--muted);font-size:13px}.stat b{font-weight:400;overflow-wrap:anywhere}
-span.sub{color:var(--muted)}
-small,.note{color:var(--muted)}.note{font-size:15px;line-height:1.4}.note b,.note i,.note code{max-width:none}
-.tabs{display:grid;grid-template-columns:1fr 1fr;margin:0;border-bottom:var(--line) solid var(--text)}
-.tabs button{border:0;border-left:var(--line) solid var(--text);border-radius:0;padding:11px 4px 12px;background:transparent;color:var(--text);font:inherit;font-size:15px}
-.tabs button:first-child{border-left:0}.tabs button.on{background:var(--text);color:#fff}.tab{display:none}.tab.on{display:block}
+a{color:inherit;text-underline-offset:.15em;text-decoration-thickness:1px}
+small{font-size:13px;color:var(--muted)}
+button,input,select{font:inherit;color:var(--text)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,.pick input:focus-visible+svg{outline:2px solid var(--accent);outline-offset:-2px}
+h1{margin:0;padding:16px var(--edge) 12px;font-size:46px;font-weight:700;line-height:.95;letter-spacing:.01em;color:transparent;-webkit-text-stroke:1.5px var(--text)}@supports not (-webkit-text-stroke:1px #000){h1{color:var(--text)}}
+.head{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:var(--line) solid var(--text)}
+.head .cell:first-child{grid-column:1/-1}.head .stat+.stat{border-left:var(--line) solid var(--text)}
+.stat{display:flex;flex-direction:column;gap:2px;padding:10px 12px 11px;font-size:14px;line-height:1.3}.stat>*+*{border-top:0}.stat b{font-weight:400;overflow-wrap:anywhere}
+.tabs{display:grid;grid-template-columns:1fr 1fr;border-bottom:var(--line) solid var(--text)}
+.tabs button{min-height:var(--unit);border:0;border-left:var(--line) solid var(--text);border-radius:0;padding:0 4px;background:transparent;cursor:pointer}
+.tabs button:first-child{border-left:0}.tabs button:hover{background:var(--accent);color:#000}.tabs button.on{background:var(--text);color:#fff}
+.tab{display:none}.tab.on{display:block}
 .band{border-bottom:var(--line) solid var(--text)}.cell{min-width:0;padding:0}.cell+.cell{border-top:var(--line) solid var(--text)}
-.cell>*{margin:0;border-bottom:var(--line) solid var(--text)}.cell>:last-child{border-bottom:0}
-.cell>h2,.cell>.note,.cell>p{padding:18px var(--edge) 24px}.cell>.note+.note{padding-top:0;border-top:0}.cell>h1{padding:16px var(--edge) 12px}.cell.stat{padding:10px var(--edge) 11px}
-h2{margin:0;font-size:22px;font-weight:400;line-height:1.2;overflow-wrap:break-word}
-.big{font:inherit;font-size:22px;min-height:5rem;border-radius:0;background:var(--text);color:#fff;border:0;display:flex;justify-content:center;align-items:center;gap:.6rem;cursor:pointer;width:100%}
-.big:hover{background:var(--accent);color:#000}.big:disabled{opacity:.5;cursor:default}
-.big .dot{width:.75em;height:.75em;border-radius:50%;background:var(--warn);display:inline-block}.big.rec .dot{background:#fff}.big:hover .dot{background:var(--warn)}
-.mono{font-variant-numeric:tabular-nums}
+.cell>*{margin:0}.cell>*+*{border-top:var(--line) solid var(--text)}
+h2{margin:0;padding:18px var(--edge) 8px;font-size:22px;font-weight:400;line-height:1.2;overflow-wrap:break-word}
+.note{margin:0;padding:0 var(--edge) 22px;font-size:15px;line-height:1.4;color:var(--muted)}.cell>h2+.note,.cell>.note+.note{border-top:0}.cell>.note:first-child{padding-top:18px}
+.cell>.row:last-child,.cell>table:last-child,.cell>#cats:last-child,.cell>.cal:last-child{border-bottom:var(--line) solid var(--text);margin-bottom:-1px}
+.big{display:flex;justify-content:center;align-items:center;gap:.6rem;width:100%;min-height:5rem;border:0;border-radius:0;background:var(--text);color:#fff;font-size:22px;cursor:pointer}
+.big:hover{background:var(--accent);color:#000}.big:disabled{background:var(--muted);color:#fff;cursor:default}
+.big .dot{width:.75em;height:.75em;border-radius:50%;background:var(--warn)}.big.rec .dot{background:#fff}.big:hover .dot{background:var(--warn)}
+#rectime:empty{display:none}.mono{font-variant-numeric:tabular-nums}
+.row{display:flex;flex-wrap:wrap;gap:var(--line);background:var(--text)}
+.row>*{flex:1 1 9rem;margin:0;min-width:0;min-height:var(--unit);background:#fff;border:0;border-radius:0;padding:6px var(--edge);display:flex;align-items:center;gap:.5rem;color:var(--text);text-decoration:none}
+.row>label{flex-basis:12rem;flex-wrap:wrap}
+.row>button,.row>a{justify-content:center;cursor:pointer}.row>button:hover,.row>a:hover{background:var(--accent);color:#000}
+.row>button:disabled{color:var(--muted);background:#fff;cursor:default}
+.row>.black{background:var(--text);color:#fff}
+.row>input,.row>select{width:100%;max-width:none}
+.row>label>input:not([type=checkbox]),.row>label>select{flex:1;min-width:0;border:0;padding:4px 0;background:none}
+.row>span:not(.pick){flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;line-height:1.3}.row>span b{font-weight:400}
+.row>.ic{flex:0 0 var(--unit);padding:0}.row>select#ssid{flex:4 1 12rem}
+input[type=checkbox]{appearance:none;width:1em;height:1em;margin:0;border:var(--line) solid var(--text);border-radius:0;background:#fff;cursor:pointer}input[type=checkbox]:checked{background:var(--text)}
+.row>input[type=file]{flex:3 1 14rem;padding:0;overflow:hidden}
+input[type=file]::file-selector-button{font:inherit;color:var(--text);background:#fff;border:0;border-right:var(--line) solid var(--text);border-radius:0;padding:12px var(--edge);margin:0 .5rem 0 0;cursor:pointer}
+input[type=file]::file-selector-button:hover{background:var(--accent)}
 .ic{border:0;background:#fff;color:var(--text);border-radius:0;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
-.ic:hover{background:var(--accent)}.ic svg{width:1rem;height:1rem;fill:currentColor}
-td.c{width:3rem;min-width:3rem;padding:0;position:relative;border-left:var(--line) solid var(--text)}td.c .ic{position:absolute;inset:0;width:100%;height:100%}td.c+td{border-left:var(--line) solid var(--text)}
+.ic:hover{background:var(--accent);color:#000}.ic svg{width:18px;height:18px;fill:currentColor}
 table{width:100%;border-collapse:collapse;background:#fff}
-td{padding:9px .5rem;border-top:var(--line) solid var(--text);vertical-align:middle}tr:first-child td{border-top:0}
-td.r{text-align:right;white-space:nowrap}button,input,select{font:inherit}
-.icon{vertical-align:-4px}.pick{display:inline-flex;gap:0;flex-wrap:wrap}
-.pick label{cursor:pointer;padding:4px;border:var(--line) solid transparent;line-height:0}
-.pick input{display:none}.pick input:checked+svg{color:#fff;background:var(--text);box-shadow:0 0 0 4px var(--text)}
-button{border:var(--line) solid var(--text);background:#fff;color:var(--text);border-radius:0;padding:7px 12px 8px;cursor:pointer}button:hover{background:var(--accent)}
-input,select{border:var(--line) solid var(--text);border-radius:0;padding:7px 9px 8px;background:#fff;color:var(--text);max-width:100%}
-.tag{padding:1px 7px 2px;border:var(--line) solid var(--text);font-size:13px;line-height:1.35;white-space:nowrap}
-.row{display:flex;flex-wrap:wrap;overflow:hidden;background:#fff}
-.row>*{flex:1 1 9rem;margin:0 -1px -1px 0;min-width:0;min-height:3rem;background:#fff;border:0;border-right:var(--line) solid var(--text);border-bottom:var(--line) solid var(--text);border-radius:0;padding:6px var(--edge);display:flex;align-items:center;gap:.5rem;font:inherit;color:var(--text);text-decoration:none}
-.row>label{flex-basis:12rem}.row.cat>input{flex:1 1 7.5rem}.row.cat>.pick{flex:9 1 20rem}.row.tz>select{flex:3 1 14rem}#cats>.row+.row{border-top:var(--line) solid var(--text)}
-.row>button{justify-content:center;cursor:pointer}.row>button:hover{background:var(--accent)}.row>button:disabled{opacity:.5;cursor:default}
-.row>a{padding:0}.row>a>button{width:100%;height:100%;border:0;border-radius:0;background:#fff}.row>a>button:hover{background:var(--accent)}
-.row>label{flex-wrap:wrap}.row>input,.row>select{width:100%}.row>label>input:not([type=checkbox]),.row>label>select{flex:1;min-width:0;border:0;padding:4px 0;background:none}
-.row>span,.row>.note,.row>small{color:var(--muted);font-size:14px;line-height:1.3}.row>b{font-weight:400}
-.row>.ic{width:auto;height:auto}.row>.pick{padding:4px 6px}
-input[type=number]{width:4.5rem}
-.cal{background:#fff}.cal .head{display:flex;align-items:stretch;border-bottom:var(--line) solid var(--text)}
-.cal .head b{flex:1;text-align:center;padding:9px;font-size:17px;font-weight:400}.cal .head button{flex:0 0 3rem;border:0;background:none;font-size:22px;cursor:pointer}.cal .head button:first-child{border-right:var(--line) solid var(--text)}.cal .head button:last-child{border-left:var(--line) solid var(--text)}.cal .head button:hover{background:var(--accent)}
-.cal .grid{display:grid;grid-template-columns:repeat(7,1fr)}.cal .grid>*{border-top:var(--line) solid var(--text);border-right:var(--line) solid var(--text)}.cal .grid>*:nth-child(7n){border-right:0}.cal .wd{border-top:0}
-.cal .wd{text-align:center;font-size:12px;color:var(--muted);padding:6px 0}
-.cal .day{aspect-ratio:1;border-radius:0;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default;font-size:15px;font:inherit}
-.cal .day.has{font-weight:700;cursor:pointer}.cal .day.has:hover{background:var(--accent)}.cal .day.has small{font-size:11px;font-weight:400;color:var(--muted)}.cal .day.on{background:var(--text);color:#fff}
-.cal .day.on small{color:#ccc}.cal .day.off{opacity:.35}
-@media (min-width:720px){:root{--edge:20px}h1{font-size:72px}h2{font-size:clamp(22px,2vw,28px)}}
-@media (max-width:899px){.band{border-bottom-width:3px}h2::before{content:"";display:inline-block;width:.5em;height:.5em;margin-right:.45em;background:var(--text);vertical-align:.08em}.cell>h2{padding-bottom:14px}}
-@media (min-width:900px){.band,.head{display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}.cell>h2,.cell>.note,.cell>p{padding:22px var(--edge) 30px}.cell>h1{padding:26px var(--edge) 18px}.cell.stat{padding:22px var(--edge) 24px}.cell+.cell,.head .stat+.stat{border-top:0;border-left:var(--line) solid var(--text)}.head .cell:first-child{grid-column:span 6}.c2{grid-column:span 2}.c3{grid-column:span 3}.c4{grid-column:span 4}.c5{grid-column:span 5}.c6{grid-column:span 6}.c9{grid-column:span 9}.stat{padding-top:22px;padding-bottom:30px}}
+td{padding:6px var(--edge);height:var(--unit);border-top:var(--line) solid var(--text);vertical-align:middle;line-height:1.3}
+tr:first-child td,tr.first td{border-top:0}
+td.r{text-align:right;white-space:nowrap;padding-left:.5rem;padding-right:.5rem}
+td.c{width:var(--unit);min-width:var(--unit);padding:0;position:relative;border-left:var(--line) solid var(--text)}td.c:first-child{border-left:0}td.c+td{border-left:var(--line) solid var(--text)}
+td.c .ic{position:absolute;inset:0;width:100%;height:100%}
+.tag{margin-left:.4rem;padding:1px 7px 2px;border:var(--line) solid var(--text);font-size:13px;line-height:1.35;white-space:nowrap}
+#cats{display:flex;flex-direction:column;gap:var(--line);background:var(--text)}
+.row.cat>input{flex:0 0 9.25rem;padding:6px 10px}
+.row.cat>.pick{flex:1 1 13.75rem;padding:0 2px;gap:0;justify-content:space-between}
+.pick label{flex:0 0 22px;align-self:stretch;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text)}
+.pick label:hover{background:var(--accent);color:#000}.pick label:has(input:checked){background:var(--text);color:#fff}
+.pick input{position:absolute;opacity:0;width:0;height:0}.pick svg{width:18px;height:18px;display:block}
+.cal{background:#fff}.cal .head{display:flex;align-items:stretch;min-height:var(--unit);border-bottom:var(--line) solid var(--text)}
+.cal .head b{flex:1;display:flex;align-items:center;justify-content:center;font-weight:400}
+.cal .head .ic{flex:0 0 var(--unit)}.cal .head .ic:first-child{border-right:var(--line) solid var(--text)}.cal .head .ic:last-child{border-left:var(--line) solid var(--text)}
+.cal .grid{display:grid;grid-template-columns:repeat(7,1fr)}.cal .grid>*{border-top:var(--line) solid var(--text);border-right:var(--line) solid var(--text)}.cal .grid>*:nth-child(7n){border-right:0}
+.cal .wd{border-top:0;text-align:center;font-size:13px;color:var(--muted);padding:6px 0}
+.cal .day{aspect-ratio:1;border-radius:0;background:none;color:inherit;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:default;font:inherit}
+.cal .day.has{font-weight:700;cursor:pointer}.cal .day.has:hover{background:var(--accent)}.cal .day small{font-weight:400}
+.cal .day.on{background:var(--text);color:#fff}.cal .day.on small{color:#ccc}.cal .day.off{color:var(--muted)}
+@media (min-width:720px){:root{--edge:20px}h1{font-size:72px;padding:26px var(--edge) 18px}h2{font-size:clamp(22px,2vw,28px)}.stat{font-size:15px;padding:12px var(--edge) 13px}}
+@media (max-width:719px){.row>input[type=file]{flex:1 1 100%}}
+@media (max-width:899px){.tab>.band{border-bottom-width:3px}.tabs{border-bottom-width:3px}h2::before{content:"";display:inline-block;width:.5em;height:.5em;margin-right:.45em;background:var(--accent);vertical-align:.08em}}
+@media (min-width:900px){.band,.head{display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}.head .cell:first-child{grid-column:span 6}.cell+.cell,.head .stat+.stat{border-top:0;border-left:var(--line) solid var(--text)}.c2{grid-column:span 2}.c3{grid-column:span 3}.c4{grid-column:span 4}.c5{grid-column:span 5}.c9{grid-column:span 9}.cell.last{order:1}h2{padding-top:22px}.note{padding-bottom:30px}.cell>.note:first-child{padding-top:22px}.stat{padding:22px var(--edge) 24px}}
 </style></head><body>
 )";
 
@@ -234,19 +248,20 @@ function calInit(){const c=$('cal');if(!c)return;const ds=Object.keys(DAYS).sort
 function calMove(n){const [y,m]=calMonth.split('-').map(Number);const d=new Date(y,m-1+n,1);
  calMonth=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');calDraw()}
 function calDraw(){const [y,m]=calMonth.split('-').map(Number);const first=new Date(y,m-1,1),days=new Date(y,m,0).getDate();
- let h='<div class=head><button onclick=calMove(-1)>&#8249;</button><b>'+MONTHS[m-1]+' '+y+'</b><button onclick=calMove(1)>&#8250;</button></div><div class=grid>';
+ let h='<div class=head><button class=ic onclick=calMove(-1) title="Previous month"><svg viewBox="0 0 16 16"><path d="M10.5 2 4.5 8l6 6 1.4-1.4L7.3 8l4.6-4.6z"/></svg></button><b>'+MONTHS[m-1]+' '+y+'</b><button class=ic onclick=calMove(1) title="Next month"><svg viewBox="0 0 16 16"><path d="M5.5 2 11.5 8l-6 6-1.4-1.4L8.7 8 4.1 3.4z"/></svg></button></div><div class=grid>';
  for(const w of ['Mo','Tu','We','Th','Fr','Sa','Su'])h+='<div class=wd>'+w+'</div>';
  for(let i=0;i<(first.getDay()+6)%7;i++)h+='<div></div>';
  for(let d=1;d<=days;d++){const k=calMonth+'-'+String(d).padStart(2,'0'),n=DAYS[k];
   h+=n?'<button class="day has'+(k===calDay?' on':'')+'" data-k='+k+'>'+d+'<small>'+n+'</small></button>':'<div class="day off">'+d+'</div>'}
+ for(let i=(first.getDay()+6)%7+days;i%7;i++)h+='<div></div>';
  $('cal').innerHTML=h+'</div>';$('cal').onclick=e=>{const b=e.target.closest('.has');if(b)calPick(b.dataset.k)}}
 function calPick(k){calDay=calDay===k?null:k;try{if(calDay)sessionStorage.setItem('calDay',calDay);else sessionStorage.removeItem('calDay')}catch(e){}
  calMonth=calDay?calDay.slice(0,7):calMonth;calDraw();
- for(const r of document.querySelectorAll('#moments tr[data-day]'))r.style.display=!calDay||r.dataset.day===calDay?'':'none';
+ let first=true;for(const r of document.querySelectorAll('#moments tr[data-day]')){const on=!calDay||r.dataset.day===calDay;r.style.display=on?'':'none';r.classList.toggle('first',on&&first);if(on)first=false}
  const row=$('dayrow');if(!calDay){row.style.display='none';return}
  const [y,m,d]=calDay.split('-');const n=DAYS[calDay];
- row.style.display='';row.innerHTML='<b>'+Number(d)+' '+MONTHS[m-1]+' '+y+'</b><span class=sub>'+n+' moment'+(n==1?'':'s')+'</span>'+
-  '<a href="/backup?day='+calDay+'" download><button>Download this day</button></a><button onclick=calPick(calDay)>Show all days</button>'}
+ row.style.display='';row.innerHTML='<span><b>'+Number(d)+' '+MONTHS[m-1]+' '+y+'</b><small>'+n+' moment'+(n==1?'':'s')+'</small></span>'+
+  '<a href="/backup?day='+calDay+'" download>Download this day</a><button onclick=calPick(calDay)>Show all days</button>'}
 calInit();
 let playing=null;
 function stopped(){if(playing===null)return;$('pb-'+playing).innerHTML=PLAY;$('pb-'+playing).title='Play';
@@ -257,7 +272,7 @@ function togglePlay(n){const p=$('player');
  playing=n;p.src='/moment?n='+n+'&play=1';p.play();$('pb-'+n).innerHTML=STOP;$('pb-'+n).title='Stop';
  p.ontimeupdate=()=>{if(playing===n)$('dur-'+n).textContent=t(p.currentTime)+' / '+t(p.duration||0)};
  p.onended=stopped}
-async function saveVarispeed(which){const v=which==='max'?$('vmax').value:$('vramp').value;
+async function saveVarispeed(which){const v=$('v'+which).value;
  const r=await fetch('/varispeed?'+which+'='+v,{method:'POST'});if(!r.ok)alert(await r.text())}
 async function setGain(){const r=await fetch('/gain?db='+$('gain').value,{method:'POST'});if(!r.ok)alert(await r.text());poll()}
 function addSchedule(){
@@ -312,7 +327,7 @@ async function poll(){
   recState=st.state;const b=$('recbtn');b.disabled=st.state=='saving';b.classList.toggle('rec',st.state=='recording');
   $('reclabel').textContent=st.state=='recording'?'Stop':st.state=='saving'?'Saving...':'Record';
   $('rectime').textContent=st.state=='recording'?t(st.seconds)+(st.limit<86400?' / '+t(st.limit):''):'';
-  $('gainnow').textContent=st.gainSetting<0?'(now '+st.gain+' dB)':'';
+  $('gain').options[0].textContent='Auto'+(st.gainSetting<0?' (now '+st.gain+' dB)':'');
   if(moments!==null&&st.moments!=moments)location.reload();moments=st.moments;
  }catch(e){}}
 setInterval(poll,1000);poll();
@@ -350,10 +365,16 @@ static void sendLengthOptions(char *buf, size_t len, int longest, int selected) 
 
 static void sendRecord(char *buf, size_t len) {
     // One button that records and stops, showing the time as it goes
-    server.sendContent("<section class=band><div class=\"cell c3\"><h2>Record</h2></div><button id=recbtn class=\"cell c3 big\" onclick=toggleRecord()>"
-                       "<span class=dot></span><span id=reclabel>Record</span><span id=rectime class=mono></span></button>"
-                       "<div class=\"cell c6\"><div class=row><label>Stop after <select id=reclen><option value=0>when I say</option>");
     int longest = (int)audioLongestRecording();
+    char longestText[24];
+    lengthText(longestText, sizeof(longestText), longest);
+    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Record</h2>"
+                       "<p class=note>Up to %s at a time%s. Wi-Fi stays on while recording, which may add a little noise.</p></div>"
+                       "<div class=\"cell c9\"><button id=recbtn class=big onclick=toggleRecord()>"
+                       "<span class=dot></span><span id=reclabel>Record</span><span id=rectime class=mono></span></button>"
+                       "<div class=row><label>Stop after <select id=reclen><option value=0>when I say</option>",
+             longestText, audioUsingSdCard() ? " (the card's room)" : " (no SD card: held in memory)");
+    server.sendContent(buf);
     sendLengthOptions(buf, len, longest, 0);
     int setting = audioMicGainSetting();
     server.sendContent("</select></label><label>Mic gain <select id=gain onchange=setGain()>");
@@ -362,13 +383,7 @@ static void sendRecord(char *buf, size_t len) {
         else snprintf(buf, len, "<option value=%d%s>%d dB</option>", db, setting == db ? " selected" : "", db);
         server.sendContent(buf);
     }
-    char longestText[24];
-    lengthText(longestText, sizeof(longestText), longest);
-    snprintf(buf, len, "</select><span id=gainnow class=sub></span></label></div>"
-                       "<p class=note>Up to %s at a time%s. Wi-Fi stays on while recording, which may add a little noise.</p>",
-             longestText, audioUsingSdCard() ? " (the card's room)" : " (no SD card: held in memory)");
-    server.sendContent(buf);
-    server.sendContent("</div></section>");
+    server.sendContent("</select></label></div></div></section>");
 }
 
 // The day a moment belongs to, as in its folder on the card: "2026-10-28",
@@ -389,26 +404,28 @@ static void sendMoments(char *buf, size_t len) {
         Moment moment;
         if (momentGet(i, moment)) bytes += WAV_HEADER_BYTES + moment.length * sizeof(int16_t);
     }
-    if (count) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments (%d)</h2></div><div class=\"cell c4\">", count);
-    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments</h2></div><div class=\"cell c4\">");
+    if (count) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments (%d)</h2>", count);
+    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Moments</h2>");
     server.sendContent(buf);
     if (!clockValid()) server.sendContent("<p class=note><b>The device clock isn't set.</b> New moments get no date, so the calendar "
                                           "can't place them. Set it under Settings, Time.</p>");
+    // The title cell's note, the calendar with the backup in the last cell,
+    // the list in between (on a phone the calendar comes first)
+    char size[16];
+    if (bytes >= 1000000000ull) snprintf(size, sizeof(size), "%.1f GB", bytes / 1e9);
+    else snprintf(size, sizeof(size), "%lu MB", (unsigned long)((bytes + 500000) / 1000000));
+    bool fits = bytes + (uint64_t)count * 300 < 0xFFFF0000ull; // the ZIP's own headers; ZIP64 isn't done
+    if (count && fits) snprintf(buf, len, "<p class=note>Pick a day in the calendar to see and download that day. Download all saves every moment "
+                                          "as WAV files in one ZIP, about %s, in day folders: the way to back zvukopis up.</p></div>", size);
+    else if (count) snprintf(buf, len, "<p class=note>About %s of moments: more than one ZIP can hold, so download a day at a time from the calendar.</p></div>", size);
+    else snprintf(buf, len, "<p class=note>Press Record to capture one.</p></div>");
+    server.sendContent(buf);
     if (count) {
-        // A calendar of the days with moments (built by the script from the
-        // rows below), and the whole lot as one ZIP
-        char size[16];
-        if (bytes >= 1000000000ull) snprintf(size, sizeof(size), "%.1f GB", bytes / 1e9);
-        else snprintf(size, sizeof(size), "%lu MB", (unsigned long)((bytes + 500000) / 1000000));
-        bool fits = bytes + (uint64_t)count * 300 < 0xFFFF0000ull; // the ZIP's own headers; ZIP64 isn't done
-        if (fits) snprintf(buf, len, "<div id=cal class=cal></div><div id=dayrow class=row style=\"display:none\"></div>"
-                                     "<div class=row><a href=\"/backup\" download><button>Download all</button></a>"
-                                     "<span class=note>Every moment as WAV files in one ZIP, about %s, in day folders</span></div>", size);
-        else snprintf(buf, len, "<div id=cal class=cal></div><div id=dayrow class=row style=\"display:none\"></div>"
-                                "<p class=note>About %s of moments: more than one ZIP can hold, so download a day at a time from the calendar.</p>", size);
-        server.sendContent(buf);
+        server.sendContent("<div class=\"cell c4 last\"><div id=cal class=cal></div><div id=dayrow class=row style=\"display:none\"></div>");
+        if (fits) server.sendContent("<div class=row><a href=\"/backup\" download>Download all</a></div>");
+        server.sendContent("</div>");
     }
-    server.sendContent("</div><div class=\"cell c5\"><audio id=player></audio><table id=moments>");
+    server.sendContent("<div class=\"cell c5\"><audio id=player></audio><table id=moments>");
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
@@ -441,20 +458,24 @@ static void sendMoments(char *buf, size_t len) {
                  seconds / 60, seconds % 60, moment.number, name, moment.number);
         server.sendContent(buf);
     }
-    if (count == 0) server.sendContent("<tr><td>No moments yet. Press Record to capture one.</td></tr>");
-    server.sendContent("</table>");
-    server.sendContent("</div></section>");
+    if (count == 0) server.sendContent("<tr><td>No moments yet.</td></tr>");
+    server.sendContent("</table></div></section>");
 }
 
 static const char TRASH_SVG[] = "<svg viewBox=\"0 0 16 16\"><path d=\"M6 1h4l.5 1H14v2H2V2h3.5zM3 5h10l-.8 10H3.8z\"/></svg>";
 
 static void sendSchedule(char *buf, size_t len) {
     int n = scheduleCount();
-    if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Scheduled recordings (%d)</h2></div><div class=\"cell c5\">", n);
-    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Scheduled recordings</h2></div><div class=\"cell c5\">");
+    int longest = (int)audioLongestRecording();
+    char longestText[24];
+    lengthText(longestText, sizeof(longestText), longest);
+    if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Scheduled recordings (%d)</h2>", n);
+    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Scheduled recordings</h2>");
     server.sendContent(buf);
-    if (!clockValid()) server.sendContent("<p class=note>The device clock isn't set, so these can't run on time. Set it under Time first.</p>");
-    server.sendContent("<table>");
+    if (!clockValid()) server.sendContent("<p class=note><b>The device clock isn't set</b>, so these can't run on time. Set it under Time first.</p>");
+    snprintf(buf, len, "<p class=note>zvukopis wakes up and records at the time, even from sleep. 24-hour time, in its own time zone; up to %s per recording.</p></div>"
+                       "<div class=\"cell c5\"><table>", longestText);
+    server.sendContent(buf);
     Schedule s;
     for (int i = 0; scheduleGet(i, s); i++) {
         time_t start = (time_t)s.start;
@@ -470,7 +491,7 @@ static void sendSchedule(char *buf, size_t len) {
                  (long long)s.start, TRASH_SVG);
         server.sendContent(buf);
     }
-    if (n == 0) server.sendContent("<tr><td>None yet. Add one below: zvukopis will wake up and record at that time, even from sleep.</td></tr>");
+    if (n == 0) server.sendContent("<tr><td>None yet.</td></tr>");
     // The form starts at the next whole minute, in zvukopis's local time
     char today[12] = "", nextMinute[8] = "";
     if (clockValid()) {
@@ -484,15 +505,9 @@ static void sendSchedule(char *buf, size_t len) {
                        "<input id=time size=5 placeholder=HH:MM value=\"%s\" inputmode=numeric><label>for <select id=len>",
              today, nextMinute);
     server.sendContent(buf);
-    int longest = (int)audioLongestRecording();
     sendLengthOptions(buf, len, longest, 60);
-    char longestText[24];
-    lengthText(longestText, sizeof(longestText), longest);
-    snprintf(buf, len, "</select></label><label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
-                       "<p class=note>24-hour time, in zvukopis's own time zone. Up to %s per recording.</p>",
-             longestText);
-    server.sendContent(buf);
-    server.sendContent("</div></section>");
+    server.sendContent("</select></label><label><input type=checkbox id=daily> every day</label><button onclick=addSchedule()>Add</button></div>"
+                       "</div></section>");
 }
 
 // One category's row: the name and the icon radios. Slot 0 is the template
@@ -500,38 +515,43 @@ static void sendSchedule(char *buf, size_t len) {
 static void sendCategoryRow(char *buf, size_t len, int slot, const Category &c) {
     char escaped[CATEGORY_NAME_LEN * 6];
     htmlEscape(c.name, escaped, sizeof(escaped));
-    snprintf(buf, len, "<div class=\"row cat\" data-slot=%d><input id=name%d maxlength=%d value=\"%s\" placeholder=\"Name\" style=\"width:9rem\"><span class=pick>",
+    snprintf(buf, len, "<div class=\"row cat\" data-slot=%d><input id=name%d maxlength=%d value=\"%s\" placeholder=\"Name\"><span class=pick>",
              slot, slot, CATEGORY_NAME_LEN - 1, escaped);
     server.sendContent(buf);
     for (int icon = 0; icon < ICON_COUNT; icon++) {
         snprintf(buf, len, "<label title=%s><input type=radio name=icon%d value=%d%s>", ICON_NAMES[icon], slot, icon,
                  icon == c.icon ? " checked" : "");
         server.sendContent(buf);
-        server.sendContent(iconSvg(icon) + "</label>");
+        server.sendContent(iconSvg(icon, 18) + "</label>");
     }
     server.sendContent("</span></div>");
 }
 
 static void sendCategories(char *buf, size_t len) {
     int count = configCategoryCount();
-    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Categories (%d)</h2></div><div class=\"cell c5\"><div id=cats>", count);
+    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Categories (%d)</h2>"
+                       "<p class=note id=catnote>What a moment can be tagged as, with a long press on zvukopis. "
+                       "Renaming one renames it on the moments already tagged; up to %d.</p></div>"
+                       "<div class=\"cell c5\"><div id=cats>", count, CATEGORY_MAX);
     server.sendContent(buf);
     for (int slot = 1; slot <= count; slot++) sendCategoryRow(buf, len, slot, configCategory(slot));
-    server.sendContent("</div>" "</div><div class=\"cell c4\">" "<template id=catrow>");
+    server.sendContent("</div></div><div class=\"cell c4\">"
+                       "<div class=row><button class=black onclick=saveCategories()>Save</button></div>"
+                       "<div class=row><button id=addcat onclick=addCategory()>Add a category</button>"
+                       "<button id=removecat onclick=removeCategory()>Remove the last</button></div>"
+                       "</div></section><template id=catrow>");
     Category blank = {"", ICON_STAR};
     sendCategoryRow(buf, len, 0, blank);
-    snprintf(buf, len, "</template>"
-                       "<div class=row><button onclick=saveCategories()>Save</button>"
-                       "<button id=addcat onclick=addCategory()>Add a category</button>"
-                       "<button id=removecat onclick=removeCategory()>Remove the last</button></div>"
-                       "<p class=note id=catnote>What a moment can be tagged as, with a long press on zvukopis. "
-                       "Renaming one renames it on the moments already tagged; up to %d.</p></div></section>"
-                       "<script>const CATEGORY_MAX=%d</script>", CATEGORY_MAX, CATEGORY_MAX);
+    snprintf(buf, len, "</template><script>const CATEGORY_MAX=%d</script>", CATEGORY_MAX);
     server.sendContent(buf);
 }
 
 static void sendVarispeed(char *buf, size_t len) {
-    server.sendContent("<section class=band><div class=\"cell c3\"><h2>Varispeed</h2></div><div class=\"cell c5\"><div class=row><label>Top speed <select id=vmax onchange=\"saveVarispeed('max')\">");
+    server.sendContent("<section class=band><div class=\"cell c3\"><h2>Varispeed</h2>"
+                       "<p class=note>Holding the switch up or down while a moment plays changes the speed like a tape reel, "
+                       "through standstill into reverse. The ramp is how quickly it gets there. Letting go brings the speed back, "
+                       "or keeps it, with a tap bringing it back.</p></div>"
+                       "<div class=\"cell c9\"><div class=row><label>Top speed <select id=vmax onchange=\"saveVarispeed('max')\">");
     for (int top : VARISPEED_MAX_CHOICES) {
         snprintf(buf, len, "<option value=%d%s>%dx</option>", top, top == audioVarispeedMax() ? " selected" : "", top);
         server.sendContent(buf);
@@ -542,27 +562,20 @@ static void sendVarispeed(char *buf, size_t len) {
         snprintf(buf, len, "<option value=%d%s>%c%s</option>", ramp, ramp == audioVarispeedRamp() ? " selected" : "", toupper((uint8_t)name[0]), name + 1);
         server.sendContent(buf);
     }
-    server.sendContent("</select></label></div>" "</div><div class=\"cell c4\">"
-                       "<p class=note>Holding the switch up or down while a moment plays changes the speed like a tape reel, "
-                       "through standstill into reverse. The ramp is how quickly it gets there.</p>");
-    server.sendContent("</div></section>");
+    snprintf(buf, len, "</select></label><label>Let go <select id=vhold onchange=\"saveVarispeed('hold')\">"
+                       "<option value=0%s>back to normal</option><option value=1%s>speed stays</option></select></label></div>"
+                       "</div></section>",
+             audioVarispeedHold() ? "" : " selected", audioVarispeedHold() ? " selected" : "");
+    server.sendContent(buf);
 }
 
 static void sendTimeZone(char *buf, size_t len) {
     const char *current = clockTimeZone();
     bool known = false;
-    char clock[40] = "not set";
-    if (clockValid()) {
-        time_t now = time(nullptr);
-        tm local;
-        localtime_r(&now, &local);
-        strftime(clock, sizeof(clock), "%a %e %b %Y, %H:%M:%S", &local);
-    }
-    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Time</h2></div><div class=\"cell c4\"><div class=row><span>Device clock: <b>%s</b></span>"
-                       "<button onclick=setClock()>Set from this browser</button></div>"
-                       "<p class=note>Syncing the clock over the internet is in zvukopis's own Settings.</p>" "</div><div class=\"cell c5\">"
-                       "<div class=\"row tz\"><span>Time zone</span><select id=tz onchange=zoneChanged()>", clock);
-    server.sendContent(buf);
+    server.sendContent("<section class=band><div class=\"cell c3\"><h2>Time</h2>"
+                       "<p class=note>The clock is in the header. Syncing it over the internet is in zvukopis's own Settings; "
+                       "daylight saving follows the zone by itself.</p></div>"
+                       "<div class=\"cell c9\"><div class=row><label>Time zone <select id=tz onchange=zoneChanged()>");
     for (const Zone &z : ZONES) {
         bool chosen = strcmp(z.posix, current) == 0 && !known;
         known |= chosen;
@@ -572,26 +585,28 @@ static void sendTimeZone(char *buf, size_t len) {
     }
     char escaped[160];
     htmlEscape(current, escaped, sizeof(escaped));
-    snprintf(buf, len, "<option value=custom%s>Custom POSIX rule</option></select>"
-                       "<input id=customtz size=24 value=\"%s\" style=\"%s\">"
-                       "<button id=savetz onclick=saveZone() disabled>Save</button></div>"
-                       "<div class=row><button onclick=useBrowserZone()>Use this browser's zone</button></div>"
-                       "<p class=note>Daylight saving follows the zone by itself.</p>",
+    snprintf(buf, len, "<option value=custom%s>Custom POSIX rule</option></select></label>"
+                       "<input id=customtz size=24 value=\"%s\" placeholder=\"POSIX rule\" style=\"%s\"></div>"
+                       "<div class=row><button onclick=useBrowserZone()>Use this browser's zone</button>"
+                       "<button id=savetz onclick=saveZone() disabled>Save the zone</button>"
+                       "<button onclick=setClock()>Set the clock from this browser</button></div>"
+                       "</div></section>",
              known ? "" : " selected", escaped, known ? "display:none" : "");
     server.sendContent(buf);
-    server.sendContent("</div></section>");
 }
 
 static void sendLibrary(char *buf, size_t len) {
     int n = libraryCount();
-    if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Library (%d)</h2></div><div class=\"cell c5\">", n);
-    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Library</h2></div><div class=\"cell c5\">");
+    if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Library (%d)</h2>", n);
+    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Library</h2>");
     server.sendContent(buf);
     if (!audioUsingSdCard()) {
-        server.sendContent("<p class=note>Documents live on the SD card; there is none in zvukopis right now.</p></div></section>");
+        server.sendContent("<p class=note>Documents live on the SD card; there is none in zvukopis right now.</p></div><div class=\"cell c9\"></div></section>");
         return;
     }
-    server.sendContent("<table>");
+    server.sendContent("<p class=note>Markdown or plain text, up to 512 KB each. Headings, paragraphs, <i>italics</i>, "
+                       "<b>bold</b>, quotations and lists are shown; they go in the <code>doc</code> folder on the card, "
+                       "and zvukopis remembers the page you left each one at.</p></div><div class=\"cell c5\"><table>");
     Document doc;
     for (int i = 0; libraryGet(i, doc); i++) {
         char title[CATEGORY_NAME_LEN * 0 + 300], name[300];
@@ -606,23 +621,22 @@ static void sendLibrary(char *buf, size_t len) {
                  title, name, (unsigned long)((doc.bytes + 1023) / 1024), jsName, jsTitle, TRASH_SVG);
         server.sendContent(buf);
     }
-    if (n == 0) server.sendContent("<tr><td>Nothing to read yet. Add a Markdown or text file below.</td></tr>");
-    server.sendContent("</table>" "</div><div class=\"cell c4\">" "<div class=row><input type=file id=docfile accept=\".md,.txt,text/markdown,text/plain\">"
-                       "<button id=upbtn onclick=upload()>Upload</button></div>"
-                       "<p class=note>Markdown or plain text, up to 512 KB each. Headings, paragraphs, <i>italics</i>, "
-                       "<b>bold</b>, quotations and lists are shown; they go in the <code>doc</code> folder on the card, "
-                       "and zvukopis remembers the page you left each one at.</p>");
-    server.sendContent("</div></section>");
+    if (n == 0) server.sendContent("<tr><td>Nothing to read yet.</td></tr>");
+    server.sendContent("</table></div><div class=\"cell c4\"><div class=row><input type=file id=docfile accept=\".md,.txt,text/markdown,text/plain\">"
+                       "<button id=upbtn onclick=upload()>Upload</button></div></div></section>");
 }
 
 static void sendWifi(char *buf, size_t len) {
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
     int n = wifiNetworkCount();
-    if (firstTime) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Connect zvukopis to your Wi-Fi</h2></div><div class=\"cell c5\">");
-    else if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks (%d)</h2></div><div class=\"cell c5\">", n);
-    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks</h2></div><div class=\"cell c5\">");
+    if (firstTime) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Connect zvukopis to your Wi-Fi</h2>");
+    else if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks (%d)</h2>", n);
+    else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks</h2>");
     server.sendContent(buf);
-    server.sendContent("<table>");
+    snprintf(buf, len, "<p class=note>zvukopis joins the strongest saved network (up to %d) when you open the web interface "
+                       "or sync the clock. With none in reach it opens its own hotspot, <b>%s</b>; the password is on its screen.</p></div>"
+                       "<div class=\"cell c5\"><table>", MAX_NETWORKS, wifiHotspotName());
+    server.sendContent(buf);
     WifiNetwork net;
     for (int i = 0; wifiNetworkGet(i, net); i++) {
         char escaped[200];
@@ -633,19 +647,14 @@ static void sendWifi(char *buf, size_t len) {
                  escaped, i, js.c_str(), TRASH_SVG);
         server.sendContent(buf);
     }
-    if (n == 0) server.sendContent("<tr><td>None saved yet. Choose yours below and enter its password.</td></tr>");
+    if (n == 0) server.sendContent("<tr><td>None saved yet.</td></tr>");
     // No scan on load: it blocks the server for seconds. The button runs one.
-    snprintf(buf, len, "</table>" "</div><div class=\"cell c4\">" "<div class=row><select id=ssid onchange=ssidChanged()><option value=\"\">Type a name, or press the arrows to look</option></select>"
+    server.sendContent("</table></div><div class=\"cell c4\"><div class=row><select id=ssid onchange=ssidChanged()><option value=\"\">Choose a network, or name it</option></select>"
                        "<button class=ic title=\"Look for networks again\" onclick=scan()>"
                        "<svg viewBox=\"0 0 16 16\"><path d=\"M8 2a6 6 0 0 1 5.2 3H11v2h5V2h-2v1.7A8 8 0 0 0 8 0zM8 14a6 6 0 0 1-5.2-3H5V9H0v5h2v-1.7A8 8 0 0 0 8 16z\"/></svg></button>"
                        "<input id=otherssid placeholder=\"Network name\" style=display:none></div>"
                        "<div class=row><input id=pass type=password placeholder=Password autocomplete=off>"
-                       "<button onclick=saveWifi()>Save network</button></div>"
-                       "<p class=note>zvukopis joins the strongest saved network (up to %d) when you open the web interface "
-                       "or sync the clock. With none in reach it opens its own hotspot, <b>%s</b>; the password is on its screen.</p>",
-             MAX_NETWORKS, wifiHotspotName());
-    server.sendContent(buf);
-    server.sendContent("</div></section>");
+                       "<button onclick=saveWifi()>Save network</button></div></div></section>");
 }
 
 static void handleIndex() {
@@ -798,7 +807,7 @@ static void handleRecordStart() {
 // other one back
 static void handleVarispeed() {
     noteRequest();
-    int top = -1, ramp = -1;
+    int top = -1, ramp = -1, hold = -1;
     if (server.hasArg("max")) {
         top = server.arg("max").toInt();
         bool known = false;
@@ -816,11 +825,19 @@ static void handleVarispeed() {
             return;
         }
     }
-    if (top < 0 && ramp < 0) {
+    if (server.hasArg("hold")) {
+        const String &arg = server.arg("hold");
+        if (arg != "0" && arg != "1") {
+            server.send(400, "text/plain", "Bad hold");
+            return;
+        }
+        hold = arg.toInt();
+    }
+    if (top < 0 && ramp < 0 && hold < 0) {
         server.send(400, "text/plain", "Nothing to set");
         return;
     }
-    audioSetVarispeed(top, ramp);
+    audioSetVarispeed(top, ramp, hold);
     server.send(200, "text/plain", "ok");
 }
 

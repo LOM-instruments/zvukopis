@@ -68,8 +68,10 @@ void audioDelete(int index);
 void audioSetTag(int index, int tag); // a category slot, or TAG_NONE
 void audioClearTagsAbove(int count); // moments tagged with a slot above `count` lose the tag
 // Tape-style varispeed while playing: +1 speeds up for as long as it's held,
-// -1 slows down, 0 drifts back to normal speed
+// -1 slows down, 0 lets go: the speed drifts back to normal, or stays, by the
+// setting; a tap then brings it back
 void audioSpeedHold(int direction);
+void audioSpeedTap();
 // Erases the SD card (FAT32) and drops its moments from the list; result in audioFormatResult()
 void audioFormatCard();
 int audioFormatResult(); // 0 none yet, 1 done, -1 failed
@@ -98,9 +100,10 @@ int audioMicGainSetting();
 enum VarispeedRamp { RAMP_GENTLE, RAMP_NORMAL, RAMP_QUICK, RAMP_COUNT };
 static const int VARISPEED_MAX_CHOICES[] = {2, 3, 4, 6};
 static const int VARISPEED_MAX_CHOICE_COUNT = 4;
-void audioSetVarispeed(int maxSpeed, int ramp); // kept in settings; -1 leaves that one as it is
+void audioSetVarispeed(int maxSpeed, int ramp, int hold); // kept in settings; -1 leaves that one as it is
 int audioVarispeedMax();
 int audioVarispeedRamp();
+bool audioVarispeedHold(); // letting go keeps the speed (true) or glides back to normal
 const char *varispeedRampName(int ramp); // "gentle", "normal", "quick"
 int audioMicGain(); // in use now (with auto gain, where it last settled)
 float audioSecondsLeft(); // recording time that still fits on the SD card, or in memory
