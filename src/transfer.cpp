@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <esp_rom_crc.h>
+#include <esp_heap_caps.h>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -1273,7 +1274,7 @@ static void transferTask(void *) {
     if (!stopRequested) {
         if (joined) clockNtp(); // already online, so the clock gets corrected too
         else openHotspot();
-        Serial.printf("[transfer] serving http://%s/ on %s\n", info.address, info.network);
+        Serial.printf("[transfer] serving http://%s/ on %s, %u KB RAM free\n", info.address, info.network, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 
         MDNS.begin(HOST_NAME);
         MDNS.addService("http", "tcp", 80);
@@ -1307,7 +1308,7 @@ void transferStart(bool hotspot) {
     stopRequested = false;
     info = {};
     info.state = TRANSFER_CONNECTING;
-    xTaskCreatePinnedToCore(transferTask, "transfer", 8192, NULL, 1, &task, 0);
+    xTaskCreatePinnedToCore(transferTask, "transfer", 8192, NULL, 1, &task, 1); // core 1, away from the radio's own tasks
 }
 
 void transferStop() {

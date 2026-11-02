@@ -115,6 +115,20 @@ static size_t playBufferStart = 0, playBufferLength = 0; // in samples of the mo
 static bool playFileEnded = false;
 
 static es8311_handle_t codec = nullptr;
+
+// A step up is hidden by the codec's fine ADC volume (0.5 dB per step, REG17)
+// set the same amount down at that moment and walked back to 0 dB: 6 dB takes
+// about 0.4 s. A step down stays instant: it's there to stop clipping, and
+// the loud sound masks it.
+static const uint8_t ADC_VOLUME_0DB = 0xBF;
+static const int RAMP_EVERY_CHUNKS = 2; // 0.5 dB per 32 ms
+static volatile int rampHalfDb = 0;     // the fine volume's offset from 0 dB, in half-decibels, never above 0
+static int rampTick = 0;
+
+static void setRamp(int halfDb) {
+    rampHalfDb = constrain(halfDb, -60, 0);
+    if (codec) es8311_adc_volume_set(codec, ADC_VOLUME_0DB + rampHalfDb);
+}
 static SemaphoreHandle_t suspendDone;
 // Codec powered and I2S streaming. Off while idle: the codec, mic and I2S DMA
 // draw power, and the task would otherwise wake every 16 ms.
@@ -151,12 +165,19 @@ static void autoGain(const int16_t *in, size_t frames, size_t skip) {
         agcChanges++;
     } else if (peak < AGC_QUIET) {
         if (++agcQuietChunks >= AGC_RELEASE_CHUNKS && gainNow < MAX_GAIN_DB) {
+            int before = gainNow;
             applyGain(gainStepUp(gainNow));
+            setRamp(rampHalfDb - 2 * (gainNow - before)); // the new gain, hidden for now
+            Serial.printf("[agc] up to %d dB, eased in over %d ms\n", gainNow, -rampHalfDb * RAMP_EVERY_CHUNKS * 16);
             agcQuietChunks = 0;
             agcChanges++;
         }
     } else {
         agcQuietChunks = 0;
+    }
+    if (rampHalfDb < 0 && ++rampTick >= RAMP_EVERY_CHUNKS) {
+        rampTick = 0;
+        setRamp(rampHalfDb + 1); // and let it through, half a decibel at a time
     }
 }
 
@@ -204,6 +225,7 @@ static void startRecording(uint32_t seconds) {
         return;
     }
     streamingRecord = storageAvailable();
+    if (rampHalfDb) setRamp(0); // a recording starts at the gain as set
     streamMoment = {}; // the previous recording's file name must not linger: a stop before the
                        // first sample arrives would otherwise delete that file
     if (streamingRecord) {
@@ -289,9 +311,10 @@ static void finishRecording() {
         listVersion++;
         xSemaphoreGive(momentLock);
         state = AUDIO_IDLE;
-        Serial.printf("Saved Moment %d to SD card as %s/%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s\n",
+        Serial.printf("Saved Moment %d to SD card as %s/%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s, %u KB RAM free\n",
                       moment.number, moment.folder, moment.fileName, millis() - start, (float)moment.length / SAMPLE_RATE,
-                      moment.gain, gainNow, gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "");
+                      moment.gain, gainNow, gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "",
+                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
         return;
     }
     if (length < MIN_MOMENT_SAMPLES) {
@@ -691,8 +714,10 @@ static bool i2sInit() {
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-    // A DMA buffer holds 1024 frames at most; at 96 kHz a chunk is two of them
-    cfg.dma_buf_count = CHUNK_FRAMES > 1024 ? 16 : 8;
+    // A DMA buffer holds 1024 frames at most; at 96 kHz a chunk is two of them.
+    // These live in internal RAM, which the Wi-Fi driver needs too: 8 of them
+    // (64 ms at 96 kHz) are 24 KB, as at 48 kHz
+    cfg.dma_buf_count = 8;
     cfg.dma_buf_len = CHUNK_FRAMES > 1024 ? CHUNK_FRAMES / 2 : CHUNK_FRAMES;
     cfg.tx_desc_auto_clear = true; // output silence when nothing is being played
     cfg.mclk_multiple = MCLK_MULTIPLE == 128 ? I2S_MCLK_MULTIPLE_128 : I2S_MCLK_MULTIPLE_256;
@@ -806,6 +831,7 @@ const char *varispeedRampName(int ramp) {
 
 void audioSetMicGain(int db) {
     gainSetting = db;
+    if (rampHalfDb) setRamp(0);
     Preferences prefs;
     prefs.begin("zvukopis", false);
     prefs.putInt("gain", db);

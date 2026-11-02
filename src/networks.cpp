@@ -113,10 +113,38 @@ static bool knownNetwork(const String &ssid, WifiNetwork &out) {
     return false;
 }
 
+// What the link does, on the log: a dropped connection and its reason, and
+// the reconnection the driver makes on its own
+static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+        Serial.printf("[wifi] disconnected (reason %d)\n", info.wifi_sta_disconnected.reason);
+        break;
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+        Serial.println("[wifi] connected");
+        break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        Serial.printf("[wifi] address %s\n", WiFi.localIP().toString().c_str());
+        break;
+    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+        Serial.println("[wifi] lost the address");
+        break;
+    default:
+        break;
+    }
+}
+
 WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
     if (!wifiKnowsAny()) return WIFI_NONE_KNOWN;
+    static bool listening = false;
+    if (!listening) {
+        WiFi.onEvent(onWifiEvent);
+        listening = true;
+    }
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(HOST_NAME);
+    WiFi.setAutoReconnect(true);
+    WiFi.setSleep(false); // the radio stays awake while the web interface is up: it answers at once, and the link holds
     int found = WiFi.scanNetworks();
     WifiNetwork best = {};
     int bestRssi = -1000;

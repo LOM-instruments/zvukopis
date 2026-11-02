@@ -254,7 +254,7 @@ bool storageSaveMoment(Moment &moment, const int16_t *samples) {
 // --- Recording straight onto the card ---
 
 static const size_t RING_SAMPLES = 4 * SAMPLE_RATE; // 4 s of slack for the card's pauses
-static const size_t WRITE_SAMPLES = 12 * 1024;      // 24 KB per card write
+static const size_t WRITE_SAMPLES = 8192; // 16 KB per write (85 ms at 96 kHz): internal RAM, which the radio needs too
 static int16_t *ring = nullptr;                     // PSRAM
 static int16_t *writeBuffer = nullptr;              // internal RAM, which the card driver can DMA from
 static volatile size_t ringHead = 0, ringTail = 0;  // in samples: head moved by the audio task, tail by the writer
@@ -313,7 +313,7 @@ bool storageStreamBegin(Moment &moment) {
     streamWritten = streamDropped = 0;
     streamFailed = drainWanted = false;
     streaming = true;
-    if (!writerTask) xTaskCreatePinnedToCore(writerLoop, "sdwriter", 4096, NULL, 2, &writerTask, 0);
+    if (!writerTask) xTaskCreatePinnedToCore(writerLoop, "sdwriter", 4096, NULL, 2, &writerTask, 1); // core 1: core 0 has the radio and the audio
     return true;
 }
 
