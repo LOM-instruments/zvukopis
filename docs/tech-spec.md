@@ -27,7 +27,7 @@ coupler), the relative ones are solid.
 | Analog gain | Codec preamp, 0 to 30 dB in 3 dB steps |
 | Digital gain | In the codec after the ADC, 0 to 24 dB in 6 dB steps |
 | Mic gain settings | 18 to 54 dB in 6 dB steps, or Auto; 18 to 30 dB are analog only, above that 30 dB analog plus digital |
-| Auto gain | Steps down within 16 ms of a peak above -3 dBFS; up after about 1.5 s below -20 dBFS, eased in through the codec's 0.5 dB fine volume (6 dB in 0.4 s); floor 18 dB, start 36 dB |
+| Auto gain | Steps down within 16 ms of a peak above -3 dBFS; up after about 1.5 s below -20 dBFS, a steady climb of about 3 dB/s through the codec's own volume fade, held by any sound above -20 dBFS; the analog and digital gain registers only move on a step down; floor 18 dB, start 36 dB |
 | Sample rate | 96 kHz (firmware from 2026-10-30; files from the 48 kHz firmware still load and play) |
 | Sample format | 16-bit PCM, mono, samples as the ADC delivers them (no normalisation in the data) |
 | Settling | The first 100 ms after the codec wakes are dropped |

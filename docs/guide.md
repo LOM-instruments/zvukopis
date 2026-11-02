@@ -34,7 +34,7 @@ Auto gain is a simple, deliberate thing, not a limiter. It moves the microphone 
 
 - It starts a recording at the gain the last one ended on (36 dB the first time), and it can go from 18 to 54 dB.
 - Sixty times a second it looks at the loudest sample of the last 16 milliseconds. If that came within 3 dB of clipping, the gain steps down at once: by 3 dB while it is below 30 dB, by 6 dB above. The loud sound stays in the recording, a little softer from that instant on.
-- If everything stays below a fifth of full scale (-20 dB) for one and a half seconds without a break, the gain climbs one notch, eased in over a third of a second or so in half-decibel steps, so you don't hear it. A single louder sound in that time starts the count again, so the gain climbs only in a true lull.
+- If everything stays below a fifth of full scale (-20 dB) for one and a half seconds without a break, the gain starts climbing, steadily, about 3 dB per second, faded by the codec itself so there are no steps to hear, until a sound holds it or it reaches the top. A single louder sound in that time starts the count again, so the gain climbs only in a true lull.
 - Anything in between leaves it alone.
 
 The step down is instant on purpose: it is there to stop clipping, and the loud sound covers it. The changes are kept in the file as recorded. Each file says in its header which gain it ended on, marked *auto*. For music, for anything where the dynamics matter, or for comparing one recording with another, set a fixed gain instead: the level then stays put, and clipping is the signal to choose a lower one next time.

@@ -116,19 +116,33 @@ static bool playFileEnded = false;
 
 static es8311_handle_t codec = nullptr;
 
-// A step up is hidden by the codec's fine ADC volume (0.5 dB per step, REG17)
-// set the same amount down at that moment and walked back to 0 dB: 6 dB takes
-// about 0.4 s. A step down stays instant: it's there to stop clipping, and
-// the loud sound masks it.
+// Auto gain climbs through the codec's fine ADC volume (REG17, 0.5 dB per
+// step), which the codec itself fades towards whatever is written, sample
+// by sample. The ES8311 header calls the setting 0.25 dB per 4096 samples;
+// measured on a tone, it's half that speed: about 3 dB per second at
+// 96 kHz. A lull points that volume at the top and the gain glides up
+// until a sound holds it. The coarse registers (analog preamp, digital
+// gain) only move on an attack, instantly, with the fade switched off for
+// that write. The firmware keeps an estimate of where the fade has got to.
 static const uint8_t ADC_VOLUME_0DB = 0xBF;
-static const int RAMP_EVERY_CHUNKS = 2; // 0.5 dB per 32 ms
-static volatile int rampHalfDb = 0;     // the fine volume's offset from 0 dB, in half-decibels, never above 0
-static int rampTick = 0;
+static const es8311_fade_t FINE_FADE = ES8311_FADE_4096LRCK;
+static const int FINE_FADE_SAMPLES = 8192;  // per 0.25 dB, as measured (2026-11-02, 1 kHz tone: 18.8 dB in 6.0 s)
+static const int FINE_MAX_HALF_DB = 2 * 24; // the fine volume reaches 24 dB above the coarse gain
+static volatile int coarseDb = 36;          // what the preamp and digital gain registers are set to
+static int fineTargetHalfDb = 0;            // what the fine volume register is set to, in half-decibels above 0 dB
+static float fineHalfDb = 0;                // where the codec's fade is now, by the firmware's reckoning
 
-static void setRamp(int halfDb) {
-    rampHalfDb = constrain(halfDb, -60, 0);
-    if (codec) es8311_adc_volume_set(codec, ADC_VOLUME_0DB + rampHalfDb);
+static void setFine(int halfDb, bool instant) {
+    fineTargetHalfDb = constrain(halfDb, 0, FINE_MAX_HALF_DB);
+    if (instant) fineHalfDb = fineTargetHalfDb;
+    if (!codec) return;
+    es8311_adc_volume_set(codec, ADC_VOLUME_0DB + fineTargetHalfDb);
+    if (instant) { // the new value first, then off with the fade: the volume snaps to it, never to an old target
+        es8311_microphone_fade(codec, ES8311_FADE_OFF);
+        es8311_microphone_fade(codec, FINE_FADE);
+    }
 }
+static int gainOf(int coarse, float fineHalf) { return coarse + (int)lroundf(fineHalf / 2); }
 static SemaphoreHandle_t suspendDone;
 // Codec powered and I2S streaming. Off while idle: the codec, mic and I2S DMA
 // draw power, and the task would otherwise wake every 16 ms.
@@ -144,40 +158,61 @@ static bool codecInit();
 static int gainStepUp(int db) { return db < 30 ? db + 3 : db + 6; }
 static int gainStepDown(int db) { return db > 30 ? db - 6 : db - 3; }
 
+// The coarse gain: the analog preamp and the digital gain registers; the fine
+// volume goes back to 0 dB at the same time
 static void applyGain(int db) {
     db = constrain(db, MIN_GAIN_DB, MAX_GAIN_DB);
     int pga = min(db, 30) / 3;
     int scale = (db - pga * 3) / 6;
+    setFine(0, true); // first, so that the moment between the writes is a dip, not a burst
     if (codec) {
         es8311_microphone_pga_set(codec, pga);
         es8311_microphone_gain_set(codec, (es8311_mic_gain_t)scale);
     }
-    gainNow = pga * 3 + scale * 6;
+    coarseDb = pga * 3 + scale * 6;
+    gainNow = coarseDb;
 }
 
 // Per 16 ms chunk while recording with auto gain
 static void autoGain(const int16_t *in, size_t frames, size_t skip) {
     int peak = 0;
     for (size_t i = skip; i < frames; i++) peak = max(peak, abs((int)in[2 * i]));
+    // Where the codec's fade has got to by now
+    float perChunk = 0.5f * frames / FINE_FADE_SAMPLES; // half-decibels per chunk
+    if (fineHalfDb < fineTargetHalfDb) fineHalfDb = min((float)fineTargetHalfDb, fineHalfDb + perChunk);
+    else if (fineHalfDb > fineTargetHalfDb) fineHalfDb = max((float)fineTargetHalfDb, fineHalfDb - perChunk);
+    gainNow = gainOf(coarseDb, fineHalfDb);
     if (peak > AGC_LOUD && gainNow > MIN_GAIN_DB) {
-        applyGain(gainStepDown(gainNow));
+        // Attack: at once, and any climb is over. Off the fine volume first, then the coarse registers
+        int step = gainNow > 30 ? 6 : 3;
+        int fine = (int)fineHalfDb; // rounded down: rather a touch more off than less
+        if (fine >= 2 * step) setFine(fine - 2 * step, true);
+        else applyGain(coarseDb + fine / 2 - step);
+        gainNow = gainOf(coarseDb, fineHalfDb);
         agcQuietChunks = 0;
         agcChanges++;
     } else if (peak < AGC_QUIET) {
         if (++agcQuietChunks >= AGC_RELEASE_CHUNKS && gainNow < MAX_GAIN_DB) {
-            int before = gainNow;
-            applyGain(gainStepUp(gainNow));
-            setRamp(rampHalfDb - 2 * (gainNow - before)); // the new gain, hidden for now
-            Serial.printf("[agc] up to %d dB, eased in over %d ms\n", gainNow, -rampHalfDb * RAMP_EVERY_CHUNKS * 16);
-            agcQuietChunks = 0;
-            agcChanges++;
+            // Release: point the fine volume at the top and let the codec glide there
+            int top = min(FINE_MAX_HALF_DB, 2 * (MAX_GAIN_DB - coarseDb));
+            if (fineTargetHalfDb < top) {
+                setFine(top, false);
+                Serial.printf("[agc] climbing from %d dB, about %d dB/s\n", gainNow, (SAMPLE_RATE_HZ + 2 * FINE_FADE_SAMPLES) / (4 * FINE_FADE_SAMPLES));
+                agcChanges++;
+            } else if (fineHalfDb >= top) {
+                // The fine volume is used up: the coarse registers take it all over (rare) and the climb goes on
+                applyGain(gainNow);
+                setFine(min(FINE_MAX_HALF_DB, 2 * (MAX_GAIN_DB - coarseDb)), false);
+            }
         }
     } else {
+        // A sound, not a loud one: the climb holds where it is
+        int here = (int)ceilf(fineHalfDb);
+        if (fineTargetHalfDb > here) {
+            setFine(here, false);
+            Serial.printf("[agc] holding at %d dB\n", gainNow);
+        }
         agcQuietChunks = 0;
-    }
-    if (rampHalfDb < 0 && ++rampTick >= RAMP_EVERY_CHUNKS) {
-        rampTick = 0;
-        setRamp(rampHalfDb + 1); // and let it through, half a decibel at a time
     }
 }
 
@@ -225,7 +260,7 @@ static void startRecording(uint32_t seconds) {
         return;
     }
     streamingRecord = storageAvailable();
-    if (rampHalfDb) setRamp(0); // a recording starts at the gain as set
+    if (fineTargetHalfDb > (int)ceilf(fineHalfDb)) setFine((int)ceilf(fineHalfDb), false); // a climb in progress holds
     streamMoment = {}; // the previous recording's file name must not linger: a stop before the
                        // first sample arrives would otherwise delete that file
     if (streamingRecord) {
@@ -703,6 +738,7 @@ static bool codecInit() {
     es8311_voice_volume_set(codec, SPEAKER_VOLUME, NULL);
     es8311_microphone_config(codec, false); // analog mic
     es8311_adc_volume_set(codec, 0xBF);     // 0 dB, so the gain setting is the whole gain
+    es8311_microphone_fade(codec, FINE_FADE); // later changes of that volume glide
     applyGain(gainSetting == GAIN_AUTO ? gainNow : gainSetting);
     return true;
 }
@@ -831,7 +867,6 @@ const char *varispeedRampName(int ramp) {
 
 void audioSetMicGain(int db) {
     gainSetting = db;
-    if (rampHalfDb) setRamp(0);
     Preferences prefs;
     prefs.begin("zvukopis", false);
     prefs.putInt("gain", db);
