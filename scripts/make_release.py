@@ -60,7 +60,9 @@ def previous_release():
     out = subprocess.run(["gh", "release", "list", "--limit", "1", "--json", "tagName", "--jq", ".[0].tagName"],
                          capture_output=True, text=True, cwd=ROOT).stdout.strip()
     if out:
-        return out
+        git("fetch", "-q", "origin", "--tags", check=False) # the tag lives on GitHub; the log needs it here
+        if git("rev-parse", "-q", "--verify", out + "^{commit}", check=False):
+            return out
     commits = git("log", "--format=%H %s", "-n", "400").splitlines()
     for line in commits[1:]:  # not HEAD itself, which may be the release being published
         sha, _, subject = line.partition(" ")
@@ -94,7 +96,7 @@ def release_notes(version, code_commit):
         items.append(item)
     notes = [f"Firmware `{version}`, built from commit `{code_commit[:7]}`.", ""]
     notes += items if items else ["- The same firmware as the previous release, republished."]
-    notes += ["", "**Install:** the [web flasher](https://lom-instruments.github.io/zvukopis/) (Chrome or Edge, over USB), "
+    notes += ["", "**Install:** the [web flasher](https://zvukopis.lom.audio/) (Chrome or Edge, over USB), "
               "or with esptool and the attached files:", "",
               "```", "esptool.py --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 --after no_reset write_flash "
               "0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 zvukopis.bin", "```", "",
