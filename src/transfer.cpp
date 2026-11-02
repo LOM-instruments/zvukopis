@@ -157,7 +157,7 @@ static void noteRequest() {
 }
 
 static const char PAGE_HEAD[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>zvukopis</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Zvukopis</title>
 <style>
 :root{--bg:#ececec;--text:#000;--muted:#595959;--accent:#ffc72c;--warn:#f15656;--edge:16px;--line:1px;--unit:3rem}
 *{box-sizing:border-box}html,body{margin:0}
@@ -301,7 +301,7 @@ function zoneChanged(){$('customtz').style.display=$('tz').value==='custom'?'':'
 function useBrowserZone(){
  const z=Intl.DateTimeFormat().resolvedOptions().timeZone;
  for(const o of $('tz').options)if((o.dataset.iana||'').split(' ').includes(z)){$('tz').value=o.value;zoneChanged();return}
- alert('zvukopis has no rule for '+z+'. Choose the nearest zone, or enter a POSIX rule under Custom.')}
+ alert('Zvukopis has no rule for '+z+'. Choose the nearest zone, or enter a POSIX rule under Custom.')}
 function saveZone(){const v=$('tz').value==='custom'?$('customtz').value.trim():$('tz').value;
  if(!v){alert('Enter a POSIX time zone rule');return} post('/timezone',new URLSearchParams({tz:v}))}
 async function scan(){
@@ -417,7 +417,7 @@ static void sendMoments(char *buf, size_t len) {
     else snprintf(size, sizeof(size), "%lu MB", (unsigned long)((bytes + 500000) / 1000000));
     bool fits = bytes + (uint64_t)count * 300 < 0xFFFF0000ull; // the ZIP's own headers; ZIP64 isn't done
     if (count && fits) snprintf(buf, len, "<p class=note>Pick a day in the calendar to see and download that day. Download all saves every moment "
-                                          "as WAV files in one ZIP, about %s, in day folders: the way to back zvukopis up.</p></div>", size);
+                                          "as WAV files in one ZIP, about %s, in day folders: the way to back Zvukopis up.</p></div>", size);
     else if (count) snprintf(buf, len, "<p class=note>About %s of moments: more than one ZIP can hold, so download a day at a time from the calendar.</p></div>", size);
     else snprintf(buf, len, "<p class=note>Press Record to capture one.</p></div>");
     server.sendContent(buf);
@@ -474,7 +474,7 @@ static void sendSchedule(char *buf, size_t len) {
     else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Scheduled recordings</h2>");
     server.sendContent(buf);
     if (!clockValid()) server.sendContent("<p class=note><b>The device clock isn't set</b>, so these can't run on time. Set it under Time first.</p>");
-    snprintf(buf, len, "<p class=note>zvukopis wakes up and records at the time, even from sleep. 24-hour time, in its own time zone; up to %s per recording.</p></div>"
+    snprintf(buf, len, "<p class=note>Zvukopis wakes up and records at the time, even from sleep. 24-hour time, in its own time zone; up to %s per recording.</p></div>"
                        "<div class=\"cell c5\"><table>", longestText);
     server.sendContent(buf);
     Schedule s;
@@ -531,7 +531,7 @@ static void sendCategoryRow(char *buf, size_t len, int slot, const Category &c) 
 static void sendCategories(char *buf, size_t len) {
     int count = configCategoryCount();
     snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Categories (%d)</h2>"
-                       "<p class=note id=catnote>What a moment can be tagged as, with a long press on zvukopis. "
+                       "<p class=note id=catnote>What a moment can be tagged as, with a long press on Zvukopis. "
                        "Renaming one renames it on the moments already tagged; up to %d.</p></div>"
                        "<div class=\"cell c5\"><div id=cats>", count, CATEGORY_MAX);
     server.sendContent(buf);
@@ -574,7 +574,7 @@ static void sendTimeZone(char *buf, size_t len) {
     const char *current = clockTimeZone();
     bool known = false;
     server.sendContent("<section class=band><div class=\"cell c3\"><h2>Time</h2>"
-                       "<p class=note>The clock is in the header. Syncing it over the internet is in zvukopis's own Settings; "
+                       "<p class=note>The clock is in the header. Syncing it over the internet is in Zvukopis's own Settings; "
                        "daylight saving follows the zone by itself.</p></div>"
                        "<div class=\"cell c9\"><div class=row><label>Time zone <select id=tz onchange=zoneChanged()>");
     for (const Zone &z : ZONES) {
@@ -602,12 +602,12 @@ static void sendLibrary(char *buf, size_t len) {
     else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Library</h2>");
     server.sendContent(buf);
     if (!audioUsingSdCard()) {
-        server.sendContent("<p class=note>Documents live on the SD card; there is none in zvukopis right now.</p></div><div class=\"cell c9\"></div></section>");
+        server.sendContent("<p class=note>Documents live on the SD card; there is none in Zvukopis right now.</p></div><div class=\"cell c9\"></div></section>");
         return;
     }
     server.sendContent("<p class=note>Markdown or plain text, up to 512 KB each. Headings, paragraphs, <i>italics</i>, "
                        "<b>bold</b>, quotations and lists are shown; they go in the <code>doc</code> folder on the card, "
-                       "and zvukopis remembers the page you left each one at.</p></div><div class=\"cell c5\"><table>");
+                       "and Zvukopis remembers the page you left each one at.</p></div><div class=\"cell c5\"><table>");
     Document doc;
     for (int i = 0; libraryGet(i, doc); i++) {
         char title[CATEGORY_NAME_LEN * 0 + 300], name[300];
@@ -630,11 +630,11 @@ static void sendLibrary(char *buf, size_t len) {
 static void sendWifi(char *buf, size_t len) {
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
     int n = wifiNetworkCount();
-    if (firstTime) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Connect zvukopis to your Wi-Fi</h2>");
+    if (firstTime) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Connect Zvukopis to your Wi-Fi</h2>");
     else if (n) snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks (%d)</h2>", n);
     else snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Wi-Fi networks</h2>");
     server.sendContent(buf);
-    snprintf(buf, len, "<p class=note>zvukopis joins the strongest saved network (up to %d) when you open the web interface "
+    snprintf(buf, len, "<p class=note>Zvukopis joins the strongest saved network (up to %d) when you open the web interface "
                        "or sync the clock. With none in reach it opens its own hotspot, <b>%s</b>; the password is on its screen.</p></div>"
                        "<div class=\"cell c5\"><table>", MAX_NETWORKS, wifiHotspotName());
     server.sendContent(buf);
@@ -898,7 +898,7 @@ static void handleLibraryUploadPiece() {
         uploadPath = "";
         uploadBytes = 0;
         if (!audioUsingSdCard()) {
-            uploadError = "No SD card in zvukopis";
+            uploadError = "No SD card in Zvukopis";
             return;
         }
         // A plain file name: letters, digits, dots, dashes, spaces; .md or .txt

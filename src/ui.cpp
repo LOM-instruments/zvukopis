@@ -1119,7 +1119,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         break;
     case SET_HOTSPOT:
         title = "Web interface on own hotspot";
-        snprintf(detail, len, "zvukopis makes its own Wi-Fi network");
+        snprintf(detail, len, "Zvukopis makes its own Wi-Fi network");
         break;
     case SET_GUIDE:
         title = "Button guide";
@@ -1232,7 +1232,7 @@ static void drawQr(const char *text, int x, int y, int size) {
 // opens by itself. On the usual network: a QR code with the page's address.
 static void drawTransfer(const ViewState &v) {
     TransferInfo info = transferInfo();
-    drawSubHeader(v, "Web interface", info.state == TRANSFER_READY && info.hotspot ? "zvukopis's own Wi-Fi is on" : "Wi-Fi is on", false);
+    drawSubHeader(v, "Web interface", info.state == TRANSFER_READY && info.hotspot ? "Zvukopis's own Wi-Fi is on" : "Wi-Fi is on", false);
     int cx = SW / 2, y = 250;
     if (info.state != TRANSFER_READY) {
         iconWifi(cx, y);
@@ -1849,7 +1849,7 @@ static void drawUpdate(const ViewState &v) {
     y += 44;
     drawText(MARGIN, y, &Text22, "1. Open that page in Chrome or Edge", INK);
     drawText(MARGIN + 26, y + 28, &Text22, "on a computer.", INK);
-    drawText(MARGIN, y + 68, &Text22, "2. Connect zvukopis with the USB cable.", INK);
+    drawText(MARGIN, y + 68, &Text22, "2. Connect Zvukopis with the USB cable.", INK);
     drawText(MARGIN, y + 108, &Text22, "3. Press Install on the page.", INK);
     drawText(MARGIN, y + 160, &Text17, "The newest version goes on; moments and settings stay.", INK);
     drawText(MARGIN, y + 184, &Text17, "Afterwards, unplug and replug the cable.", INK);
@@ -1867,7 +1867,7 @@ static void drawCardReader(const ViewState &v) {
         drawTextCentered(cx, 418, &Text22, "Eject the drive on the computer", INK);
         drawTextCentered(cx, 446, &Text22, "before leaving", INK);
     }
-    drawTextCentered(cx, 520, &Text17, "Ejecting (or pressing in) restarts zvukopis,", INK);
+    drawTextCentered(cx, 520, &Text17, "Ejecting (or pressing in) restarts Zvukopis,", INK);
     drawTextCentered(cx, 542, &Text17, "which reads the card's moments again", INK);
 }
 
@@ -1950,7 +1950,7 @@ static void drawFormatDialog(const ViewState &v) {
     for (int i = 0; momentGet(i, moment); i++) {
         if (!moment.samples) onCard++;
     }
-    if (storageCardState() == SD_UNREADABLE) snprintf(detail, sizeof(detail), "Erases the card so zvukopis can use it");
+    if (storageCardState() == SD_UNREADABLE) snprintf(detail, sizeof(detail), "Erases the card so Zvukopis can use it");
     else snprintf(detail, sizeof(detail), "Erases %d moment%s and all else", onCard, onCard == 1 ? "" : "s");
     drawConfirm(v, [] { iconSdCard(SW / 2 + 24, CONFIRM_Y + 62, 3); }, "Format SD card?", detail, "Format");
 }

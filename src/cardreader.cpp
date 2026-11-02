@@ -45,8 +45,8 @@ bool cardReaderStart() {
     msc.onStartStop(onStartStop);
     msc.mediaPresent(true);
     msc.begin(card->csd.capacity, card->csd.sector_size);
-    USB.productName("zvukopis SD card");
-    USB.manufacturerName("zvukopis");
+    USB.productName("Zvukopis SD card");
+    USB.manufacturerName("Zvukopis");
     USB.begin(); // takes the USB port over from the serial/JTAG controller
     return true;
 }

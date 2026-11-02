@@ -122,7 +122,7 @@ def publish(version):
     with open(notes_path, "w") as f:
         f.write(notes)
     assets = [os.path.join(FIRMWARE, name) for name, _ in PARTS] + [os.path.join(DOCS, "manifest.json")]
-    cmd = ["gh", "release", "create", version, "--title", f"zvukopis {version}", "--notes-file", notes_path,
+    cmd = ["gh", "release", "create", version, "--title", f"Zvukopis {version}", "--notes-file", notes_path,
            "--target", git("rev-parse", "HEAD"), *assets]
     result = subprocess.run(cmd, cwd=ROOT)
     if result.returncode != 0:
