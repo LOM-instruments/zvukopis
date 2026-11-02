@@ -28,6 +28,17 @@ The screen keeps still while recording, because the panel's refresh is faintly a
 
 **Mic gain** is in Settings. *Auto* follows the room and is right for most things; a fixed value from 18 to 54 dB is better for a sound you know, such as a concert or a quiet night.
 
+## How Auto gain works
+
+Auto gain is a simple, deliberate thing, not a limiter. It moves the microphone gain in steps while a recording runs, and it only ever reacts to what it has already heard.
+
+- It starts a recording at the gain the last one ended on (36 dB the first time), and it can go from 18 to 54 dB.
+- Sixty times a second it looks at the loudest sample of the last 16 milliseconds. If that came within 3 dB of clipping, the gain steps down at once: by 3 dB while it is below 30 dB, by 6 dB above. The loud sound stays in the recording, a little softer from that instant on.
+- If everything stays below a fifth of full scale (-20 dB) for one and a half seconds without a break, the gain steps up one notch. A single louder sound in that time starts the count again, so the gain climbs only in a true lull.
+- Anything in between leaves it alone.
+
+The steps are not smoothed, so a change is a small jump in level, and they are kept in the file as recorded. Each file says in its header which gain it ended on, marked *auto*. For music, for anything where the dynamics matter, or for comparing one recording with another, set a fixed gain instead: the level then stays put, and clipping is the signal to choose a lower one next time.
+
 ## Quick record
 
 Asleep in your pocket and something is happening? Hold the side switch in. The recording screen comes up and the recording starts right after it, about three seconds from the press. A short knock is ignored. Press in again to stop; the moment is on the list like any other.
