@@ -123,7 +123,7 @@ esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Aria
 @media (max-width: 899px) {
   main > .band { border-bottom-width: 3px; }
   .band > .cell:first-child .title::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--accent); vertical-align: .08em; }
-  .band > .cell:first-child:has(> .title) + .cell { padding-top: 0; border-top: 0; }
+  .band:not(.four) > .cell:first-child:has(> .title) + .cell { padding-top: 0; border-top: 0; }
 }
 @media (min-width: 900px) {
   .band { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
