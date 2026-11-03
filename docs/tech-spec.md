@@ -16,6 +16,7 @@ coupler), the relative ones are solid.
 | Controls | Side rocker switch (up, down, press, hold), Settings button, Sleep button |
 | Storage | microSD over SDMMC (4-bit), FAT32 (the firmware formats cards over 32 GB) |
 | Power | LiPo battery through an AXP2101 PMIC, USB-C charging, light sleep between presses |
+| Battery | 3.7 V lithium, 1500 mAh, on an MX1.25 two-pin plug (the one Waveshare ships with the board) |
 | Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started |
 | Case | 3D-printed (`docs/case/`, an STL per version, FDM or resin), bolted to the board's standoffs with four countersunk M2.5×6 bolts, hex or Torx |
 

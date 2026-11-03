@@ -47,6 +47,11 @@ static const int WAVE_PITCH = 5; // bar width 3 + gap 2
 static const int WAVE_HALF_H = 15;
 
 static const int FULL_REFRESH_EVERY = 30; // partial refreshes, before a full one clears ghosting
+// Playback refreshes once a second, and the partial waveform also pulses the pixels
+// that stay the same, so the ink greys out: a full refresh now and then while
+// playing, and one when playback ends if it was long enough to have left a mark
+static const int PLAYING_FULL_REFRESH_EVERY = 30; // partial refreshes while playing
+static const int PLAYED_FULL_REFRESH_AFTER = 8;   // partial refreshes since the last full one, when playback ends
 static const uint32_t FULL_REFRESH_IDLE_MS = 20000; // ...done once the buttons have been left alone this long
 static const uint32_t CONFIRM_TIMEOUT_MS = 10000;
 static const uint32_t MENU_TIMEOUT_MS = 15000;
@@ -2419,9 +2424,15 @@ static void displayTask(void *) {
             uint32_t start = millis();
             render(v);
             Serial.printf("[display] render took %lu ms\n", millis() - start);
-            pushPartial(v);
+            bool playing = v.audio == AUDIO_PLAYING, stopped = !playing && shown.audio == AUDIO_PLAYING;
+            if ((playing && partials >= PLAYING_FULL_REFRESH_EVERY) || (stopped && partials >= PLAYED_FULL_REFRESH_AFTER)) {
+                pushFull(); // clears the grey that the playback refreshes leave
+                partials = 0;
+            } else {
+                pushPartial(v);
+                partials++;
+            }
             shown = v;
-            partials++;
         } else if (partials >= FULL_REFRESH_EVERY && v.audio == AUDIO_IDLE && v.overlay == OVERLAY_NONE &&
                    millis() - lastActivity > FULL_REFRESH_IDLE_MS) {
             pushFull();
