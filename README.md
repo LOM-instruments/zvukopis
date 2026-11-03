@@ -4,6 +4,10 @@ A pocket recorder for sonic moments, built on the Waveshare ESP32-S3-ePaper-3.97
 board: a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
 a microSD slot and a battery, in a 3D-printed case.
 
+**Project page: [zvukopis.lom.audio](https://zvukopis.lom.audio).** It has the
+web flasher (install the firmware from the browser, no tools needed), the
+build guide with the case files, the user guide and the specification.
+
 > **Warning: experimental firmware.** The idea and concept are
 > [Jonáš Gruska](https://lom.audio)'s; the programming was done by Claude
 > (Anthropic's AI) in conversation with him. The code was tested on the device
@@ -130,7 +134,7 @@ the board's four standoffs, snug rather than tight.
 ## Flashing
 
 **Without any tools:** open the project page,
-[lom-instruments.github.io/zvukopis](https://lom-instruments.github.io/zvukopis/),
+[zvukopis.lom.audio](https://zvukopis.lom.audio),
 in Chrome or Edge, connect the board over USB and press *Install*. After flashing, unplug and replug the USB
 cable, or hold the sleep button for 10 seconds: the board stays in download mode after the
 flasher's reset.
