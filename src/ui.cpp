@@ -12,6 +12,8 @@
 #include "audio.h"
 #include "board_power.h"
 #include "cardreader.h"
+#include "icons.h"
+#include "usbmic.h"
 #include "clock.h"
 #include "config.h"
 #include "fonts.h"
@@ -68,6 +70,7 @@ enum Screen {
     SCREEN_SETTINGS,
     SCREEN_TRANSFER,    // Wi-Fi file transfer running
     SCREEN_CARD_READER, // SD card open over USB
+    SCREEN_USB_MIC,     // a microphone on the computer, over USB
     SCREEN_SCHEDULE,    // the scheduled recordings
     SCREEN_SPECTRUM,    // frequency analysis of one moment
     SCREEN_LIBRARY,     // the documents on the card
@@ -92,7 +95,7 @@ static const int ROW_BACK = -1;     // sub-screens
 static const int ROW_CALENDAR = -1; // main list
 static const int ROW_LIBRARY = -2;  // main list, when the card has documents
 
-enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_FORMAT, SET_UPDATE, SET_RESET, SET_ROWS };
+enum SettingsRow { SET_GAIN, SET_VARISPEED, SET_SCHEDULE, SET_WEB, SET_HOTSPOT, SET_SYNC, SET_GUIDE, SET_CARD_READER, SET_USB_MIC, SET_FORMAT, SET_UPDATE, SET_RESET, SET_ROWS };
 static const char *const UPDATE_URL = "https://zvukopis.lom.audio"; // the project page with the web flasher
 static const int GAIN_CHOICES[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int GAIN_CHOICE_COUNT = sizeof(GAIN_CHOICES) / sizeof(GAIN_CHOICES[0]);
@@ -349,7 +352,7 @@ static ViewState currentView() {
     v.varispeedMax = audioVarispeedMax();
     v.varispeedRamp = audioVarispeedRamp();
     v.varispeedHold = audioVarispeedHold();
-    v.gainNow = audioMicGain();
+    v.gainNow = screen == SCREEN_USB_MIC ? 0 : audioMicGain(); // not shown there, and a change must not refresh the panel
     v.configVersion = configVersion();
     Schedule next;
     int nextIndex;
@@ -572,10 +575,7 @@ static void formatIn(char *buf, size_t len, int64_t seconds) {
     else snprintf(buf, len, "in %d days", (int)(seconds / 86400));
 }
 
-static void iconWifi(int cx, int cy) {
-    for (int r = 14; r <= 42; r += 14) drawArc(cx, cy, r, 225, 315, 5, INK);
-    canvas->fillCircle(cx, cy - 2, 5, INK);
-}
+static void iconWifi(int cx, int cy) { canvas->drawXBitmap(cx - IconWifiSize / 2, cy - IconWifiSize / 2, IconWifi, IconWifiSize, IconWifiSize, INK); }
 
 // A category's icon (CategoryIcon); r is about half the icon's size
 static void iconCategory(int icon, int cx, int cy, int r, uint16_t c) {
@@ -1136,6 +1136,11 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
         snprintf(detail, len, !(v.sdCard || v.cardUnreadable) ? "No SD card"
                               : !v.usb                        ? "Connect USB to a computer first"
                                                               : "Open the SD card on the computer");
+        break;
+    case SET_USB_MIC:
+        title = "USB microphone";
+        enabled = v.usb;
+        snprintf(detail, len, v.usb ? "Zvukopis becomes a microphone on the computer" : "Connect USB to a computer first");
         break;
     case SET_FORMAT:
         title = "Format SD card";
@@ -1876,6 +1881,26 @@ static void drawCardReader(const ViewState &v) {
     drawTextCentered(cx, 542, &Text17, "which reads the card's moments again", INK);
 }
 
+// Drawn when the mode starts and on a gain change, and otherwise left alone,
+// for the reason drawRecordingView gives
+static void drawUsbMic(const ViewState &v) {
+    drawSubHeader(v, "USB microphone", "On the computer: Zvukopis microphone", false);
+    int cx = SW / 2;
+    canvas->drawXBitmap(cx - IconMicSize / 2, 190, IconMic, IconMicSize, IconMicSize, INK);
+
+    char buf[32];
+    if (v.gainSetting == GAIN_AUTO) snprintf(buf, sizeof(buf), "Auto gain");
+    else snprintf(buf, sizeof(buf), "%d dB", v.gainSetting);
+    drawTextCentered(cx, 388, &Bold44, buf, INK);
+    drawTextCentered(cx, 428, &Text22, "Mic gain: up or down changes it", INK);
+    snprintf(buf, sizeof(buf), "%d kHz, 16-bit, mono", SAMPLE_RATE / 1000);
+    drawTextCentered(cx, 480, &Text22, buf, INK);
+    drawTextCentered(cx, 540, &Text17, "The screen holds still while the microphone", INK);
+    drawTextCentered(cx, 562, &Text17, "is on: a refresh would be heard in it.", INK);
+    drawTextCentered(cx, 600, &Text17, "Pressing in restarts Zvukopis,", INK);
+    drawTextCentered(cx, 622, &Text17, "which brings the serial port back", INK);
+}
+
 // Drawn once when recording starts and left alone until it stops: the panel's
 // drive voltages couple into the microphone, so a refresh adds about 0.5 s of
 // static to the audio (measured: ~2.7x the noise floor, whatever the mic gain).
@@ -2236,8 +2261,12 @@ static void drawFooter(const ViewState &v) {
     } else if (v.screen == SCREEN_CARD_READER) {
         rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
         menuKeys = false;
+    } else if (v.screen == SCREEN_USB_MIC) {
+        rocker[nr++] = {HINT_UPDOWN, "Mic gain"};
+        rocker[nr++] = {HINT_CLICK, "Leave (restarts)"};
+        menuKeys = false;
     } else if (v.screen == SCREEN_SETTINGS) {
-        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Format...", "How", "Reset..."};
+        static const char *const presses[SET_ROWS] = {"Change", "Change", "Open", "Start", "Start", "Sync now", "Hide", "Start", "Start", "Format...", "How", "Reset..."};
         rocker[nr++] = {HINT_UPDOWN, "Select"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : presses[v.selected]};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
@@ -2338,6 +2367,7 @@ static void render(const ViewState &v) {
         case SCREEN_SETTINGS: drawSettings(v); break;
         case SCREEN_TRANSFER: drawTransfer(v); break;
         case SCREEN_CARD_READER: drawCardReader(v); break;
+        case SCREEN_USB_MIC: drawUsbMic(v); break;
         case SCREEN_SCHEDULE: drawScheduleScreen(v); break;
         case SCREEN_SPECTRUM: drawSpectrum(v); break;
         case SCREEN_LIBRARY: drawLibrary(v); break;
@@ -2414,6 +2444,8 @@ static void displayTask(void *) {
             pushed = false; // leave the sleeping panel alone
         } else if ((v.audio == AUDIO_RECORDING || v.quickRecord) && (shown.audio == AUDIO_RECORDING || shown.quickRecord)) {
             pushed = false; // keep the panel still while recording; see drawRecordingView
+        } else if (v.screen == SCREEN_USB_MIC && shown.screen == SCREEN_USB_MIC && v.gainSetting == shown.gainSetting) {
+            pushed = false; // the same while the microphone streams; a gain change is worth one refresh
         } else if (memcmp(&v, &shown, sizeof(v)) != 0 && v.screen == SCREEN_READER && v.readerPage != shown.readerPage &&
                    partials >= READER_FULL_REFRESH_EVERY) {
             render(v); // text ghosts; a full refresh every few pages keeps it crisp
@@ -2847,6 +2879,11 @@ static void handleSettings(ButtonEvent event) {
             audioSuspend(); // the audio task lets go of the card
             if (cardReaderStart()) showScreen(SCREEN_CARD_READER, 0);
             break;
+        case SET_USB_MIC:
+            if (!usbPowered()) break;
+            audioStartUsbMic();
+            if (usbMicStart()) showScreen(SCREEN_USB_MIC, 0);
+            break;
         case SET_FORMAT:
             if (storageCardState() != SD_ABSENT && audioState() != AUDIO_FORMATTING) openOverlay(OVERLAY_CONFIRM_FORMAT, 0);
             break;
@@ -2883,6 +2920,18 @@ static void handleEvent(ButtonEvent event) {
     if (screen == SCREEN_CARD_READER) {
         if (event == BTN_CLICK) cardReaderLeave(); // restarts
         return; // and no sleep: light sleep would drop the USB drive
+    }
+    if (screen == SCREEN_USB_MIC) {
+        if (event == BTN_CLICK) usbMicLeave(); // restarts
+        if (event == BTN_UP || event == BTN_DOWN) { // through the gain picker's choices, Auto at the bottom
+            int current = 0;
+            for (int i = 0; i < GAIN_CHOICE_COUNT; i++) {
+                if (GAIN_CHOICES[i] == audioMicGainSetting()) current = i;
+            }
+            int next = constrain(current + (event == BTN_UP ? 1 : -1), 0, GAIN_CHOICE_COUNT - 1);
+            if (next != current) audioSetMicGain(GAIN_CHOICES[next]);
+        }
+        return; // and no sleep: light sleep would drop the microphone
     }
     if (event == BTN_POWER) {
         if (screen == SCREEN_TRANSFER) {
@@ -3010,7 +3059,7 @@ void uiTick() {
     }
 
     // Wi-Fi and the USB drive need the chip awake
-    bool busy = audioState() != AUDIO_IDLE || screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER;
+    bool busy = audioState() != AUDIO_IDLE || screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER || screen == SCREEN_USB_MIC;
     if (busy) lastActivity = millis();
     if (millis() - lastActivity > AUTO_SLEEP_MS) {
         Serial.printf("[ui] idle for %lu s, going to sleep\n", AUTO_SLEEP_MS / 1000);
@@ -3027,7 +3076,7 @@ static bool after(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
 
 bool uiReadyToNap(uint32_t since) {
     if (sleeping || overlay != OVERLAY_NONE || audioState() != AUDIO_IDLE) return false;
-    if (screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER) return false;
+    if (screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER || screen == SCREEN_USB_MIC) return false;
     if (screen == SCREEN_SPECTRUM && !spectrumResult(spectrumMoment)) return false; // still working it out
     uint32_t quiet = quietSince;
     // The display task must have looked at the screen state after the last change
@@ -3056,7 +3105,7 @@ uint32_t uiMsUntilNextChange() {
     return ms;
 }
 
-bool uiCanRecord() { return screen != SCREEN_CARD_READER; }
+bool uiCanRecord() { return screen != SCREEN_CARD_READER && screen != SCREEN_USB_MIC; }
 
 bool uiTakeSleepRequest() {
     bool requested = sleepRequested;

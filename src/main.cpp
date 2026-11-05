@@ -15,6 +15,7 @@
 #include "networks.h"
 #include "storage.h"
 #include "ui.h"
+#include "usbport.h"
 
 // How often the chip checks the PWR key while "asleep" on USB power
 static const uint32_t USB_POLL_MS = 50;
@@ -28,6 +29,7 @@ static uint32_t napTotalMs = 0, napCount = 0, wokeAt = 0;
 // checked after plugging in, which resets the board when the port is opened
 RTC_NOINIT_ATTR static uint32_t bootCount;
 RTC_NOINIT_ATTR static uint32_t lastUpMs, lastNapMs, lastNaps, lastSleepMs;
+RTC_NOINIT_ATTR static uint32_t resetHistory[4]; // reset reasons of the boots before this one, newest first
 static uint32_t sleepTotalMs = 0; // in sleep mode, on battery
 
 // Light sleep stops the USB clock and the host gives up on the port. Pulling
@@ -309,12 +311,21 @@ static void dumpNewestMoment() {
 
 void setup() {
     // Larger USB serial buffer so screenshot dumps arrive intact
+    usbPortRestoreAtBoot(); // the console, even after a crash in a USB mode
     Serial.setTxBufferSize(4096);
     DEV_Module_Init(); // e-paper GPIO setup + Serial.begin(115200)
     // Wait (up to 3 s) for a USB serial monitor so the first lines aren't lost
     while (!Serial && millis() < 3000) delay(10);
-    if (esp_reset_reason() == ESP_RST_POWERON) bootCount = lastUpMs = lastNapMs = lastNaps = lastSleepMs = 0;
-    Serial.printf("zvukopis starting (boot %lu, reset reason %d)\n", ++bootCount, esp_reset_reason());
+    if (esp_reset_reason() == ESP_RST_POWERON) {
+        bootCount = lastUpMs = lastNapMs = lastNaps = lastSleepMs = 0;
+        memset(resetHistory, 0, sizeof(resetHistory));
+    }
+    // The earlier reasons too: opening the serial port resets the board, so
+    // the reason of a crash in a USB mode (no console there) would be gone
+    Serial.printf("zvukopis starting (boot %lu, reset reason %d; before that %lu, %lu, %lu, %lu)\n", ++bootCount, esp_reset_reason(),
+                  resetHistory[0], resetHistory[1], resetHistory[2], resetHistory[3]);
+    memmove(&resetHistory[1], &resetHistory[0], sizeof(resetHistory) - sizeof(resetHistory[0]));
+    resetHistory[0] = esp_reset_reason();
     if (lastUpMs > 0 && lastNapMs + lastSleepMs <= lastUpMs) {
         Serial.printf("[power] previous boot: up %lu s, of which %lu s in sleep mode and %lu s light-sleeping "
                       "between presses (%lu naps)\n",

@@ -19,7 +19,8 @@ A recording is a *moment*: the sound of here and now. Moments are listed with
 the time they were taken, a waveform and a tag, and can be played back,
 browsed by day in a calendar, tagged, deleted, analysed (spectrogram and
 spectrum), downloaded over Wi-Fi and recorded on a schedule. There is also a
-small library: Markdown or text files on the card can be read on the screen.
+small library: Markdown or text files on the card can be read on the screen. Over USB, Zvukopis can also be a microphone for a computer or a tablet,
+with the gain on the side switch.
 
 ## Using it
 
@@ -40,7 +41,7 @@ is also on the project page, and it reads on the device (a copy sits in
   through four contrast levels.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
-  the web interface, clock sync, the USB card reader, formatting the card
+  the web interface, clock sync, the USB card reader, the USB microphone, formatting the card
   and resetting the settings (for handing the device on; the card stays).
 - **Quick record:** while asleep, hold the side switch in. The recording
   screen comes up and the recording starts right after it (the panel's
@@ -184,3 +185,4 @@ licences, listed below.
 - E-paper driver: Waveshare. ES8311 driver: Espressif (Apache 2.0).
   `WebServer`: the Arduino core for ESP32 (LGPL 2.1), two timeouts changed.
 - Web flasher: [ESP Web Tools](https://esphome.github.io/esp-web-tools/) (MIT).
+- Icons: [Lucide](https://lucide.dev) (ISC).

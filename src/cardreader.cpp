@@ -3,11 +3,13 @@
 #include <Arduino.h>
 #include <USB.h>
 #include <USBMSC.h>
-#include <soc/rtc_cntl_reg.h>
 
 #include "storage.h"
+#include "usbport.h"
 
-static USBMSC msc;
+// Made when the mode starts: the object's constructor already puts a drive
+// into the USB descriptor, which the microphone mode must not carry
+static USBMSC *msc = nullptr;
 static sdmmc_card_t *card = nullptr;
 static volatile bool ejected = false;
 
@@ -37,14 +39,15 @@ bool cardReaderStart() {
     Serial.flush();
     delay(50);
 
-    msc.vendorID("zvukopis");
-    msc.productID("SD card");
-    msc.productRevision("1.0");
-    msc.onRead(onRead);
-    msc.onWrite(onWrite);
-    msc.onStartStop(onStartStop);
-    msc.mediaPresent(true);
-    msc.begin(card->csd.capacity, card->csd.sector_size);
+    if (!msc) msc = new USBMSC();
+    msc->vendorID("zvukopis");
+    msc->productID("SD card");
+    msc->productRevision("1.0");
+    msc->onRead(onRead);
+    msc->onWrite(onWrite);
+    msc->onStartStop(onStartStop);
+    msc->mediaPresent(true);
+    msc->begin(card->csd.capacity, card->csd.sector_size);
     USB.productName("Zvukopis SD card");
     USB.manufacturerName("Zvukopis");
     USB.begin(); // takes the USB port over from the serial/JTAG controller
@@ -53,13 +56,4 @@ bool cardReaderStart() {
 
 bool cardReaderEjected() { return ejected; }
 
-void cardReaderLeave() {
-    // Hand the USB pins back to the serial/JTAG controller, as at power-up.
-    // These bits live in the RTC domain and survive the restart: the PHY
-    // selection goes back to the hardware default, and the pads stay enabled
-    // (with them off, the board was not on the bus at all after restarting).
-    CLEAR_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_HW_USB_PHY_SEL | RTC_CNTL_SW_USB_PHY_SEL);
-    SET_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG, RTC_CNTL_USB_PAD_ENABLE);
-    delay(100);
-    esp_restart();
-}
+void cardReaderLeave() { usbPortRestart(); }

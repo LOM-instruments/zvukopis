@@ -8,6 +8,7 @@
 #include "clock.h"
 #include "es8311.h"
 #include "storage.h"
+#include "usbmic.h"
 
 static const int I2S_MCK_PIN = 13;
 static const int I2S_BCK_PIN = 14;
@@ -74,6 +75,7 @@ enum CommandType : uint8_t {
     CMD_TAGS_ABOVE, // untag every moment whose slot is above arg
     CMD_FORMAT,
     CMD_GAIN,
+    CMD_USB_MIC,
 };
 
 struct Command {
@@ -621,6 +623,13 @@ static void handleCommand(const Command &cmd) {
         if (cmd.arg != GAIN_AUTO) gainNow = cmd.arg;
         if (running) applyGain(gainNow); // else when the codec next powers up
         break;
+    case CMD_USB_MIC:
+        if (state == AUDIO_PLAYING) stopPlayback();
+        if (state == AUDIO_IDLE) {
+            audioWake();
+            state = AUDIO_USB_MIC;
+        }
+        break;
     }
 }
 
@@ -841,6 +850,17 @@ static void audioTask(void *) {
             }
         } else if (state == AUDIO_SELF_TEST) {
             selfTestChunk(in, out, frames);
+        } else if (state == AUDIO_USB_MIC) {
+            static int16_t mono[CHUNK_FRAMES];
+            static bool watched = false;
+            if (!watched) {
+                watched = true;
+                usbMicWatch();
+            }
+            size_t n = frames - skip;
+            for (size_t i = 0; i < n; i++) mono[i] = in[2 * (skip + i)]; // ES8311 ADC is on the left slot
+            usbMicFeed(mono, n);
+            if (gainSetting == GAIN_AUTO) autoGain(in, frames, skip);
         }
 
         if (state != AUDIO_IDLE) idleSince = millis();
@@ -974,6 +994,7 @@ void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
 void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
 void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
+void audioStartUsbMic() { sendCommand(CMD_USB_MIC); }
 void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
 void audioClearTagsAbove(int count) { sendCommand(CMD_TAGS_ABOVE, count); }
 void audioSpeedHold(int direction) {

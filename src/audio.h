@@ -53,6 +53,7 @@ enum AudioState {
     AUDIO_PLAYING,
     AUDIO_SELF_TEST,
     AUDIO_FORMATTING, // the SD card is being formatted
+    AUDIO_USB_MIC,    // the mic streams to the computer over USB (usbmic.h), until a restart
 };
 
 // Requires Wire to be started on the PMU/codec I2C bus (boardPowerInit does that)
@@ -76,6 +77,7 @@ void audioSpeedTap();
 void audioFormatCard();
 int audioFormatResult(); // 0 none yet, 1 done, -1 failed
 void audioSelfTest(); // speaker -> mic loopback check, results on serial
+void audioStartUsbMic(); // the mic's samples go to usbMicFeed() from now on; gain changes still apply
 // The codec powers down by itself after 2 s idle and back up on the next
 // record or play request.
 // For sleep: suspend finishes any recording, stops playback, powers the codec
