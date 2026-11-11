@@ -171,8 +171,12 @@ static void nap(uint32_t ms) {
 // wakes it within a few ms. A timer wakes it for the clock's next minute.
 // Not on USB power, where it would cut off the serial port.
 static void napIfIdle() {
-    if (!audioAsleep() || clockSyncing() || !buttonsIdle() || !uiReadyToNap(wokeAt)) return;
     if (onUsbPower()) return;
+    if (!audioAsleep() || clockSyncing() || !buttonsIdle()) return;
+    // The display is asked last: its answer can take a few milliseconds, and
+    // a key or a request that arrived meanwhile must still stop the nap
+    if (!uiReadyToNap(wokeAt)) return;
+    if (!audioAsleep() || clockSyncing() || !buttonsIdle()) return;
     uint32_t ms = min(uiMsUntilNextChange(), msUntilSchedule());
     if (ms < MIN_NAP_MS) return;
     nap(ms);
