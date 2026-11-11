@@ -62,6 +62,9 @@ static const float SPEED_RETURN[RAMP_COUNT] = {0.92f, 0.85f, 0.75f}; // fraction
 static const float SCRUB_SPEED = 0.25f;
 static const float SCRUB_STEP[RAMP_COUNT] = {0.03f, 0.05f, 0.09f}; // per chunk: normal is 0.16 s from +0.25 to -0.25
 
+// Play, delete and tag name their moment by its number, never by its place in
+// the list: the place is found when the request is carried out, since the
+// list may have shifted by then (a recording saved, another moment deleted)
 enum CommandType : uint8_t {
     CMD_RECORD_START,
     CMD_RECORD_STOP,
@@ -85,6 +88,7 @@ struct Command {
 };
 
 static QueueHandle_t commandQueue;
+static volatile bool ready = false; // the audio task runs: without it nobody would take the requests
 
 // The moment list is only modified by the audio task; the lock keeps readers on
 // other tasks from seeing it half-updated
@@ -111,6 +115,8 @@ static time_t recordStartedAt = 0;
 static uint16_t recordStartedMs = 0;
 
 static volatile AudioState state = AUDIO_IDLE;
+static volatile AudioNotice notice = AUDIO_NOTICE_NONE;
+static volatile uint32_t noticeSince = 0;
 static volatile int playingIndex = -1;
 static volatile double playPos = 0; // in samples; fractional with varispeed
 static volatile float speed = 1;
@@ -125,12 +131,17 @@ static int agcChanges = 0;
 // loads the ring; the window [winStart, winEnd) is what's loaded, in samples
 // of the moment. The reader moves one end, then the other, so that the two
 // read separately by the audio task always bound a loaded range.
+// The audio task opens the file and hands it over in nextFile (under
+// momentLock): looking a file up by name is what goes deepest into the card
+// code, deeper still when the card doesn't answer and the driver reports it,
+// and the audio task's stack has the room for that. The reader then only
+// seeks and reads, well within its own.
 static int16_t *ring = nullptr;                 // RING_SAMPLES, in PSRAM
 static volatile size_t winStart = 0, winEnd = 0;
 static volatile size_t fileEnd = 0;             // the moment's length, less if the file is shorter
 static volatile int readerMoment = -1;          // the index the reader serves, -1 none
 static volatile uint32_t readerSeq = 0;         // bumped on every start or stop
-static volatile bool readerFailed = false;      // the file didn't open
+static File nextFile;                           // opened for the reader, not yet taken by it
 static File playFile;
 static TaskHandle_t readerTaskHandle = nullptr;
 static SemaphoreHandle_t firstBlock;            // given by the reader once a new playback has sound
@@ -177,6 +188,7 @@ static const size_t SETTLE_SAMPLES = SAMPLE_RATE / 10;
 static size_t settleLeft = 0; // samples still to drop from the start of a recording
 
 static bool codecInit();
+static bool recheckCard();
 
 // Nearest gain the codec can do: 3 dB steps up to 30, then 6 dB steps
 static int gainStepUp(int db) { return db < 30 ? db + 3 : db + 6; }
@@ -240,15 +252,27 @@ static void autoGain(const int16_t *in, size_t frames, size_t skip) {
     }
 }
 
-static void audioWake() {
-    if (running) return;
+static void setNotice(AudioNotice what) {
+    noticeSince = millis();
+    notice = what;
+}
+
+// False when the codec doesn't answer: what it would deliver then is not a
+// recording, so nothing is started
+static bool audioWake() {
+    if (running) return true;
     uint32_t start = millis();
     i2s_zero_dma_buffer(I2S_NUM_0);
     i2s_start(I2S_NUM_0);
-    if (!codecInit()) Serial.println("ES8311 codec init failed");
+    if (!codecInit() && !codecInit()) { // twice: one answer lost on the I2C bus should not cost a recording
+        Serial.println("ES8311 codec init failed");
+        i2s_stop(I2S_NUM_0);
+        return false;
+    }
     running = true;
     settleLeft = SETTLE_SAMPLES;
     Serial.printf("[audio] codec on in %lu ms\n", millis() - start);
+    return true;
 }
 
 static void audioStandby() {
@@ -277,38 +301,91 @@ static size_t recordableSamples() {
     return (size_t)min((uint64_t)ram, samplesLeft());
 }
 
-static void startRecording(uint32_t seconds) {
+static bool fileRefused = false; // by prepareRecording: there is a card, but it gave no file
+static bool freshStart = false;  // a recording was set up since the audio task last looked
+
+// Everything a recording needs, before a sample of it is taken: the room, the
+// buffers and, with a card, the file and the task that writes it. Making the
+// file takes the card tens of milliseconds, longer for the first of a day;
+// done between two chunks of the recording, that much sound went missing.
+static bool prepareRecording(uint32_t seconds) {
+    fileRefused = false;
     recordLimit = (size_t)min((uint64_t)seconds * SAMPLE_RATE, (uint64_t)recordableSamples());
     if (recordLimit < MIN_MOMENT_SAMPLES) {
         Serial.println("No room for another recording");
-        return;
+        return false;
     }
     streamingRecord = storageAvailable();
-    if (fineTargetHalfDb > (int)ceilf(fineHalfDb)) setFine((int)ceilf(fineHalfDb), false); // a climb in progress holds
-    streamMoment = {}; // the previous recording's file name must not linger: a stop before the
-                       // first sample arrives would otherwise delete that file
-    if (streamingRecord) {
-        size_t chunks = recordLimit / CHUNK_FRAMES + 1;
-        envelopeChunks = (chunks + ENVELOPE_MAX - 1) / ENVELOPE_MAX;
-        free(envelope);
-        envelope = (uint16_t *)ps_calloc(chunks / envelopeChunks + 1, sizeof(uint16_t));
-        if (!envelope) {
-            Serial.println("Can't allocate the recording envelope");
-            return;
-        }
-    } else {
+    streamMoment = {};
+    if (!streamingRecord) {
         scratch = (int16_t *)ps_malloc(recordLimit * sizeof(int16_t));
-        if (!scratch) {
-            Serial.println("Can't allocate the recording buffer");
-            return;
+        if (!scratch) Serial.println("Can't allocate the recording buffer");
+        return scratch != nullptr;
+    }
+    size_t chunks = recordLimit / CHUNK_FRAMES + 1;
+    envelopeChunks = (chunks + ENVELOPE_MAX - 1) / ENVELOPE_MAX;
+    free(envelope);
+    envelope = (uint16_t *)ps_calloc(chunks / envelopeChunks + 1, sizeof(uint16_t));
+    if (!envelope) {
+        Serial.println("Can't allocate the recording envelope");
+        streamingRecord = false;
+        return false;
+    }
+    // The file takes its name from the time now. The exact start is known
+    // with the first sample, and goes into the header when the recording ends.
+    streamMoment.number = nextMomentNumber;
+    streamMoment.sampleRate = SAMPLE_RATE;
+    streamMoment.micGainDb = gainNow;
+    streamMoment.micGainAuto = gainSetting == GAIN_AUTO;
+    if (clockValid()) {
+        timeval tv;
+        gettimeofday(&tv, nullptr);
+        streamMoment.recordedAt = tv.tv_sec;
+        streamMoment.startMs = tv.tv_usec / 1000;
+    }
+    if (storageStreamBegin(streamMoment)) return true;
+    Serial.println("Can't record onto the SD card");
+    free(envelope);
+    envelope = nullptr;
+    streamingRecord = false;
+    fileRefused = true;
+    return false;
+}
+
+// The microphone went on delivering while the card made the file. That sound
+// is dropped (it counts as settling time), so that the next chunk read is the
+// present and the start time taken from it is right.
+static void dropBacklog() {
+    int16_t stale[256];
+    size_t got, frames = 0;
+    do {
+        got = 0;
+        i2s_read(I2S_NUM_0, stale, sizeof(stale), &got, 0);
+        frames += got / 4;
+    } while (got == sizeof(stale));
+    settleLeft -= min(settleLeft, frames);
+}
+
+// False when there is no room, or nothing to record into
+static bool startRecording(uint32_t seconds) {
+    if (fineTargetHalfDb > (int)ceilf(fineHalfDb)) setFine((int)ceilf(fineHalfDb), false); // a climb in progress holds
+    if (!prepareRecording(seconds)) {
+        // A card that gives no file may have been taken out and put back,
+        // which only asking it shows. Mounted afresh, it takes the recording
+        // after all; if it is gone, memory does.
+        if (!fileRefused) return false;
+        if (!recheckCard() || !prepareRecording(seconds)) {
+            if (fileRefused) setNotice(AUDIO_NOTICE_NOT_SAVED);
+            return false;
         }
     }
-    scratchLength = 0;
     agcQuietChunks = agcChanges = 0;
     recordStartedAt = 0; // set when the first sample arrives
     recordStartedMs = 0;
-    state = AUDIO_RECORDING;
+    dropBacklog();
+    freshStart = true;
     Serial.printf("Recording started at %lu ms\n", millis());
+    return true;
 }
 
 // Playback gain and list waveform
@@ -340,6 +417,110 @@ static void analyseEnvelope(Moment &moment, size_t samples) {
     }
 }
 
+// Playback gain and list waveform of a moment on the card that has none yet:
+// a recording that was cut off, found again when the card was read. A short
+// one is read whole. Of a long one, a stretch at the start of each waveform
+// column, for as long as FILE_ANALYSIS_MS lasts; the columns that time
+// doesn't reach are drawn flat, at the level of the others. The gain is only
+// raised when every sample was seen, since a peak that wasn't would clip.
+// False when nothing could be read.
+static const size_t FILE_ANALYSIS_STRETCH = 8192; // samples
+static const uint32_t FILE_ANALYSIS_MS = 1500;    // per file: this runs at start-up, before the first screen
+
+static bool analyseFile(Moment &moment) {
+    int16_t *stretch = (int16_t *)ps_malloc(FILE_ANALYSIS_STRETCH * sizeof(int16_t));
+    File f = storageOpenMoment(moment);
+    uint16_t peaks[WAVEFORM_BINS] = {};
+    int peak = 1, bins = 0;
+    bool whole = true;
+    uint32_t start = millis();
+    while (stretch && f && bins < WAVEFORM_BINS && millis() - start < FILE_ANALYSIS_MS) {
+        size_t from = (uint64_t)moment.length * bins / WAVEFORM_BINS, to = (uint64_t)moment.length * (bins + 1) / WAVEFORM_BINS;
+        size_t n = min(to - from, FILE_ANALYSIS_STRETCH);
+        if (!f.seek(moment.dataOffset + from * sizeof(int16_t))) break;
+        n = f.read((uint8_t *)stretch, n * sizeof(int16_t)) / sizeof(int16_t);
+        if (n < to - from) whole = false;
+        int binPeak = 0;
+        for (size_t i = 0; i < n; i++) binPeak = max(binPeak, abs((int)stretch[i]));
+        peaks[bins++] = binPeak;
+        peak = max(peak, binPeak);
+    }
+    if (f) f.close();
+    free(stretch);
+    if (bins == 0) return false;
+    moment.gain = whole && bins == WAVEFORM_BINS ? min(MAX_PLAYBACK_GAIN, 29000.0f / peak) : 1;
+    uint32_t sum = 0;
+    for (int b = 0; b < bins; b++) sum += peaks[b];
+    for (int b = bins; b < WAVEFORM_BINS; b++) peaks[b] = sum / bins;
+    for (int b = 0; b < WAVEFORM_BINS; b++) moment.waveform[b] = (uint8_t)(255 * sqrtf((float)peaks[b] / peak));
+    return true;
+}
+
+// The card's moments into the list, behind those held in memory: at start-up,
+// and again when a card has been mounted afresh or has gone
+static void loadCardMoments() {
+    xSemaphoreTake(momentLock, portMAX_DELAY);
+    int kept = 0;
+    for (int i = 0; i < momentTotal; i++) {
+        if (moments[i].samples) moments[kept++] = moments[i];
+    }
+    momentTotal = kept;
+    listVersion++;
+    xSemaphoreGive(momentLock);
+
+    // Read in behind the end of the list, where no other task looks: with
+    // hundreds of files on the card this takes seconds
+    Moment *fresh = moments + kept;
+    int loaded = storageLoadMoments(fresh, MAX_MOMENTS - kept);
+    for (int i = 0; i < loaded; i++) {
+        if (fresh[i].gain != 0) continue;
+        // A recording that was cut off: what a finished one gets at its end is worked out now, and kept in its file
+        if (analyseFile(fresh[i])) storageUpdateMoment(fresh[i]);
+        else fresh[i].gain = 1; // plays as it was recorded; the next start tries again
+    }
+
+    xSemaphoreTake(momentLock, portMAX_DELAY);
+    momentTotal = kept + loaded;
+    auto newestFirst = [](const void *a, const void *b) { return ((const Moment *)b)->number - ((const Moment *)a)->number; };
+    qsort(moments, momentTotal, sizeof(Moment), newestFirst);
+    // Files numbered by a firmware that didn't see the others (a different
+    // sample rate, once) can share a number; the later ones get new ones,
+    // written into their files so the numbers stay put from then on
+    int highest = momentTotal > 0 ? moments[0].number : 0;
+    int previousOriginal = highest; // the number the entry before had on the card
+    bool renumbered = false;
+    for (int i = 1; i < momentTotal; i++) {
+        int original = moments[i].number;
+        if (original == previousOriginal) {
+            Serial.printf("Moment %d twice on the card: %s/%s becomes Moment %d\n", moments[i].number, moments[i].folder, moments[i].fileName, highest + 1);
+            moments[i].number = ++highest;
+            if (!moments[i].samples && !storageUpdateMoment(moments[i])) Serial.println("  (couldn't write the new number to the card)");
+            renumbered = true;
+        }
+        previousOriginal = original;
+    }
+    if (renumbered) qsort(moments, momentTotal, sizeof(Moment), newestFirst);
+    if (momentTotal > 0) nextMomentNumber = max(nextMomentNumber, moments[0].number + 1);
+    listVersion++;
+    xSemaphoreGive(momentLock);
+}
+
+static void stopPlayback();
+
+// Asks the card whether it is still there, or has come (storageRecheck).
+// When that has changed the list is read again, and this is true.
+static bool recheckCard() {
+    bool had = storageAvailable();
+    if (state == AUDIO_PLAYING) stopPlayback(); // the reader lets go of its file before the card is started again
+    if (!storageRecheck()) return false;
+    loadCardMoments();
+    if (had && !storageAvailable()) {
+        Serial.println("[audio] the SD card is gone, and its moments are off the list");
+        setNotice(AUDIO_NOTICE_NO_CARD);
+    }
+    return true;
+}
+
 static bool cancelWanted = false; // discard what was recorded
 
 static void finishRecording() {
@@ -352,28 +533,43 @@ static void finishRecording() {
         moment.micGainDb = gainNow;
         moment.micGainAuto = gainSetting == GAIN_AUTO;
         analyseEnvelope(moment, length);
-        bool ok = storageStreamEnd(moment); // sets length and dataOffset
+        bool ok = storageStreamEnd(moment); // sets length and dataOffset; false when nothing of it is on the card
+        bool cardFailed = storageStreamFailed();
         free(envelope);
         envelope = nullptr;
         streamingRecord = false;
         if (!ok || moment.length < MIN_MOMENT_SAMPLES || cancelWanted) {
-            if (moment.fileName[0]) storageDeleteMoment(moment);
+            if (ok) storageDeleteMoment(moment);
             state = AUDIO_IDLE;
-            Serial.println(cancelWanted ? "Recording cancelled" : ok ? "Recording too short, discarded" : "Recording lost: the SD card didn't take it");
-            return;
+            if (cancelWanted) {
+                Serial.println("Recording cancelled");
+            } else if (!cardFailed) {
+                Serial.println("Recording too short, discarded");
+            } else {
+                Serial.println("Recording lost: the SD card didn't take it");
+                setNotice(AUDIO_NOTICE_NOT_SAVED);
+            }
+        } else {
+            nextMomentNumber = moment.number + 1;
+            xSemaphoreTake(momentLock, portMAX_DELAY);
+            memmove(&moments[1], &moments[0], momentTotal * sizeof(Moment));
+            moments[0] = moment;
+            momentTotal++;
+            listVersion++;
+            xSemaphoreGive(momentLock);
+            state = AUDIO_IDLE;
+            Serial.printf("Saved Moment %d to SD card as %s/%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s, %u KB RAM free\n",
+                          moment.number, moment.folder, moment.fileName, millis() - start, (float)moment.length / SAMPLE_RATE,
+                          moment.gain, gainNow, gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "",
+                          (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+            if (cardFailed) {
+                Serial.println("[audio] the SD card stopped taking the recording: it ends there, and what was written is kept");
+                setNotice(AUDIO_NOTICE_CARD_FAILED);
+            }
         }
-        nextMomentNumber = moment.number + 1;
-        xSemaphoreTake(momentLock, portMAX_DELAY);
-        memmove(&moments[1], &moments[0], momentTotal * sizeof(Moment));
-        moments[0] = moment;
-        momentTotal++;
-        listVersion++;
-        xSemaphoreGive(momentLock);
-        state = AUDIO_IDLE;
-        Serial.printf("Saved Moment %d to SD card as %s/%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s, %u KB RAM free\n",
-                      moment.number, moment.folder, moment.fileName, millis() - start, (float)moment.length / SAMPLE_RATE,
-                      moment.gain, gainNow, gainSetting == GAIN_AUTO ? (agcChanges ? " (auto, adjusted)" : " (auto)") : "",
-                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+        // A card that failed may be full, or out of its slot: asked now, so
+        // that the list never shows a card that doesn't answer
+        if (cardFailed) recheckCard();
         return;
     }
     if (length < MIN_MOMENT_SAMPLES) {
@@ -431,16 +627,26 @@ static void startPlayback(int index) {
     underruns = 0;
     fileEnd = moments[index].length;
     if (!moments[index].samples) {
-        // The reader opens the file, resets the window and loads the first half second; wait for it
+        int number = moments[index].number;
+        File file = readerTaskHandle ? storageOpenMoment(moments[index]) : File();
+        if (!file) {
+            Serial.printf("Can't open Moment %d on the SD card\n", number);
+            recheckCard(); // taken out and put back, perhaps: the list is read again then
+            return;
+        }
+        // The reader takes the file, resets the window and loads the first half second; wait for it
         xSemaphoreTake(firstBlock, 0);
-        readerFailed = false;
+        xSemaphoreTake(momentLock, portMAX_DELAY);
+        nextFile = file;
+        file = File();
+        xSemaphoreGive(momentLock);
         readerMoment = index;
         readerSeq++;
         xTaskNotifyGive(readerTaskHandle);
-        if (xSemaphoreTake(firstBlock, pdMS_TO_TICKS(400)) != pdTRUE || readerFailed) {
-            Serial.printf("Can't open Moment %d on the SD card\n", moments[index].number);
-            readerMoment = -1;
-            readerSeq++;
+        if (xSemaphoreTake(firstBlock, pdMS_TO_TICKS(400)) != pdTRUE) {
+            Serial.printf("Can't read Moment %d from the SD card\n", number);
+            stopPlayback(); // the reader lets go of the file
+            recheckCard();
             return;
         }
     }
@@ -454,12 +660,14 @@ static void stopPlayback() {
     digitalWrite(PA_ENABLE_PIN, LOW);
     if (underruns) Serial.printf("[play] %lu chunks waited on the card\n", (unsigned long)underruns);
     bool onCard = readerMoment >= 0;
-    xSemaphoreTake(readerIdle, 0);
-    readerMoment = -1;
-    readerSeq++;
-    xTaskNotifyGive(readerTaskHandle);
-    if (onCard && xSemaphoreTake(readerIdle, pdMS_TO_TICKS(600)) != pdTRUE) {
-        Serial.println("[play] the reader didn't let go of the file"); // a block read takes tens of ms; this shouldn't happen
+    if (readerTaskHandle) { // without the reader nothing plays from the card, and there is nobody to tell
+        xSemaphoreTake(readerIdle, 0);
+        readerMoment = -1;
+        readerSeq++;
+        xTaskNotifyGive(readerTaskHandle);
+        if (onCard && xSemaphoreTake(readerIdle, pdMS_TO_TICKS(600)) != pdTRUE) {
+            Serial.println("[play] the reader didn't let go of the file"); // a block read takes tens of ms; this shouldn't happen
+        }
     }
     playingIndex = -1;
     state = AUDIO_IDLE;
@@ -469,8 +677,15 @@ static void deleteMoment(int index) {
     if (index < 0 || index >= momentTotal) return;
     if (playingIndex == index) stopPlayback();
     int number = moments[index].number;
-    if (moments[index].samples) free(moments[index].samples);
-    else if (!storageDeleteMoment(moments[index])) Serial.printf("Couldn't delete Moment %d from the SD card\n", number);
+    if (moments[index].samples) {
+        free(moments[index].samples);
+    } else if (!storageDeleteMoment(moments[index])) {
+        // The file is still there, or the card no longer answers: the moment
+        // is not gone either way, and the list must not say that it is
+        Serial.printf("Couldn't delete Moment %d from the SD card\n", number);
+        recheckCard();
+        return;
+    }
 
     xSemaphoreTake(momentLock, portMAX_DELAY);
     memmove(&moments[index], &moments[index + 1], (momentTotal - index - 1) * sizeof(Moment));
@@ -492,6 +707,7 @@ static void tagMoment(int index, int tag) {
         Moment updated = moments[index];
         if (!storageUpdateMoment(updated)) {
             Serial.printf("Couldn't save the tag of Moment %d to the SD card\n", moments[index].number);
+            recheckCard(); // if the card was changed, the list is read again and shows what its files say
         } else if (strcmp(updated.fileName, moments[index].fileName) != 0) {
             xSemaphoreTake(momentLock, portMAX_DELAY);
             strlcpy(moments[index].fileName, updated.fileName, sizeof(moments[index].fileName));
@@ -562,13 +778,47 @@ static void selfTestChunk(const int16_t *in, int16_t *out, size_t frames) {
     }
 }
 
+// Where the moment with this number is in the list now, -1 if it isn't
+static int indexOfNumber(int number) {
+    for (int i = 0; i < momentTotal; i++) {
+        if (moments[i].number == number) return i;
+    }
+    return -1;
+}
+
 static void handleCommand(const Command &cmd) {
     switch (cmd.type) {
     case CMD_RECORD_START:
         if (state == AUDIO_PLAYING) stopPlayback();
         if (state == AUDIO_IDLE) {
-            audioWake();
-            startRecording(cmd.arg > 0 ? cmd.arg : MAX_RECORDING_SECONDS);
+            uint32_t seconds = cmd.arg > 0 ? cmd.arg : MAX_RECORDING_SECONDS;
+            setNotice(AUDIO_NOTICE_NONE);
+            // With the codec off, time has passed: enough for the card to have been
+            // taken out or put in. It is asked once, here or below.
+            bool cardAsked = false;
+            if (recordableSamples() < MIN_MOMENT_SAMPLES) {
+                // No room as far as is known, which only another card could change. Said
+                // before the state changes, so that the recording screen doesn't flash up.
+                if (!running) {
+                    recheckCard();
+                    cardAsked = true;
+                }
+                if (recordableSamples() < MIN_MOMENT_SAMPLES) {
+                    Serial.println("No room for another recording");
+                    break;
+                }
+            }
+            // Recording from here on, for everyone who asks: the schedule in main.cpp gives
+            // a recording it requested one second to show and takes it as over if it doesn't,
+            // and getting the card ready can take longer than that. The recording screen is
+            // drawn once, at this change, with the length and limit as they are now.
+            scratchLength = 0;
+            recordLimit = (size_t)min((uint64_t)seconds * SAMPLE_RATE, (uint64_t)recordableSamples());
+            state = AUDIO_RECORDING;
+            if (!running && !cardAsked) recheckCard();
+            bool awake = audioWake();
+            if (!awake) setNotice(AUDIO_NOTICE_NOT_SAVED);
+            if (!awake || !startRecording(seconds)) state = AUDIO_IDLE;
         }
         break;
     case CMD_RECORD_STOP:
@@ -584,21 +834,21 @@ static void handleCommand(const Command &cmd) {
     case CMD_PLAY:
         if (state == AUDIO_PLAYING) stopPlayback();
         if (state == AUDIO_IDLE) {
-            audioWake();
-            startPlayback(cmd.arg);
+            if (!running) recheckCard(); // as for a recording
+            if (audioWake()) startPlayback(indexOfNumber(cmd.arg));
         }
         break;
     case CMD_STOP_PLAYBACK:
         if (state == AUDIO_PLAYING) stopPlayback();
         break;
     case CMD_DELETE:
-        deleteMoment(cmd.arg);
+        // Taking a file off the card keeps this task busy for longer than
+        // the microphone's buffers hold: the recording would lose that sound
+        if (state == AUDIO_RECORDING) Serial.printf("[audio] Moment %d is not deleted while a recording runs\n", cmd.arg);
+        else deleteMoment(indexOfNumber(cmd.arg));
         break;
     case CMD_SELF_TEST:
-        if (state == AUDIO_IDLE) {
-            audioWake();
-            startSelfTest();
-        }
+        if (state == AUDIO_IDLE && audioWake()) startSelfTest();
         break;
     case CMD_SUSPEND:
         if (state == AUDIO_RECORDING) finishRecording();
@@ -608,7 +858,8 @@ static void handleCommand(const Command &cmd) {
         xSemaphoreGive(suspendDone);
         break;
     case CMD_TAG:
-        tagMoment(cmd.arg, cmd.arg2);
+        if (state == AUDIO_RECORDING) Serial.printf("[audio] Moment %d is not tagged while a recording runs\n", cmd.arg); // as for deleting
+        else tagMoment(indexOfNumber(cmd.arg), cmd.arg2);
         break;
     case CMD_TAGS_ABOVE: // a removed category: its moments lose the tag, files renamed
         for (int i = 0; i < momentTotal; i++) {
@@ -625,10 +876,7 @@ static void handleCommand(const Command &cmd) {
         break;
     case CMD_USB_MIC:
         if (state == AUDIO_PLAYING) stopPlayback();
-        if (state == AUDIO_IDLE) {
-            audioWake();
-            state = AUDIO_USB_MIC;
-        }
+        if (state == AUDIO_IDLE && audioWake()) state = AUDIO_USB_MIC;
         break;
     }
 }
@@ -648,8 +896,8 @@ static int16_t sampleAt(const Moment &moment, size_t i, bool &missed) {
 // --- The reader task: keeps the ring loaded around the playhead ---
 
 // `want` samples from `from` into the ring, which may wrap; how many came
-static size_t readIntoRing(const Moment &moment, size_t from, size_t want) {
-    if (!playFile.seek(moment.dataOffset + from * sizeof(int16_t))) return 0;
+static size_t readIntoRing(uint32_t dataOffset, size_t from, size_t want) {
+    if (!playFile.seek(dataOffset + from * sizeof(int16_t))) return 0;
     size_t off = from % RING_SAMPLES, first = min(want, RING_SAMPLES - off);
     size_t n = playFile.read((uint8_t *)(ring + off), first * sizeof(int16_t)) / sizeof(int16_t);
     if (n < first || want == first) return n;
@@ -659,7 +907,7 @@ static size_t readIntoRing(const Moment &moment, size_t from, size_t want) {
 static void readerTask(void *) {
     int current = -1;
     uint32_t seq = 0;
-    Moment moment = {}; // its own copy: the list may shift under it
+    uint32_t dataOffset = 0; // of the moment served: its own copy, since the list may shift under it
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
         uint32_t s = readerSeq;
@@ -667,19 +915,20 @@ static void readerTask(void *) {
             seq = s;
             if (playFile) playFile.close();
             current = readerMoment;
-            if (current >= 0) {
-                xSemaphoreTake(momentLock, portMAX_DELAY);
-                moment = moments[current];
-                xSemaphoreGive(momentLock);
+            File handed;
+            xSemaphoreTake(momentLock, portMAX_DELAY);
+            if (current >= 0) dataOffset = moments[current].dataOffset;
+            handed = nextFile;
+            nextFile = File();
+            xSemaphoreGive(momentLock);
+            if (current >= 0 && handed) {
+                playFile = handed;
                 winStart = winEnd = 0;
-                playFile = storageOpenMoment(moment);
-                if (!playFile) {
-                    readerFailed = true;
-                    xSemaphoreGive(firstBlock);
-                    current = -1;
-                }
+            } else {
+                if (handed) handed.close(); // opened for a start that was given up since
+                current = -1;
+                xSemaphoreGive(readerIdle); // the file is let go of
             }
-            if (current < 0) xSemaphoreGive(readerIdle); // the file is let go of
         }
         if (current < 0) continue;
         double pos = playPos;
@@ -694,7 +943,7 @@ static void readerTask(void *) {
         if (we < end && we < p + ahead) {
             size_t want = min(READ_BLOCK, end - we);
             if (we + want > ws + RING_SAMPLES) winStart = we + want - RING_SAMPLES; // the back is overwritten: let go of it first
-            size_t n = readIntoRing(moment, we, want);
+            size_t n = readIntoRing(dataOffset, we, want);
             if (readerSeq != seq) continue; // the playback changed under the read: nothing of it counts
             if (n < want) fileEnd = we + n; // shorter than its header says
             winEnd = we + n;
@@ -705,7 +954,7 @@ static void readerTask(void *) {
         if (sp < 0 && ws > 0 && ws + AHEAD_SAMPLES > p) {
             size_t want = min(READ_BLOCK, ws), from = ws - want;
             if (we > from + RING_SAMPLES) winEnd = from + RING_SAMPLES; // the front goes first
-            size_t n = readIntoRing(moment, from, want);
+            size_t n = readIntoRing(dataOffset, from, want);
             if (readerSeq != seq) continue;
             if (n == want) winStart = from;
         }
@@ -794,7 +1043,9 @@ static void audioTask(void *) {
         i2s_read(I2S_NUM_0, in, sizeof(in), &bytesRead, portMAX_DELAY);
         size_t frames = bytesRead / 4;
 
+        freshStart = false;
         while (xQueueReceive(commandQueue, &cmd, 0) == pdTRUE) handleCommand(cmd);
+        if (freshStart) continue; // the chunk in hand is from before the recording was set up: it starts with the next
 
         size_t skip = min(frames, settleLeft);
         settleLeft -= skip;
@@ -807,21 +1058,12 @@ static void audioTask(void *) {
                 int64_t us = (int64_t)tv.tv_sec * 1000000 + tv.tv_usec - (int64_t)(frames - skip) * 1000000 / SAMPLE_RATE;
                 recordStartedAt = us / 1000000;
                 recordStartedMs = us / 1000 % 1000;
-            }
-            if (streamingRecord) {
-                if (scratchLength == 0 && n > 0) {
-                    streamMoment = {};
-                    streamMoment.number = nextMomentNumber;
-                    streamMoment.sampleRate = SAMPLE_RATE;
+                if (streamMoment.recordedAt) { // a file on the card, named by the clock a moment ago: it gets the exact time at its end
                     streamMoment.recordedAt = recordStartedAt;
                     streamMoment.startMs = recordStartedMs;
-                    if (!storageStreamBegin(streamMoment)) {
-                        Serial.println("Can't record onto the SD card");
-                        streamMoment.fileName[0] = 0;
-                        finishRecording(); // discards it
-                        continue;
-                    }
                 }
+            }
+            if (streamingRecord) {
                 static int16_t mono[CHUNK_FRAMES];
                 int chunkPeak = 0;
                 for (size_t i = 0; i < n; i++) {
@@ -838,7 +1080,8 @@ static void audioTask(void *) {
             }
             scratchLength += n;
             if (gainSetting == GAIN_AUTO) autoGain(in, skip + n, skip);
-            if (scratchLength >= recordLimit) finishRecording();
+            // At its limit, or as soon as the card has stopped taking it: nothing after that would be kept
+            if (scratchLength >= recordLimit || (streamingRecord && storageStreamFailed())) finishRecording();
         } else if (state == AUDIO_PLAYING) {
             const Moment &moment = moments[playingIndex];
             size_t n = playbackChunk(moment, out, CHUNK_FRAMES);
@@ -936,74 +1179,79 @@ bool audioInit() {
     pinMode(PA_ENABLE_PIN, OUTPUT);
     digitalWrite(PA_ENABLE_PIN, LOW);
 
-    if (storageInit()) {
-        momentTotal = storageLoadMoments(moments, MAX_MOMENTS);
-        auto newestFirst = [](const void *a, const void *b) { return ((const Moment *)b)->number - ((const Moment *)a)->number; };
-        qsort(moments, momentTotal, sizeof(Moment), newestFirst);
-        // Files numbered by a firmware that didn't see the others (a different
-        // sample rate, once) can share a number; the later ones get new ones,
-        // written into their files so the numbers stay put from then on
-        int highest = momentTotal > 0 ? moments[0].number : 0;
-        int previousOriginal = highest; // the number the entry before had on the card
-        bool renumbered = false;
-        for (int i = 1; i < momentTotal; i++) {
-            int original = moments[i].number;
-            if (original == previousOriginal) {
-                Serial.printf("Moment %d twice on the card: %s/%s becomes Moment %d\n", moments[i].number, moments[i].folder, moments[i].fileName, highest + 1);
-                moments[i].number = ++highest;
-                if (!storageUpdateMoment(moments[i])) Serial.println("  (couldn't write the new number to the card)");
-                renumbered = true;
-            }
-            previousOriginal = original;
-        }
-        if (renumbered) qsort(moments, momentTotal, sizeof(Moment), newestFirst);
-        if (momentTotal > 0) nextMomentNumber = moments[0].number + 1;
-    }
+    if (storageInit()) loadCardMoments();
 
     // Start I2S first so the codec sees MCLK while it is configured
     if (!i2sInit()) {
         Serial.println("I2S init failed");
         return false;
     }
-    if (!codecInit()) {
+    if (!codecInit() && !codecInit()) {
         Serial.println("ES8311 codec init failed");
         return false;
     }
     running = true;
     idleSince = millis();
-    // 8 KB: saving builds the WAV header and card paths on this stack, and the
-    // card's long-file-name code adds its own buffers
-    xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 5, NULL, 0);
     ring = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
     firstBlock = xSemaphoreCreateBinary();
     readerIdle = xSemaphoreCreateBinary();
-    if (!ring) Serial.println("Can't allocate the playback ring");
-    else xTaskCreatePinnedToCore(readerTask, "reader", 4096, NULL, 2, &readerTaskHandle, 1); // core 1, with the SD writer
+    // The reader only seeks and reads (see nextFile), which leaves about 1 KB
+    // of these 4 KB free even while the card driver reports an error
+    if (!ring || !firstBlock || !readerIdle ||
+        xTaskCreatePinnedToCore(readerTask, "reader", 4096, NULL, 2, &readerTaskHandle, 1) != pdPASS) { // core 1, with the SD writer
+        readerTaskHandle = nullptr;
+        Serial.println("Can't set up playback from the SD card");
+    }
+    // 8 KB: saving builds the WAV header and card paths on this stack, and the
+    // card's long-file-name code adds its own buffers
+    if (!commandQueue || !suspendDone || xTaskCreatePinnedToCore(audioTask, "audio", 8192, NULL, 5, NULL, 0) != pdPASS) {
+        Serial.println("Can't start the audio task");
+        audioStandby(); // nobody will use the codec
+        return false;
+    }
+    ready = true;
     return true;
 }
 
+// Without the audio task a request would sit in the queue for good, and keep
+// the chip from its light sleep: it is dropped
 static void sendCommand(CommandType type, int arg = 0, int arg2 = 0) {
+    if (!ready) return;
     Command cmd = {type, arg, arg2};
     xQueueSend(commandQueue, &cmd, 0);
+}
+
+// The number of the moment at this place in the list, as the caller sees it now
+static bool numberAt(int index, int &number) {
+    bool found = false;
+    xSemaphoreTake(momentLock, portMAX_DELAY);
+    if (index >= 0 && index < momentTotal) {
+        number = moments[index].number;
+        found = true;
+    }
+    xSemaphoreGive(momentLock);
+    return found;
 }
 
 void audioStartRecording(uint32_t seconds) { sendCommand(CMD_RECORD_START, seconds); }
 void audioStopRecording() { sendCommand(CMD_RECORD_STOP); }
 void audioCancelRecording() { sendCommand(CMD_RECORD_CANCEL); }
-void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
-void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
-void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
-void audioDeleteNumber(int number) {
-    for (int i = 0; i < momentTotal; i++) {
-        if (moments[i].number == number) {
-            sendCommand(CMD_DELETE, i);
-            return;
-        }
-    }
+void audioPlay(int index) {
+    int number;
+    if (numberAt(index, number)) sendCommand(CMD_PLAY, number);
 }
+void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
+void audioDelete(int index) {
+    int number;
+    if (numberAt(index, number)) sendCommand(CMD_DELETE, number);
+}
+void audioDeleteNumber(int number) { sendCommand(CMD_DELETE, number); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioStartUsbMic() { sendCommand(CMD_USB_MIC); }
-void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
+void audioSetTag(int index, int tag) {
+    int number;
+    if (numberAt(index, number)) sendCommand(CMD_TAG, number, tag);
+}
 void audioClearTagsAbove(int count) { sendCommand(CMD_TAGS_ABOVE, count); }
 void audioSpeedHold(int direction) {
     if (direction != 0 && speedDirection == 0) speedAtPress = speed;
@@ -1048,13 +1296,14 @@ int audioMicGainSetting() { return gainSetting; }
 int audioMicGain() { return gainNow; }
 
 void audioFormatCard() {
-    formatResult = 0;
+    formatResult = ready ? 0 : -1; // with nobody to do it, the answer is known at once
     sendCommand(CMD_FORMAT);
 }
 
 int audioFormatResult() { return formatResult; }
 
 void audioSuspend() {
+    if (!ready) return; // nothing runs that could be suspended, and nobody would answer
     xSemaphoreTake(suspendDone, 0);
     sendCommand(CMD_SUSPEND);
     // Waits for the audio task, which may be saving a long recording first
@@ -1065,11 +1314,11 @@ bool audioAsleep() { return !running && uxQueueMessagesWaiting(commandQueue) == 
 
 AudioState audioState() { return state; }
 
-bool audioReady() { return true; }
+bool audioReady() { return ready; }
 bool audioListFull() { return momentTotal >= MAX_MOMENTS; }
 AudioNotice audioNotice(uint32_t &since) {
-    since = 0;
-    return AUDIO_NOTICE_NONE;
+    since = noticeSince;
+    return notice;
 }
 
 float audioRecordingSeconds() {

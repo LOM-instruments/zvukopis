@@ -8,8 +8,10 @@
 
 // Sound moment engine on the board's ES8311 codec (mic in + speaker out over I2S).
 // A task on core 0 streams audio and carries out the requests below.
-// With an SD card in at startup, moments are saved to it and played back from it;
-// otherwise they live in PSRAM and are lost on reset.
+// With an SD card in, moments are saved to it and played back from it;
+// otherwise they live in PSRAM and are lost on reset. The card is looked for
+// at startup, and again whenever the codec wakes for a recording or playback:
+// one taken out or put in since is noticed then, and the list follows.
 
 // 96 kHz: the microphone has real output to 40 kHz (measured). Moments made
 // at 48 kHz (older firmware, or a build with -DSAMPLE_RATE_HZ=48000) still
@@ -59,7 +61,11 @@ enum AudioState {
 // Requires Wire to be started on the PMU/codec I2C bus (boardPowerInit does that)
 bool audioInit();
 
-// Requests, carried out by the audio task within ~16 ms
+// Requests, carried out by the audio task within ~16 ms.
+// Play, delete and tag take a place in the list as the caller sees it now.
+// The request carries that moment's number, and the audio task finds the
+// moment by it, wherever the list has moved it to meanwhile. Delete and tag
+// are not carried out while a recording runs: the card work would cost it sound.
 void audioStartRecording(uint32_t seconds = MAX_RECORDING_SECONDS); // until stopped, or what fits
 void audioStopRecording();
 void audioCancelRecording(); // stops and discards it
