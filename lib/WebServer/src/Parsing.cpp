@@ -73,6 +73,41 @@ static char* readBytesWithTimeout(WiFiClient& client, size_t maxLength, size_t& 
   return buf;
 }
 
+// zvukopis: one line of a multipart body, without its line end, as the pair
+// readStringUntil('\r') and readStringUntil('\n') read it. False when nothing
+// came at all, because the client has gone or has sent nothing for
+// HTTP_MAX_POST_WAIT, and when the line is longer than HTTP_MAX_FORM_LINE.
+// The stock pair returned an empty line for all of these, and the loops of
+// the form parser then went round for ever on a body that stopped short. A
+// line that only lacks its end still counts, as it did: some clients leave
+// the line end off the closing boundary.
+static bool readFormLine(WiFiClient& client, String& line)
+{
+  line = "";
+  bool ended = false; // the '\r' has come; what follows up to the '\n' is dropped
+  uint32_t lastByte = millis();
+  for (;;) {
+    int c = client.read();
+    if (c < 0) {
+      if (!client.connected() || millis() - lastByte > HTTP_MAX_POST_WAIT) {
+        return ended || line.length() > 0;
+      }
+      delay(1);
+      continue;
+    }
+    lastByte = millis();
+    if (ended) {
+      if (c == '\n') {
+        return true;
+      }
+    } else if (c == '\r') {
+      ended = true;
+    } else if (line.length() >= HTTP_MAX_FORM_LINE || !line.concat((char) c)) {
+      return false;
+    }
+  }
+}
+
 bool WebServer::_parseRequest(WiFiClient& client) {
   // Read the first line of HTTP request
   String req = client.readStringUntil('\r');
@@ -81,6 +116,15 @@ bool WebServer::_parseRequest(WiFiClient& client) {
   for (int i = 0; i < _headerKeysCount; ++i) {
     _currentHeaders[i].value =String();
   }
+  // zvukopis: and the Host, which a request without one inherited from the
+  // last, and the fields of a form that was cut off: arg() looks in those
+  // first, so they would have answered for the requests that came after
+  _hostHeader = String();
+  if (_postArgs) {
+    delete[] _postArgs;
+    _postArgs = nullptr;
+  }
+  _postArgsLen = 0;
 
   // First line of HTTP request looks like "GET /path HTTP/1.1"
   // Retrieve the "/path" part by finding the spaces
@@ -197,6 +241,12 @@ bool WebServer::_parseRequest(WiFiClient& client) {
       _currentHandler->raw(*this, _currentUri, *_currentRaw);
       log_v("Finish Raw");
     } else if (!isForm) {
+      // zvukopis: the body is gathered in memory before any handler sees the
+      // request, so its size is not left to the sender
+      if (_clientContentLength < 0 || _clientContentLength > HTTP_MAX_PLAIN_BODY) {
+        log_e("Body of %d bytes refused", _clientContentLength);
+        return false;
+      }
       size_t plainLength;
       char* plainBuf = readBytesWithTimeout(client, _clientContentLength, plainLength, HTTP_MAX_POST_WAIT);
       if (plainLength < _clientContentLength) {
@@ -225,6 +275,12 @@ bool WebServer::_parseRequest(WiFiClient& client) {
       }
     } else {
       // it IS a form
+      // zvukopis: _parseForm() puts the boundary in an array on the stack, and
+      // one of thousands of characters overran the task's stack
+      if (boundaryStr.length() == 0 || boundaryStr.length() > HTTP_MAX_BOUNDARY) {
+        log_e("Boundary of %u characters refused", boundaryStr.length());
+        return false;
+      }
       _parseArguments(searchStr);
       if (!_parseForm(client, boundaryStr, _clientContentLength)) {
         return false;
@@ -336,7 +392,10 @@ int WebServer::_uploadReadByte(WiFiClient& client) {
   int res = client.read();
 
   if (res < 0) {
-    while(!client.available() && client.connected())
+    // zvukopis: a deadline. A client that stalled in the middle of a file held
+    // the server for as long as its connection stayed open.
+    uint32_t start = millis();
+    while(!client.available() && client.connected() && millis() - start < HTTP_MAX_POST_WAIT)
       delay(2);
 
     res = client.read();
@@ -368,8 +427,8 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
       String argFilename;
       bool argIsFile = false;
 
-      line = client.readStringUntil('\r');
-      client.readStringUntil('\n');
+      // zvukopis: here and below, lines are read with a deadline
+      if (!readFormLine(client, line)) return false;
       if (line.length() > 19 && line.substring(0, 19).equalsIgnoreCase(F("Content-Disposition"))){
         int nameStart = line.indexOf('=');
         if (nameStart != -1){
@@ -389,20 +448,18 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
           log_v("PostArg Name: %s", argName.c_str());
           using namespace mime;
           argType = FPSTR(mimeTable[txt].mimeType);
-          line = client.readStringUntil('\r');
-          client.readStringUntil('\n');
+          if (!readFormLine(client, line)) return false;
           if (line.length() > 12 && line.substring(0, 12).equalsIgnoreCase(FPSTR(Content_Type))){
             argType = line.substring(line.indexOf(':')+2);
             //skip next line
-            client.readStringUntil('\r');
-            client.readStringUntil('\n');
+            if (!readFormLine(client, line)) return false;
           }
           log_v("PostArg Type: %s", argType.c_str());
           if (!argIsFile){
             while(1){
-              line = client.readStringUntil('\r');
-              client.readStringUntil('\n');
+              if (!readFormLine(client, line)) return false;
               if (line.startsWith("--"+boundary)) break;
+              if (argValue.length() + line.length() > HTTP_MAX_PLAIN_BODY) return false;
               if (argValue.length() > 0) argValue += "\n";
               argValue += line;
             }
@@ -477,8 +534,7 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
                 _currentUpload->type.c_str(),
                 (int)_currentUpload->totalSize);
             if (!client.connected()) return _parseFormUploadAborted();
-            line = client.readStringUntil('\r');
-            client.readStringUntil('\n');
+            if (!readFormLine(client, line)) return false;
             if (line == "--") {     // extra two dashes mean we reached the end of all form fields
                 log_v("Done Parsing POST");
                 break;

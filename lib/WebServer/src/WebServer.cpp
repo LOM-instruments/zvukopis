@@ -413,6 +413,9 @@ void WebServer::_prepareHeader(String& response, int code, const char* content_t
 	sendHeader(String(FPSTR("Access-Control-Allow-Headers")), String("*"));
     }
     sendHeader(String(F("Connection")), String(F("close")));
+    // zvukopis: nothing this server sends is for a browser's cache, where the
+    // next person at a shared computer could find the page and the recordings
+    sendHeader(String(F("Cache-Control")), String(F("no-store")));
 
     response += _responseHeaders;
     response += "\r\n";

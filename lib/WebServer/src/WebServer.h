@@ -50,6 +50,9 @@ enum HTTPAuthMethod { BASIC_AUTH, DIGEST_AUTH };
 #define HTTP_MAX_POST_WAIT 5000 //ms to wait for POST data to arrive
 #define HTTP_MAX_SEND_WAIT 5000 //ms to wait for data chunk to be ACKed
 #define HTTP_MAX_CLOSE_WAIT 200
+#define HTTP_MAX_PLAIN_BODY 8192 // zvukopis: a body that is not a form upload is held in memory whole, so it has a limit
+#define HTTP_MAX_BOUNDARY 70     // zvukopis: the longest multipart boundary there is (RFC 2046); the parser keeps it on the stack
+#define HTTP_MAX_FORM_LINE 2048  // zvukopis: a header line of a form part, or a line of a field's value
 
 #define CONTENT_LENGTH_UNKNOWN ((size_t) -1)
 #define CONTENT_LENGTH_NOT_SET ((size_t) -2)

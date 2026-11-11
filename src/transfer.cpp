@@ -3,11 +3,12 @@
 #include <Arduino.h>
 #include <esp_rom_crc.h>
 #include <esp_heap_caps.h>
+#include <esp_random.h>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
 #endif
-#include <DNSServer.h>
+#include <CaptiveDns.h>
 #include <ESPmDNS.h>
 #include <SD_MMC.h>
 #include <WebServer.h>
@@ -22,12 +23,12 @@
 #include "networks.h"
 #include "ui.h"
 
-static const char *HOST_NAME = "zvukopis"; // http://zvukopis.local/
 static const uint32_t IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 static const size_t SEND_CHUNK = 4096;
+static const int KEY_LEN = 6;
 
 static WebServer server(80);
-static DNSServer dns; // on the hotspot every name leads here, so phones open the page by themselves
+static CaptiveDns dns; // on the hotspot every name leads here, so phones open the page by themselves
 static TransferInfo info = {};
 static volatile bool stopRequested = false;
 static TaskHandle_t task = nullptr;
@@ -156,6 +157,135 @@ static void noteRequest() {
     info.requests++;
 }
 
+// --- The access key ---
+// Six characters made when the web interface starts and shown on the screen,
+// in the page's address: http://address/key. Opening that address puts the key
+// in a cookie, and every route asks for the cookie. Someone on the same Wi-Fi
+// who can't see the screen gets nothing, and neither does a web page open in
+// the owner's browser: the cookie is marked SameSite=Strict, so the browser
+// leaves it out of whatever another site makes it ask for.
+
+static const char NEEDS_KEY[] = "Open the address shown on Zvukopis's screen, or scan its code.";
+
+static const char NEEDS_KEY_PAGE[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Zvukopis</title>
+<style>body{margin:16px;background:#ececec;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5}</style>
+</head><body><p>Open the address shown on Zvukopis's screen, or scan its code.</p></body></html>)";
+
+// What the address with the key answers: the browser has the cookie from this
+// response's header, and goes on to the page by itself
+static const char KEY_PAGE[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=/"><title>Zvukopis</title>
+<style>body{margin:16px;background:#ececec;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5}</style>
+</head><body><p><a href="/">Open the Zvukopis page</a></p></body></html>)";
+
+// No 0/o and no 1/l/i, which look alike on the screen. Wi-Fi is on by the
+// time this runs, and with the radio on esp_random() is truly random.
+static void makeKey() {
+    static const char ALPHABET[] = "abcdefghjkmnpqrstuvwxyz23456789";
+    do {
+        for (int i = 0; i < KEY_LEN; i++) info.key[i] = ALPHABET[esp_random() % (sizeof(ALPHABET) - 1)];
+        info.key[KEY_LEN] = 0;
+    } while (strcmp(info.key, "status") == 0 || strcmp(info.key, "backup") == 0); // two of the page's own addresses
+}
+
+// Compared to the end whatever differs, so that the time an answer takes
+// tells nothing about how much of a guess was right
+static bool sameText(const char *a, const char *b, size_t len) {
+    uint8_t diff = 0;
+    for (size_t i = 0; i < len; i++) diff |= a[i] ^ b[i];
+    return diff == 0;
+}
+
+// The request carries the key, in the cookie "k" ("a=1; k=x7m2pq; b=2")
+static bool hasKey() {
+    size_t keyLen = strlen(info.key);
+    if (keyLen == 0) return false;
+    String cookies = server.header("Cookie");
+    for (const char *p = cookies.c_str(); *p;) {
+        while (*p == ' ' || *p == ';') p++;
+        const char *end = strchr(p, ';');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len == keyLen + 2 && p[0] == 'k' && p[1] == '=' && sameText(p + 2, info.key, keyLen)) return true;
+        p += len;
+    }
+    return false;
+}
+
+// The address or the name of this very device: "192.168.1.23",
+// "zvukopis-ab12", or that name with a domain after it (".local", or the one
+// a home router adds)
+static bool namesThisDevice(const char *host) {
+    if (strcmp(host, info.address) == 0) return true;
+    size_t n = strlen(info.host);
+    return n > 0 && strncmp(host, info.host, n) == 0 && (host[n] == 0 || host[n] == '.');
+}
+
+// A second lock on everything that changes something. Browsers say in the
+// Origin header which site's page sends a POST. The cookie alone does not
+// stop a browser too old to know SameSite, nor a page served under a name
+// that ends in this device's own (the "site" is the same then); this does.
+// A request without the header is not from another site's page.
+static bool fromOwnPage() {
+    String origin = server.header("Origin");
+    if (origin.length() == 0) return true;
+    origin.toLowerCase();
+    return origin.startsWith("http://") && namesThisDevice(origin.c_str() + 7);
+}
+
+// Phones and laptops check for a captive portal by fetching a known page;
+// sending them here makes them open the zvukopis page by themselves. Only
+// done on the hotspot, whose password they have read off the screen to get
+// this far, so the address they are sent to has the key in it.
+static void redirectToPage() {
+    server.sendHeader("Location", String("http://") + info.address + "/" + info.key);
+    server.send(302, "text/plain", "");
+}
+
+// The request was sent to this device under its own address or name, not
+// under some other name that leads here (on the hotspot every name does)
+static bool toOwnName() {
+    String host = server.hostHeader();
+    host.toLowerCase();
+    int port = host.indexOf(':');
+    if (port >= 0) host.remove(port);
+    return namesThisDevice(host.c_str());
+}
+
+// The answer to a request without the key
+static void refuse() {
+    bool page = server.method() == HTTP_GET && server.uri() == "/";
+    // Some sign-in checks on the hotspot ask for the front page of a name of
+    // their own: those are sent on like the rest
+    if (page && info.hotspot && !toOwnName()) redirectToPage();
+    else if (page) server.send_P(403, PSTR("text/html; charset=utf-8"), NEEDS_KEY_PAGE);
+    else server.send(403, "text/plain", NEEDS_KEY);
+}
+
+// Every route starts with this. False when the request has been refused:
+// it came without the key, or it is a POST from another site's page.
+// Only requests with the key count as use (`counts`: all but the page's own
+// polling), so nobody else can keep the web interface from switching off.
+static bool allowed(bool counts = true) {
+    if (!hasKey() || (server.method() == HTTP_POST && !fromOwnPage())) {
+        refuse();
+        return false;
+    }
+    if (counts) noteRequest();
+    return true;
+}
+
+// The address on the screen was opened: the key goes into the cookie. The
+// answer is a small page that leads to the real one, not a redirect to it:
+// a browser may leave a SameSite=Strict cookie out of a request it came to
+// through redirects that began at another site (Firefox does), and that is
+// how a phone or laptop arrives from its sign-in check on the hotspot.
+static void sendKeyCookie() {
+    noteRequest();
+    server.sendHeader("Set-Cookie", String("k=") + info.key + "; Path=/; HttpOnly; SameSite=Strict");
+    server.send_P(200, PSTR("text/html; charset=utf-8"), KEY_PAGE);
+}
+
 static const char PAGE_HEAD[] PROGMEM = R"(<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Zvukopis</title>
 <style>
@@ -199,7 +329,7 @@ input[type=checkbox]{appearance:none;width:1em;height:1em;margin:0;border:var(--
 input[type=file]::file-selector-button{font:inherit;color:var(--text);background:#fff;border:0;border-right:var(--line) solid var(--text);border-radius:0;padding:12px var(--edge);margin:0 .5rem 0 0;cursor:pointer}
 input[type=file]::file-selector-button:hover{background:var(--accent)}
 .ic{border:0;background:#fff;color:var(--text);border-radius:0;display:inline-flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
-.ic:hover{background:var(--accent);color:#000}.ic svg{width:18px;height:18px;fill:currentColor}
+.ic:hover{background:var(--accent);color:#000}.ic:disabled{background:#fff;color:var(--muted);cursor:default}.ic svg{width:18px;height:18px;fill:currentColor}
 table{width:100%;border-collapse:collapse;background:#fff}
 td{padding:6px var(--edge);height:var(--unit);border-top:var(--line) solid var(--text);vertical-align:middle;line-height:1.3}
 tr:first-child td,tr.first td{border-top:0}
@@ -319,17 +449,22 @@ async function upload(){const f=$('docfile').files[0];if(!f){alert('Choose a .md
  const fd=new FormData();fd.append('doc',f,f.name);$('upbtn').disabled=true;
  const r=await fetch('/library/upload',{method:'POST',body:fd});if(!r.ok)alert(await r.text());location.reload()}
 function deldoc(f,t){if(confirm('Delete '+t+' from the device?'))post('/library/delete?f='+encodeURIComponent(f))}
-let recState='idle',moments=null;
+let recState='idle';
 async function toggleRecord(){
- const r=await fetch(recState=='recording'?'/record/stop':'/record/start?seconds='+$('reclen').value,{method:'POST'});
- if(!r.ok)alert(await r.text());poll()}
+ try{const r=await fetch(recState=='recording'?'/record/stop':'/record/start?seconds='+$('reclen').value,{method:'POST'});
+  if(!r.ok)alert(await r.text())}catch(e){alert('Zvukopis is not answering. Is its web interface still on?')}
+ poll()}
+// 403: the page is from an earlier start of the web interface; loaded again, it says where to go.
+// LIST and NOTICE are what the page was made from: it loads again when the moments change or something went wrong
 async function poll(){
- try{const st=await(await fetch('/status')).json();
+ try{const r=await fetch('/status');if(r.status==403){location.reload();return}
+  const st=await r.json(),busy=st.state=='recording'||st.state=='saving';
   recState=st.state;const b=$('recbtn');b.disabled=st.state=='saving';b.classList.toggle('rec',st.state=='recording');
   $('reclabel').textContent=st.state=='recording'?'Stop':st.state=='saving'?'Saving...':'Record';
   $('rectime').textContent=st.state=='recording'?t(st.seconds)+(st.limit<86400?' / '+t(st.limit):''):'';
   $('gain').options[0].textContent='Auto'+(st.gainSetting<0?' (now '+st.gain+' dB)':'');
-  if(moments!==null&&st.moments!=moments)location.reload();moments=st.moments;
+  for(const d of document.querySelectorAll('.del'))d.disabled=busy;
+  if(st.list!==LIST||(st.notice&&st.notice!==NOTICE))location.reload();
  }catch(e){}}
 setInterval(poll,1000);poll();
 if($('ssid')&&firstTab==='settings')scan();else if($('ssid'))ssidChanged();
@@ -337,6 +472,16 @@ if($('ssid')&&firstTab==='settings')scan();else if($('ssid'))ssidChanged();
 
 static const int GAIN_STEPS[] = {GAIN_AUTO, 18, 24, 30, 36, 42, 48, 54};
 static const int LENGTHS[] = {30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 28800, 43200};
+
+// What the page is put together in. These were arrays on the stack of the
+// task, over 4 KB of its 8; now they are in PSRAM for as long as one page
+// takes (the server handles one request at a time).
+struct PageScratch {
+    char piece[2048];  // one piece of the page at a time; a moment's row carries its category icon as SVG
+    char tag[1024];    // a moment's category: the icon and the name
+    char text[4][400]; // names and titles, escaped for the page
+};
+static PageScratch *page = nullptr;
 
 // "12 h", "1 h 30 min", "5 min", "45 s"
 static void lengthText(char *buf, size_t len, int seconds) {
@@ -369,12 +514,28 @@ static void sendRecord(char *buf, size_t len) {
     int longest = (int)audioLongestRecording();
     char longestText[24];
     lengthText(longestText, sizeof(longestText), longest);
-    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Record</h2>"
+    // What went wrong with the last recording, if anything: the screen says it too
+    const char *notice = "";
+    uint32_t since;
+    switch (audioNotice(since)) {
+    case AUDIO_NOTICE_CARD_FAILED:
+        notice = "<p class=note><b>The last recording ended early.</b> The SD card stopped taking data; what was written before is kept.</p>";
+        break;
+    case AUDIO_NOTICE_NOT_SAVED:
+        notice = "<p class=note><b>The last recording could not be saved.</b></p>";
+        break;
+    case AUDIO_NOTICE_NO_CARD:
+        notice = "<p class=note><b>The SD card is no longer there.</b> Put it back and restart Zvukopis.</p>";
+        break;
+    default:
+        break;
+    }
+    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Record</h2>%s"
                        "<p class=note>Up to %s at a time%s. Wi-Fi stays on while recording, which may add a little noise.</p></div>"
                        "<div class=\"cell c9\"><button id=recbtn class=big onclick=toggleRecord()>"
                        "<span class=dot></span><span id=reclabel>Record</span><span id=rectime class=mono></span></button>"
                        "<div class=row><label>Stop after <select id=reclen><option value=0>when I say</option>",
-             longestText, audioUsingSdCard() ? " (the card's room)" : " (no SD card: held in memory)");
+             notice, longestText, audioUsingSdCard() ? " (the card's room)" : " (no SD card: held in memory)");
     server.sendContent(buf);
     sendLengthOptions(buf, len, longest, 0);
     int setting = audioMicGainSetting();
@@ -430,33 +591,43 @@ static void sendMoments(char *buf, size_t len) {
     for (int i = 0; i < count; i++) {
         Moment moment;
         if (!momentGet(i, moment)) break;
-        char when[32] = "", name[48], tag[1024] = "", day[12];
+        // The folder and the file name are whatever the card holds: escaped like
+        // everything else that comes from outside
+        char when[32] = "", name[48], day[12];
+        char *tag = page->tag, *dayText = page->text[0], *nameText = page->text[1];
+        tag[0] = 0;
         momentDay(moment, day, sizeof(day));
+        htmlEscape(day, dayText, sizeof(page->text[0]));
         if (moment.recordedAt) {
             tm local;
             localtime_r(&moment.recordedAt, &local);
             strftime(when, sizeof(when), "%e %b %Y %H:%M:%S", &local);
         }
         downloadName(moment, name, sizeof(name));
+        htmlEscape(name, nameText, sizeof(page->text[1]));
         uint32_t rate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
         int seconds = (int)((moment.length + rate / 2) / rate);
         if (moment.tag != TAG_NONE && moment.tag <= configCategoryCount()) {
             Category c = configCategory(moment.tag);
             char escaped[CATEGORY_NAME_LEN * 6];
             htmlEscape(c.name, escaped, sizeof(escaped));
-            snprintf(tag, sizeof(tag), " <span class=tag>%s %s</span>", iconSvg(c.icon, 14).c_str(), escaped);
+            snprintf(tag, sizeof(page->tag), " <span class=tag>%s %s</span>", iconSvg(c.icon, 14).c_str(), escaped);
         }
+        // In two pieces, each of which fits the buffer whatever the names are
         snprintf(buf, len,
                  "<tr data-day=\"%s\"><td class=c><button class=ic id=pb-%d title=Play onclick=togglePlay(%d)>"
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M3 1.5v13l11-6.5z\"/></svg></button></td>"
-                 "<td><b>Moment %d</b>%s<br><small>%s</small></td>"
+                 "<td><b>Moment %d</b>%s<br><small>%s</small></td>",
+                 dayText, moment.number, moment.number, moment.number, tag, when);
+        server.sendContent(buf);
+        // The delete buttons are marked: the page switches them off while a recording runs
+        snprintf(buf, len,
                  "<td class=\"r mono\" id=dur-%d data-len=\"%d:%02d\">%d:%02d</td>"
                  "<td class=c><a class=ic href=\"/moment?n=%d\" download=\"%s\" title=Download>"
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M7 1h2v7.2l2.6-2.6 1.4 1.4L8 12 3 7l1.4-1.4L7 8.2zM2 12h12v2H2z\"/></svg></a></td>"
-                 "<td class=c><button class=ic title=Delete onclick=del(%d)>"
+                 "<td class=c><button class=\"ic del\" title=Delete onclick=del(%d)>"
                  "<svg viewBox=\"0 0 16 16\"><path d=\"M6 1h4l.5 1H14v2H2V2h3.5zM3 5h10l-.8 10H3.8z\"/></svg></button></td></tr>",
-                 day, moment.number, moment.number, moment.number, tag, when, moment.number, seconds / 60, seconds % 60,
-                 seconds / 60, seconds % 60, moment.number, name, moment.number);
+                 moment.number, seconds / 60, seconds % 60, seconds / 60, seconds % 60, moment.number, nameText, moment.number);
         server.sendContent(buf);
     }
     if (count == 0) server.sendContent("<tr><td>No moments yet.</td></tr>");
@@ -610,13 +781,13 @@ static void sendLibrary(char *buf, size_t len) {
                        "and Zvukopis remembers the page you left each one at.</p></div><div class=\"cell c5\"><table>");
     Document doc;
     for (int i = 0; libraryGet(i, doc); i++) {
-        char title[CATEGORY_NAME_LEN * 0 + 300], name[300];
-        htmlEscape(doc.title, title, sizeof(title));
-        htmlEscape(doc.fileName, name, sizeof(name));
+        char *title = page->text[0], *name = page->text[1], *jsName = page->text[2], *jsTitle = page->text[3];
+        const size_t textLen = sizeof(page->text[0]);
+        htmlEscape(doc.title, title, textLen);
+        htmlEscape(doc.fileName, name, textLen);
         // Into a JS string inside an HTML attribute: JSON-escape, then HTML-escape the lot
-        char jsName[400], jsTitle[400];
-        htmlEscape(jsonString(doc.fileName).c_str(), jsName, sizeof(jsName));
-        htmlEscape(jsonString(doc.title).c_str(), jsTitle, sizeof(jsTitle));
+        htmlEscape(jsonString(doc.fileName).c_str(), jsName, textLen);
+        htmlEscape(jsonString(doc.title).c_str(), jsTitle, textLen);
         snprintf(buf, len, "<tr><td><b>%s</b><br><small>%s, %lu KB</small></td>"
                            "<td class=c><button class=ic title=Delete onclick=\"deldoc(%s,%s)\">%s</button></td></tr>",
                  title, name, (unsigned long)((doc.bytes + 1023) / 1024), jsName, jsTitle, TRASH_SVG);
@@ -640,12 +811,14 @@ static void sendWifi(char *buf, size_t len) {
     server.sendContent(buf);
     WifiNetwork net;
     for (int i = 0; wifiNetworkGet(i, net); i++) {
-        char escaped[200];
-        htmlEscape(net.ssid, escaped, sizeof(escaped));
-        String js = jsonString(net.ssid);
-        js.replace("\"", "&quot;");
+        // The name is anyone's to choose. For the script it is escaped like the
+        // library's names: as a JS string, and then that whole string for HTML
+        // (32 quotation marks come to 236 characters this way)
+        char *escaped = page->text[0], *js = page->text[1];
+        htmlEscape(net.ssid, escaped, sizeof(page->text[0]));
+        htmlEscape(jsonString(net.ssid).c_str(), js, sizeof(page->text[1]));
         snprintf(buf, len, "<tr><td>%s</td><td class=c><button class=ic title=Forget onclick=\"forget(%d,%s)\">%s</button></td></tr>",
-                 escaped, i, js.c_str(), TRASH_SVG);
+                 escaped, i, js, TRASH_SVG);
         server.sendContent(buf);
     }
     if (n == 0) server.sendContent("<tr><td>None saved yet.</td></tr>");
@@ -659,12 +832,22 @@ static void sendWifi(char *buf, size_t len) {
 }
 
 static void handleIndex() {
-    noteRequest();
+    if (!allowed()) return;
+    page = (PageScratch *)ps_malloc(sizeof(PageScratch));
+    if (!page) {
+        server.send(500, "text/plain", "Out of memory");
+        return;
+    }
+    char *buf = page->piece;
+    const size_t len = sizeof(page->piece);
+    // Taken before the list is read: the page's polling compares them with
+    // /status, and loads the page again when Zvukopis has moved on
+    uint32_t list = momentListVersion(), since;
+    int notice = audioNotice(since);
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "text/html; charset=utf-8", "");
     server.sendContent_P(PAGE_HEAD);
 
-    char buf[2048]; // a moment's row carries its category icon as SVG
     time_t now = time(nullptr);
     char clock[32] = "not set";
     if (clockValid()) {
@@ -676,44 +859,52 @@ static void handleIndex() {
     char batteryText[24] = "on USB";
     if (battery >= 0) snprintf(batteryText, sizeof(batteryText), "%d%%", battery);
     bool firstTime = info.hotspot && wifiNetworkCount() == 0;
-    snprintf(buf, sizeof(buf), "<header class=head><h1>zvukopis</h1></header><div class=stats>"
-                               "<div class=stat><small>Device clock</small><b>%s</b></div>"
-                               "<div class=stat><small>Battery</small><b>%s</b></div>"
-                               "<div class=stat><small>Firmware</small><b>" FIRMWARE_VERSION "</b></div></div>"
-                               "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Recording</button>"
-                               "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
-                               "<script>const firstTab='%s'</script><div id=live class=tab>",
-             clock, batteryText, firstTime ? "settings" : "live");
+    snprintf(buf, len, "<header class=head><h1>zvukopis</h1></header><div class=stats>"
+                       "<div class=stat><small>Device clock</small><b>%s</b></div>"
+                       "<div class=stat><small>Battery</small><b>%s</b></div>"
+                       "<div class=stat><small>Firmware</small><b>" FIRMWARE_VERSION "</b></div></div>"
+                       "<div class=tabs><button id=tab-live onclick=\"showTab('live')\">Recording</button>"
+                       "<button id=tab-settings onclick=\"showTab('settings')\">Settings</button></div>"
+                       "<script>const firstTab='%s',LIST=%lu,NOTICE=%d</script><div id=live class=tab>",
+             clock, batteryText, firstTime ? "settings" : "live", (unsigned long)list, notice);
     server.sendContent(buf);
     // Live: recording and the moments
-    sendRecord(buf, sizeof(buf));
-    sendMoments(buf, sizeof(buf));
+    sendRecord(buf, len);
+    sendMoments(buf, len);
     server.sendContent("</div><div id=settings class=tab>");
     // Settings, most used first; Wi-Fi first only for someone setting the device up
-    if (firstTime) sendWifi(buf, sizeof(buf));
-    sendSchedule(buf, sizeof(buf));
-    sendCategories(buf, sizeof(buf));
-    sendVarispeed(buf, sizeof(buf));
-    sendTimeZone(buf, sizeof(buf));
-    sendLibrary(buf, sizeof(buf));
-    if (!firstTime) sendWifi(buf, sizeof(buf));
+    if (firstTime) sendWifi(buf, len);
+    sendSchedule(buf, len);
+    sendCategories(buf, len);
+    sendVarispeed(buf, len);
+    sendTimeZone(buf, len);
+    sendLibrary(buf, len);
+    if (!firstTime) sendWifi(buf, len);
     server.sendContent("</div>");
     server.sendContent_P(PAGE_TAIL);
     server.sendContent("");
+    free(page);
+    page = nullptr;
 }
 
 static void handleScheduleAdd() {
-    noteRequest();
+    if (!allowed()) return;
     Schedule s = {};
     tm local = {};
-    int hour = 0, minute = 0, second = 0;
-    if (sscanf(server.arg("date").c_str(), "%d-%d-%d", &local.tm_year, &local.tm_mon, &local.tm_mday) != 3 ||
-        sscanf(server.arg("time").c_str(), "%d:%d:%d", &hour, &minute, &second) < 2) {
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    // Every number is checked before the calendar sees it: mktime() takes an
+    // absurd day apart one month at a time, in tens of millions of steps, and
+    // past 2038 it wraps without a word (the years are the ones the clock takes)
+    if (sscanf(server.arg("date").c_str(), "%d-%d-%d", &year, &month, &day) != 3 ||
+        sscanf(server.arg("time").c_str(), "%d:%d:%d", &hour, &minute, &second) < 2 ||
+        year < 2023 || year > 2037 || month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
         server.send(400, "text/plain", "Choose a date, and a time as HH:MM or HH:MM:SS");
         return;
     }
-    local.tm_year -= 1900;
-    local.tm_mon -= 1;
+    local.tm_year = year - 1900;
+    local.tm_mon = month - 1;
+    local.tm_mday = day;
     local.tm_hour = hour;
     local.tm_min = minute;
     local.tm_sec = second;
@@ -737,7 +928,7 @@ static void handleScheduleAdd() {
 }
 
 static void handleScheduleRemove() {
-    noteRequest();
+    if (!allowed()) return;
     int64_t start = atoll(server.arg("start").c_str());
     Schedule s;
     for (int i = 0; scheduleGet(i, s); i++) {
@@ -750,7 +941,7 @@ static void handleScheduleRemove() {
 }
 
 static void handleCategories() {
-    noteRequest();
+    if (!allowed()) return;
     int count = server.arg("count").toInt();
     if (count < 1 || count > CATEGORY_MAX) {
         server.send(400, "text/plain", "Between 1 and " + String(CATEGORY_MAX) + " categories");
@@ -788,10 +979,20 @@ static void handleCategories() {
 }
 
 static void handleRecordStart() {
-    noteRequest();
+    if (!allowed()) return;
     AudioState a = audioState();
     if (a == AUDIO_RECORDING || a == AUDIO_SAVING) {
         server.send(409, "text/plain", "Already recording");
+        return;
+    }
+    // Said as what they are, not as a full card: without the first the request
+    // would be taken and never carried out
+    if (!audioReady()) {
+        server.send(409, "text/plain", "The microphone did not start. Restart Zvukopis and try again.");
+        return;
+    }
+    if (audioListFull()) {
+        server.send(409, "text/plain", "The list is full: " + String(MAX_MOMENTS) + " moments. Delete some, or move them off the card.");
         return;
     }
     if (!uiCanRecord() || audioLongestRecording() < 1) {
@@ -807,7 +1008,7 @@ static void handleRecordStart() {
 // One field at a time, so a page that was loaded a while ago can't put the
 // other one back
 static void handleVarispeed() {
-    noteRequest();
+    if (!allowed()) return;
     int top = -1, ramp = -1, hold = -1;
     if (server.hasArg("max")) {
         top = server.arg("max").toInt();
@@ -843,7 +1044,7 @@ static void handleVarispeed() {
 }
 
 static void handleGain() {
-    noteRequest();
+    if (!allowed()) return;
     int db = server.arg("db").toInt();
     bool known = false;
     for (int step : GAIN_STEPS) known |= step == db;
@@ -856,13 +1057,15 @@ static void handleGain() {
 }
 
 static void handleRecordStop() {
-    noteRequest();
+    if (!allowed()) return;
     if (audioState() == AUDIO_RECORDING) audioStopRecording();
     server.send(200, "text/plain", "ok");
 }
 
-// Polled every second by the page; not counted as use, so an open tab doesn't keep Wi-Fi on forever
+// Polled every second by the page; not counted as use, so an open tab doesn't keep Wi-Fi on forever.
+// "list" and "notice" let the page see that it shows an older state of things than Zvukopis has.
 static void handleStatus() {
+    if (!allowed(false)) return;
     const char *state = "idle";
     switch (audioState()) {
     case AUDIO_RECORDING: state = "recording"; break;
@@ -870,25 +1073,53 @@ static void handleStatus() {
     case AUDIO_PLAYING: state = "playing"; break;
     default: break;
     }
-    char json[128];
-    snprintf(json, sizeof(json), "{\"state\":\"%s\",\"seconds\":%.1f,\"limit\":%.0f,\"moments\":%d,\"gain\":%d,\"gainSetting\":%d}",
-             state, audioRecordingSeconds(), audioRecordingLimitSeconds(), momentCount(), audioMicGain(), audioMicGainSetting());
+    uint32_t since;
+    int notice = audioNotice(since);
+    char json[192];
+    snprintf(json, sizeof(json), "{\"state\":\"%s\",\"seconds\":%.1f,\"limit\":%.0f,\"moments\":%d,\"gain\":%d,\"gainSetting\":%d,\"list\":%lu,\"notice\":%d}",
+             state, audioRecordingSeconds(), audioRecordingLimitSeconds(), momentCount(), audioMicGain(), audioMicGainSetting(),
+             (unsigned long)momentListVersion(), notice);
     server.send(200, "application/json", json);
 }
 
-// Documents arrive in pieces; the file is written as they come
+// Documents arrive in pieces; the file is written as they come. It is
+// written beside the documents, under a name the library does not list, and
+// takes the document's name only when it is whole.
 static File uploadFile;
 static String uploadError;
 
-static String uploadPath;
+static String uploadPath; // the document it becomes
 static size_t uploadBytes = 0;
+static bool uploadSeen = false;    // a file came with the request
+static bool uploadAllowed = false; // ... and the request had the key
 
-// A failed upload leaves nothing behind
+static String uploadPartPath() { return String(libraryDir()) + "/upload.part"; }
+
+// A failed upload leaves nothing behind, and a document that had the same
+// name before stays as it was
 static void dropUpload(const char *why) {
     uploadError = why;
     if (uploadFile) uploadFile.close();
-    if (uploadPath.length()) SD_MMC.remove(uploadPath);
+    if (uploadPath.length()) SD_MMC.remove(uploadPartPath());
     uploadPath = "";
+}
+
+// The finished file takes the document's name. FAT can't rename onto a file
+// that exists, so a document of that name is set aside first, and put back
+// if the new one can't take its place.
+static bool keepUpload() {
+    String part = uploadPartPath(), old = String(libraryDir()) + "/upload.old";
+    bool replaces = SD_MMC.exists(uploadPath);
+    if (replaces) {
+        if (SD_MMC.exists(old)) SD_MMC.remove(old); // from an upload that lost power right here
+        if (!SD_MMC.rename(uploadPath, old)) return false;
+    }
+    if (!SD_MMC.rename(part, uploadPath)) {
+        if (replaces) SD_MMC.rename(old, uploadPath);
+        return false;
+    }
+    if (replaces) SD_MMC.remove(old);
+    return true;
 }
 
 static void handleLibraryUploadPiece() {
@@ -897,6 +1128,14 @@ static void handleLibraryUploadPiece() {
         uploadError = "";
         uploadPath = "";
         uploadBytes = 0;
+        uploadSeen = true;
+        // The pieces come before the request's own handler runs, so the key is
+        // looked at here as well: without it nothing is written
+        uploadAllowed = hasKey() && fromOwnPage();
+    }
+    if (up.status == UPLOAD_FILE_ABORTED) uploadSeen = false; // no handler runs after this to take note of it
+    if (!uploadAllowed) return; // handleLibraryUpload answers
+    if (up.status == UPLOAD_FILE_START) {
         if (!audioUsingSdCard()) {
             uploadError = "No SD card in Zvukopis";
             return;
@@ -918,7 +1157,7 @@ static void handleLibraryUploadPiece() {
         }
         if (!SD_MMC.exists(libraryDir())) SD_MMC.mkdir(libraryDir());
         uploadPath = String(libraryDir()) + "/" + clean;
-        uploadFile = SD_MMC.open(uploadPath, FILE_WRITE);
+        uploadFile = SD_MMC.open(uploadPartPath(), FILE_WRITE);
         if (!uploadFile) dropUpload("Can't create the file on the SD card");
     } else if (up.status == UPLOAD_FILE_WRITE) {
         if (!uploadFile) return; // already failed
@@ -931,6 +1170,7 @@ static void handleLibraryUploadPiece() {
         if (uploadFile) {
             uploadFile.close();
             if (uploadBytes == 0) dropUpload("The file is empty");
+            else if (!keepUpload()) dropUpload("Writing to the SD card failed");
         }
         uploadPath = "";
         libraryScan();
@@ -942,13 +1182,18 @@ static void handleLibraryUploadPiece() {
 }
 
 static void handleLibraryUpload() {
-    noteRequest();
-    if (uploadError.length()) server.send(400, "text/plain", uploadError);
+    // Without a file in it the request never came by handleLibraryUploadPiece,
+    // and what that left from an earlier upload says nothing about this one
+    bool seen = uploadSeen;
+    uploadSeen = false;
+    if (!allowed()) return;
+    if (!seen) server.send(400, "text/plain", "Choose a .md or .txt file first");
+    else if (uploadError.length()) server.send(400, "text/plain", uploadError);
     else server.send(200, "text/plain", "ok");
 }
 
 static void handleLibraryDelete() {
-    noteRequest();
+    if (!allowed()) return;
     if (!libraryDelete(server.arg("f").c_str())) {
         server.send(404, "text/plain", "No such document");
         return;
@@ -957,19 +1202,24 @@ static void handleLibraryDelete() {
 }
 
 static void handleTimeZone() {
-    noteRequest();
+    if (!allowed()) return;
     String tz = server.arg("tz");
     tz.trim();
     if (tz.length() == 0 || tz.length() > 60) {
         server.send(400, "text/plain", "That doesn't look like a time zone rule");
         return;
     }
-    clockSetTimeZone(tz.c_str());
+    // The clock takes only what is a rule ("Europe/Prague" is a name, not a
+    // rule); a text it can't use changed nothing
+    if (!clockSetTimeZone(tz.c_str())) {
+        server.send(400, "text/plain", "That doesn't look like a time zone rule");
+        return;
+    }
     server.send(200, "text/plain", "ok");
 }
 
 static void handleWifiScan() {
-    noteRequest();
+    if (!allowed()) return;
     // In hotspot mode this scans from its second (station) interface
     int found = WiFi.scanNetworks();
     String json = "[";
@@ -984,7 +1234,7 @@ static void handleWifiScan() {
 }
 
 static void handleWifiSave() {
-    noteRequest();
+    if (!allowed()) return;
     WifiNetwork n = {};
     String ssid = server.arg("ssid"), password = server.arg("password");
     if (ssid.length() == 0 || ssid.length() >= sizeof(n.ssid) || password.length() >= sizeof(n.password) ||
@@ -1002,16 +1252,9 @@ static void handleWifiSave() {
 }
 
 static void handleWifiForget() {
-    noteRequest();
+    if (!allowed()) return;
     wifiNetworkForget(server.arg("i").toInt());
     server.send(200, "text/plain", "ok");
-}
-
-// Phones and laptops check for a captive portal by fetching a known page;
-// sending them here makes them open the zvukopis page by themselves
-static void redirectToPage() {
-    server.sendHeader("Location", String("http://") + info.address + "/");
-    server.send(302, "text/plain", "");
 }
 
 static void handleMoment();
@@ -1039,43 +1282,57 @@ static void addRoutes() {
     server.on("/wifi/scan", HTTP_GET, handleWifiScan);
     server.on("/wifi/save", HTTP_POST, handleWifiSave);
     server.on("/wifi/forget", HTTP_POST, handleWifiForget);
-    for (const char *probe : {"/generate_204", "/gen_204", "/hotspot-detect.html", "/library/test/success.html",
-                              "/connecttest.txt", "/ncsi.txt", "/success.txt", "/canonical.html"}) {
-        server.on(probe, redirectToPage);
-    }
+    // Everything else: the address with the key, which lets a browser in. On
+    // the hotspot the sign-in checks of phones and laptops as well
+    // (/generate_204, /hotspot-detect.html, /connecttest.txt and the like),
+    // which are sent to that address. On a home network the key is on the
+    // screen and nowhere else, and they get the plain 404.
+    // The key is taken only under the device's own address or name, so the
+    // cookie never belongs to another name that was made to lead here.
     server.onNotFound([] {
-        if (info.hotspot) redirectToPage();
+        String uri = server.uri();
+        if (server.method() == HTTP_GET && info.key[0] && uri.length() == (unsigned)KEY_LEN + 1 && uri[0] == '/' &&
+            sameText(uri.c_str() + 1, info.key, KEY_LEN) && toOwnName()) {
+            sendKeyCookie();
+        } else if (info.hotspot) redirectToPage();
         else server.send(404, "text/plain", "Not found");
     });
 }
 
 // A byte range from a request's Range header: 1 with from and to set, 0 for
-// none (or one not understood: the whole file goes), -1 for one that can't be met
+// none (or one not understood: the whole file goes), -1 for one that can't be met.
+// from and to are touched only when the answer is 1: a header that was
+// half understood used to leave its numbers in them, and the sender then
+// read from wherever it pointed.
 static int parseRange(const String &range, size_t total, size_t &from, size_t &to) {
     if (!range.startsWith("bytes=")) return 0;
     const char *s = range.c_str() + 6;
     char *end;
+    size_t first, last;
     if (*s == '-') { // the last n bytes
         size_t n = strtoul(s + 1, &end, 10);
         if (*end || n == 0) return 0;
-        from = n < total ? total - n : 0;
-        to = total - 1;
+        first = n < total ? total - n : 0;
+        last = total - 1;
     } else {
-        from = strtoul(s, &end, 10);
+        first = strtoul(s, &end, 10);
         if (*end != '-') return 0;
-        if (end[1] == 0) to = total - 1;
+        if (end[1] == 0) last = total - 1;
         else {
-            to = strtoul(end + 1, &end, 10);
+            last = strtoul(end + 1, &end, 10);
             if (*end) return 0;
         }
     }
-    if (from >= total) return -1;
-    if (to >= total) to = total - 1;
-    return from <= to ? 1 : -1;
+    if (first >= total) return -1;
+    if (last >= total) last = total - 1;
+    if (first > last) return -1;
+    from = first;
+    to = last;
+    return 1;
 }
 
 static void handleMoment() {
-    noteRequest();
+    if (!allowed()) return;
     int index;
     Moment moment;
     if (!findMoment(server.arg("n").toInt(), index, moment)) {
@@ -1124,7 +1381,8 @@ static void handleMoment() {
     client.setNoDelay(true);
     uint8_t *chunk = (uint8_t *)malloc(SEND_CHUNK * 2);
     if (!f || f.seek(from)) {
-        for (size_t sent = 0; sent < length && client.connected();) {
+        // Stopping the web interface ends a download too: a long one would otherwise keep Wi-Fi on until it is through
+        for (size_t sent = 0; sent < length && client.connected() && !stopRequested;) {
             size_t pos = from + sent, n = min(SEND_CHUNK * 2, length - sent), written;
             if (moment.samples) {
                 // Its samples stay put unless the moment is deleted, which only this server
@@ -1182,7 +1440,7 @@ static void zipEntryName(const Moment &moment, char *buf, size_t len, size_t fix
 
 static bool sendAll(WiFiClient &client, const uint8_t *data, size_t len) {
     for (size_t sent = 0; sent < len;) {
-        if (!client.connected()) return false;
+        if (stopRequested || !client.connected()) return false; // stopping the web interface cuts a backup short as well
         size_t n = client.write(data + sent, len - sent);
         if (n == 0) return false;
         sent += n;
@@ -1192,7 +1450,7 @@ static bool sendAll(WiFiClient &client, const uint8_t *data, size_t len) {
 }
 
 static void handleBackup() {
-    noteRequest();
+    if (!allowed()) return;
     String day = server.arg("day");
     int count = momentCount();
     ZipEntry *entries = (ZipEntry *)ps_calloc(max(count, 1), sizeof(ZipEntry));
@@ -1371,25 +1629,34 @@ static void handleBackup() {
 }
 
 static void handleTime() {
-    noteRequest();
-    int64_t ms = atoll(server.arg("ms").c_str());
-    if (ms < 1700000000000LL) {
+    if (!allowed()) return;
+    // The clock itself says what it takes (clockSet()). A number too large
+    // for time_t is turned away before the narrowing could make it look sane.
+    int64_t seconds = atoll(server.arg("ms").c_str()) / 1000;
+    if (seconds != (int64_t)(time_t)seconds || !clockSet((time_t)seconds)) {
         server.send(400, "text/plain", "Bad time");
         return;
     }
-    clockSet((time_t)(ms / 1000));
     server.send(200, "text/plain", "ok");
 }
 
 static void handleDelete() {
-    noteRequest();
-    int index;
+    if (!allowed()) return;
+    // The audio task deletes between two readings of the microphone, and a
+    // long file takes the card far longer than that: a recording would lose
+    // the stretch. The page switches its delete buttons off meanwhile.
+    AudioState a = audioState();
+    if (a == AUDIO_RECORDING || a == AUDIO_SAVING) {
+        server.send(409, "text/plain", "Stop the recording first, then delete the moment");
+        return;
+    }
+    int number = server.arg("n").toInt(), index;
     Moment moment;
-    if (!findMoment(server.arg("n").toInt(), index, moment)) {
+    if (!findMoment(number, index, moment)) {
         server.send(404, "text/plain", "No such moment");
         return;
     }
-    audioDelete(index);
+    audioDeleteNumber(number); // by number: its place in the list may have changed by the time it is carried out
     delay(300); // let the audio task carry it out before the page reloads
     server.send(200, "text/plain", "ok");
 }
@@ -1403,7 +1670,7 @@ static bool joinNetwork() {
     info.password[0] = 0;
     strlcpy(info.address, WiFi.localIP().toString().c_str(), sizeof(info.address));
     strlcpy(info.host, wifiHostName(), sizeof(info.host));
-    info.key[0] = 0;
+    makeKey();
     info.hotspot = false;
     return true;
 }
@@ -1415,30 +1682,37 @@ static void openHotspot() {
     strlcpy(info.password, wifiHotspotPassword(), sizeof(info.password));
     strlcpy(info.address, WiFi.softAPIP().toString().c_str(), sizeof(info.address));
     strlcpy(info.host, wifiHostName(), sizeof(info.host));
-    info.key[0] = 0;
+    makeKey();
     info.hotspot = true;
-    dns.start(53, "*", WiFi.softAPIP());
+    dns.start(WiFi.softAPIP());
 }
 
 static void transferTask(void *) {
     static bool routesAdded = false;
     bool joined = !hotspotOnly && joinNetwork();
     if (!stopRequested) {
-        if (joined) clockNtp(); // already online, so the clock gets corrected too
+        if (joined) clockNtp(stopping); // already online, so the clock gets corrected too; stopping ends the wait for an answer
         else openHotspot();
-        Serial.printf("[transfer] serving http://%s/ on %s, %u KB RAM free\n", info.address, info.network, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+        Serial.printf("[transfer] serving http://%s/%s on %s, %u KB RAM free\n", info.address, info.key, info.network, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 
-        MDNS.begin(HOST_NAME);
+        MDNS.begin(info.host); // http://zvukopis-ab12.local, each unit under its own name
         MDNS.addService("http", "tcp", 80);
         if (!routesAdded) addRoutes();
         routesAdded = true;
-        static const char *HEADERS[] = {"Range"};
-        server.collectHeaders(HEADERS, 1); // the only request header read: byte ranges for playback
+        // The request headers that are read: byte ranges for playback, the
+        // cookie with the access key, and where a POST comes from
+        static const char *HEADERS[] = {"Range", "Cookie", "Origin"};
+        server.collectHeaders(HEADERS, 3);
         server.begin();
         lastRequestAt = millis();
         info.state = TRANSFER_READY;
 
         while (!stopRequested && millis() - lastRequestAt < IDLE_TIMEOUT_MS) {
+            // The ten minutes count from the end of a recording, not through
+            // it: the page promises that Wi-Fi stays on while recording, and
+            // its Stop button has to reach the device
+            AudioState a = audioState();
+            if (a == AUDIO_RECORDING || a == AUDIO_SAVING) lastRequestAt = millis();
             if (info.hotspot) dns.processNextRequest();
             server.handleClient();
             delay(2);

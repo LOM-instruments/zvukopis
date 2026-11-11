@@ -36,11 +36,13 @@ public:
 
         return true;
     }
+    // zvukopis: no raw bodies. The stock code handed a POST that was not a
+    // form to the route's upload callback, which then read server.upload()
+    // through a null pointer; such a request now goes the plain way, to the
+    // route's handler.
     bool canRaw(String requestUri) override {
-        if (!_ufn || _method == HTTP_GET)
-            return false;
-
-        return true;
+        (void) requestUri;
+        return false;
     }
 
     bool handle(WebServer& server, HTTPMethod requestMethod, String requestUri) override {
