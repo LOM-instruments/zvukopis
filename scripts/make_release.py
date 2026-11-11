@@ -1,4 +1,5 @@
-"""Prepares the web flasher: copies the built binaries into docs/firmware/ and
+"""Prepares the web flasher: copies the built binaries into docs/firmware/,
+with THIRD-PARTY.md (the licences of what is inside them) beside them, and
 writes docs/manifest.json for ESP Web Tools.
 
     python3 scripts/make_release.py [version]
@@ -11,11 +12,11 @@ git revision. GitHub Pages serves docs/, so after committing and pushing, the
 flasher at https://<user>.github.io/<repo>/ installs this build.
 
 --publish does the rest as well: commits docs/ as "Release <version>", pushes,
-and creates a GitHub Release tagged with the version, the four binaries and
-the manifest attached, and notes made from the commits since the previous
-release. Run on a commit that is already a release (the tree clean, HEAD a
-"Release ..." commit), it only publishes that one, so a failed publish can
-be retried.
+and creates a GitHub Release tagged with the version, the four binaries, the
+manifest and THIRD-PARTY.md attached, and notes made from the commits since
+the previous release. Run on a commit that is already a release (the tree
+clean, HEAD a "Release ..." commit), it only publishes that one, so a failed
+publish can be retried.
 """
 
 import datetime
@@ -31,6 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, ".pio", "build", "release")
 DOCS = os.path.join(ROOT, "docs")
 FIRMWARE = os.path.join(DOCS, "firmware")
+NOTICES = os.path.join(ROOT, "THIRD-PARTY.md")
 
 # Flash layout of the ESP32-S3 Arduino core
 PARTS = [
@@ -98,8 +100,11 @@ def release_notes(version, code_commit):
     notes += items if items else ["- The same firmware as the previous release, republished."]
     notes += ["", "**Install:** the [web flasher](https://zvukopis.lom.audio/) (Chrome or Edge, over USB), "
               "or with esptool and the attached files:", "",
-              "```", "esptool.py --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 --after no_reset write_flash "
+              "```", "esptool.py --chip esp32s3 --port PORT --baud 921600 --after no_reset write_flash "
               "0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 zvukopis.bin", "```", "",
+              "`PORT` is the board's serial port: `/dev/cu.usbmodem...` on macOS, `/dev/ttyACM0` on Linux, "
+              "`COM3` or similar on Windows. Afterwards unplug and replug the USB cable, or hold the sleep "
+              "button for 10 seconds: the board stays in download mode after flashing.", "",
               "Settings and the moments on the card are kept. Settings on the device shows the version it runs."]
     return "\n".join(notes) + "\n"
 
@@ -121,7 +126,7 @@ def publish(version):
     notes_path = os.path.join(ROOT, ".pio", f"release-notes-{version}.md")
     with open(notes_path, "w") as f:
         f.write(notes)
-    assets = [os.path.join(FIRMWARE, name) for name, _ in PARTS] + [os.path.join(DOCS, "manifest.json")]
+    assets = [os.path.join(FIRMWARE, name) for name, _ in PARTS] + [os.path.join(DOCS, "manifest.json"), NOTICES]
     cmd = ["gh", "release", "create", version, "--title", f"Zvukopis {version}", "--notes-file", notes_path,
            "--target", git("rev-parse", "HEAD"), *assets]
     result = subprocess.run(cmd, cwd=ROOT)
@@ -146,6 +151,9 @@ def main():
         version = args[0]
     else:
         dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
+        # A file git does not know yet is compiled all the same when it sits where the build looks
+        untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "--", "src", "lib"], capture_output=True, text=True, cwd=ROOT).stdout.split("\n")
+        dirty = "\n".join(filter(None, [dirty] + [f"?? {name}" for name in untracked if name]))
         if dirty:
             sys.exit("Commit first: the firmware's version stamp must match a commit\n" + dirty)
         rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
@@ -170,11 +178,14 @@ def main():
     for name, source in sources.items():
         shutil.copyfile(source, os.path.join(FIRMWARE, name))
         print(f"{name:16s} {os.path.getsize(source):>9} bytes")
+    # The binaries hold other people's code: its licences go wherever they go
+    shutil.copyfile(NOTICES, os.path.join(FIRMWARE, os.path.basename(NOTICES)))
 
     manifest = {
         "name": "zvukopis",
         "version": version,
         "new_install_prompt_erase": True,  # a fresh board may hold factory data; the dialog offers to wipe it
+        "new_install_improv_wait_time": 0,  # no Improv here: without this the dialog probes for it, 10 s after every install
         "builds": [{
             "chipFamily": "ESP32-S3",
             "parts": [{"path": f"firmware/{name}", "offset": offset} for name, offset in PARTS],
