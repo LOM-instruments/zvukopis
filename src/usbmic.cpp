@@ -87,6 +87,10 @@ static uint8_t clockValid = 1;
 static volatile uint32_t fedBytes = 0, sentBytes = 0, droppedSamples = 0, emptyPackets = 0;
 static volatile int32_t levelLow = INT32_MAX, levelHigh = 0;
 static volatile uint32_t opens = 0, closes = 0, mutes = 0, loggedOpens = 0, loggedCloses = 0, loggedMutes = 0;
+// A host with the stream open asks for a packet every millisecond. None for
+// this long is a pause (the bus suspended), after which the stream starts afresh
+static const uint32_t STREAM_PAUSE_MS = 100;
+static volatile uint32_t resumes = 0, loggedResumes = 0;
 static volatile uint32_t prefilledBytes = 0, fifoDepth = 0, fifoAfterPrefill = 0;
 static uint32_t openedAt = 0, loggedAt = 0;
 // A trace of the first packets after the stream opens: the driver's buffer
@@ -108,6 +112,7 @@ static uint16_t audioDescriptor(uint8_t *dst, uint8_t *itf) {
 }
 
 extern "C" void tinyusbDcdPatched(void); // lib/tinyusb_audio/src/dcd_esp32sx.c
+extern "C" uint16_t tinyusbFrameNumber(void); // the same file: it moves on every millisecond while a host is there
 
 bool usbMicStart() {
     tinyusbDcdPatched(); // links the patched USB driver (its comment says why)
@@ -128,6 +133,8 @@ bool usbMicStart() {
     // way a core dump lands in flash (scripts/coredump.py reads it) and the
     // restart brings the console back. (The USB task cannot be watched by
     // the frame tick: the stack switches that interrupt off on a bus reset.)
+    // A host that has gone quiet is neither: the cable pulled, or the
+    // computer asleep, leaves the mode as it is, waiting.
     esp_task_wdt_init(8, true);
     return true;
 }
@@ -145,8 +152,19 @@ static void log() {
     uint32_t now = millis();
     esp_task_wdt_reset();
     logPump();
+    // A stall is a host that keeps starting frames, with the stream open, and
+    // no packet loaded for 3 s. A bus that has gone quiet is not one: with
+    // the cable pulled or the computer asleep no frame starts, the packet
+    // that is loaded waits, and the stream goes on when the host is back.
+    // (The screen leaves the mode when USB power has gone for good.)
     static uint32_t packetsSeen = 0, packetsMovedAt = 0;
-    if (!streaming || packets != packetsSeen) {
+    static uint16_t frameSeen = 0;
+    // Looked at with a stream open only: the audio task feeds this from before
+    // USB starts, when the controller has no clock to be read by
+    uint16_t frame = streaming ? tinyusbFrameNumber() : frameSeen;
+    bool hostThere = frame != frameSeen;
+    frameSeen = frame;
+    if (!streaming || !hostThere || packets != packetsSeen) {
         packetsSeen = packets;
         packetsMovedAt = now;
     } else if (now - packetsMovedAt > 3000) {
@@ -155,6 +173,10 @@ static void log() {
     if (loggedOpens != opens) {
         loggedOpens = opens;
         logPrintf("[usb mic] stream opened: %lu Hz, 16-bit, mono; fifo %lu bytes, %lu after the prefill of %lu\n", sampleRate, fifoDepth, fifoAfterPrefill, prefilledBytes);
+    }
+    if (loggedResumes != resumes) {
+        loggedResumes = resumes;
+        logWrite("[usb mic] stream picked up after a pause\n");
     }
     if (loggedCloses != closes) {
         loggedCloses = closes;
@@ -220,6 +242,16 @@ void usbMicFeed(const int16_t *mono, size_t samples) {
 
 extern "C" {
 
+// A bus reset ends the stream without a word to tud_audio_set_itf_cb(): a
+// computer that wakes up and sets the device up again has not opened it. Left
+// marked open, it would look to log() like a stall, and the next real open
+// would start without its prefill.
+static void audioReset(uint8_t rhport) {
+    audiod_reset(rhport);
+    if (streaming) closes++;
+    streaming = false;
+}
+
 // The audio class driver, handed to the core's prebuilt TinyUSB stack, which
 // was built without it; this hook must be in the app, not in a library
 static const usbd_class_driver_t audioDriver = {
@@ -227,7 +259,7 @@ static const usbd_class_driver_t audioDriver = {
     .name = "AUDIO",
 #endif
     .init = audiod_init,
-    .reset = audiod_reset,
+    .reset = audioReset,
     .open = audiod_open,
     .control_xfer_cb = audiod_control_xfer_cb,
     .xfer_cb = audiod_xfer_cb,
@@ -239,25 +271,31 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
     return &audioDriver;
 }
 
+// The driver's buffer at the flow control's target, filled with silence, and
+// the log's counts at zero; on the USB task
+static void startStream() {
+    tu_fifo_t *ff = tud_audio_n_get_ep_in_ff(0);
+    fifoDepth = ff ? ff->depth : 0;
+    tud_audio_clear_ep_in_ff();
+    static int16_t silence[256];
+    size_t prefilled = 0;
+    for (size_t at = 0; at < PREFILL_BYTES; at += sizeof(silence)) {
+        prefilled += tud_audio_write(silence, min(PREFILL_BYTES - at, sizeof(silence)));
+    }
+    prefilledBytes = prefilled;
+    fifoAfterPrefill = ff ? tu_fifo_count(ff) : 0;
+    fedBytes = sentBytes = droppedSamples = emptyPackets = 0;
+    levelLow = INT32_MAX;
+    levelHigh = 0;
+    openedAt = millis();
+    traceN = tracePrinted = 0;
+}
+
 // The host opens (alternate setting 1) or closes (0) the stream
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *request) {
     uint8_t alt = TU_U16_LOW(request->wValue);
     if (alt != 0 && !streaming) {
-        tu_fifo_t *ff = tud_audio_n_get_ep_in_ff(0);
-        fifoDepth = ff ? ff->depth : 0;
-        tud_audio_clear_ep_in_ff();
-        static int16_t silence[256];
-        size_t prefilled = 0;
-        for (size_t at = 0; at < PREFILL_BYTES; at += sizeof(silence)) {
-            prefilled += tud_audio_write(silence, min(PREFILL_BYTES - at, sizeof(silence)));
-        }
-        prefilledBytes = prefilled;
-        fifoAfterPrefill = ff ? tu_fifo_count(ff) : 0;
-        fedBytes = sentBytes = droppedSamples = emptyPackets = 0;
-        levelLow = INT32_MAX;
-        levelHigh = 0;
-        openedAt = millis();
-        traceN = tracePrinted = 0;
+        startStream();
         opens++;
     } else if (alt == 0 && streaming) {
         closes++;
@@ -273,6 +311,16 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 }
 
 bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_in, uint8_t cur_alt_setting) {
+    // The first packet after a pause with the stream left open (the computer
+    // slept and woke): the buffer is full, of sound from before the pause.
+    // Started afresh, as when the stream opens.
+    static uint32_t loadedAt = 0;
+    uint32_t now = millis();
+    if (streaming && now - loadedAt > STREAM_PAUSE_MS) {
+        startStream();
+        resumes++;
+    }
+    loadedAt = now;
     packets++;
     if (traceN < TRACE) {
         tu_fifo_t *ff = tud_audio_n_get_ep_in_ff(0);

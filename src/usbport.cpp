@@ -31,8 +31,13 @@ void usbPortRestart() {
     // the processor, not the USB lines, so without this the computer keeps
     // the microphone or the drive in its list with nobody answering, and a
     // second visit to the mode finds a computer that never saw the first end.
-    tud_disconnect();
-    delay(250);
+    // Only once TinyUSB has started (a mode whose start failed leaves here
+    // too): until then its controller has no clock and is held in reset, and
+    // tud_disconnect() would write into its registers all the same.
+    if (tud_inited()) {
+        tud_disconnect();
+        delay(250); // long enough for the computer to notice, before the console's own pull-up comes on below
+    }
     CLEAR_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_HW_USB_PHY_SEL | RTC_CNTL_SW_USB_PHY_SEL);
     SET_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG, RTC_CNTL_USB_PAD_ENABLE);
     delay(100);

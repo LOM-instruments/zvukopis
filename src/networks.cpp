@@ -3,15 +3,18 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_mac.h>
+#include <esp_wifi.h>
+#include <nvs.h>
 
 #if !defined(NO_WIFI_CONFIG) && __has_include("wifi_config.h")
 #include "wifi_config.h"
 #endif
 
-static const char *HOTSPOT_NAME = "zvukopis";
-static const char *HOST_NAME = "zvukopis";
 static const uint32_t CONNECT_TIMEOUT_MS = 15000;
-static const int HOTSPOT_PASSWORD_LEN = 8;
+// Twelve characters of 31: a recorded join to the hotspot cannot be tried out
+// against every password in any useful time (eight took a graphics card days)
+static const size_t HOTSPOT_PASSWORD_LEN = 12;
 
 static SemaphoreHandle_t lock;
 static WifiNetwork networks[MAX_NETWORKS];
@@ -27,21 +30,57 @@ static void saveNetworks() {
     prefs.end();
 }
 
+// Releases up to 2026-11-06 let the Wi-Fi driver keep the last network joined,
+// password included, in a store of its own, which Forget on the page never
+// reached. Emptied once. It is a namespace apart from this firmware's settings
+// ("zvukopis") and from the radio's calibration ("phy"), and the driver, finding
+// it empty, starts from its defaults as on a new unit. (The settings store marks
+// entries as erased and overwrites them when their page is recycled; only Reset
+// settings wipes the flash itself.)
+static void forgetDriverCopy(Preferences &prefs) {
+    if (prefs.getBool("wifiram", false)) return;
+    nvs_handle_t driver;
+    esp_err_t err = nvs_open("nvs.net80211", NVS_READWRITE, &driver);
+    if (err == ESP_OK) {
+        err = nvs_erase_all(driver);
+        if (err == ESP_OK) err = nvs_commit(driver);
+        nvs_close(driver);
+    }
+    if (err != ESP_OK) return; // tried again at the next start
+    prefs.putBool("wifiram", true);
+    Serial.println("[wifi] the driver's own stored copy of the last network removed");
+}
+
 void wifiInit() {
     lock = xSemaphoreCreateMutex();
+    // Before the first Wi-Fi call: the driver then keeps the network it is
+    // given in RAM only, instead of writing its name and password to flash
+    WiFi.persistent(false);
+    // The core hands the name to the station whenever WiFi.mode() switches it
+    // on, so it has to be there before the first time: set after, the first
+    // join of each start asked for its address as "esp32s3-" and a number
+    WiFi.setHostname(wifiHostName());
     Preferences prefs;
     prefs.begin("zvukopis", false);
     size_t len = prefs.isKey("networks") ? prefs.getBytesLength("networks") : 0;
     if (len % sizeof(WifiNetwork) == 0 && len <= sizeof(networks)) {
         networkTotal = prefs.getBytes("networks", networks, len) / sizeof(WifiNetwork);
     }
+    forgetDriverCopy(prefs);
 #ifdef HOTSPOT_PASSWORD
     strlcpy(hotspotPassword, HOTSPOT_PASSWORD, sizeof(hotspotPassword));
 #else
-    // Easy to type: no 0/o, 1/l/i
-    if (prefs.getString("hotspotpass", hotspotPassword, sizeof(hotspotPassword)) == 0) {
+    // Easy to type: no 0/o, 1/l/i. A stored one that is shorter (an earlier
+    // release made 8 characters) is replaced.
+    // The radio is off here, so esp_random() is not inside Espressif's "true
+    // random" promise, but it is not a fixed sequence either: the bootloader
+    // feeds the generator with noise from the ADC at every start
+    // (bootloader_random_enable(), ESP-IDF 4.4.7 bootloader_esp32s3.c), and
+    // on this chip an 8 MHz oscillator keeps stirring it afterwards.
+    prefs.getString("hotspotpass", hotspotPassword, sizeof(hotspotPassword));
+    if (strlen(hotspotPassword) < HOTSPOT_PASSWORD_LEN) {
         const char *alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-        for (int i = 0; i < HOTSPOT_PASSWORD_LEN; i++) hotspotPassword[i] = alphabet[esp_random() % strlen(alphabet)];
+        for (size_t i = 0; i < HOTSPOT_PASSWORD_LEN; i++) hotspotPassword[i] = alphabet[esp_random() % strlen(alphabet)];
         hotspotPassword[HOTSPOT_PASSWORD_LEN] = 0;
         prefs.putString("hotspotpass", hotspotPassword);
     }
@@ -113,12 +152,37 @@ static bool knownNetwork(const String &ssid, WifiNetwork &out) {
     return false;
 }
 
+// wifiJoin() has told the driver to join one access point only, by its address
+static volatile bool pinned = false;
+
 // What the link does, on the log: a dropped connection and its reason, and
 // the reconnection the driver makes on its own
 static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         Serial.printf("[wifi] disconnected (reason %d)\n", info.wifi_sta_disconnected.reason);
+        // The access point the join is pinned to is not there: gone between
+        // the scan and the join, or switched off or out of reach later on.
+        // The core keeps reconnecting with the settings the driver holds, and
+        // would ask for that one address for good. So the address is taken
+        // out of them: the next try looks for the network by its name, on
+        // every channel, and takes the strongest access point it finds.
+        // (Only the settings: with Wi-Fi off meanwhile, this does nothing.)
+        if (pinned && info.wifi_sta_disconnected.reason == WIFI_REASON_NO_AP_FOUND) {
+            wifi_config_t config;
+            if (esp_wifi_get_config(WIFI_IF_STA, &config) == ESP_OK) {
+                config.sta.bssid_set = false;
+                config.sta.channel = 0;
+                config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+                if (esp_wifi_set_config(WIFI_IF_STA, &config) == ESP_OK) {
+                    pinned = false;
+                    Serial.println("[wifi] that access point is gone: any other of the network will do");
+                }
+            }
+        }
+        break;
+    case ARDUINO_EVENT_WIFI_STA_STOP:
+        pinned = false; // Wi-Fi was switched off: there is no join to keep up
         break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
         Serial.println("[wifi] connected");
@@ -141,8 +205,8 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
         WiFi.onEvent(onWifiEvent);
         listening = true;
     }
+    pinned = false;
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname(HOST_NAME);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false); // the radio stays awake while the web interface is up: it answers at once, and the link holds
     int found = WiFi.scanNetworks();
@@ -167,13 +231,16 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
 
     // That very access point: a network may have several under one name (a
     // mesh, a repeater), and left to itself the driver joins the first one
-    // its own scan meets, from channel 1 up, however weak
+    // its own scan meets, from channel 1 up, however weak. (Should it have
+    // gone meanwhile, onWifiEvent() lets go of the address.)
     Serial.printf("[wifi] joining %s (%d dBm, channel %d)\n", best.ssid, bestRssi, bestChannel);
+    pinned = true;
     WiFi.begin(best.ssid, best.password, bestChannel, bestBssid);
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED) {
         if ((abort && abort()) || millis() - start > CONNECT_TIMEOUT_MS) {
             Serial.printf("[wifi] couldn't join %s (status %d)\n", best.ssid, WiFi.status());
+            pinned = false;
             WiFi.disconnect(true);
             WiFi.mode(WIFI_OFF);
             return WIFI_JOIN_FAILED;
@@ -184,6 +251,17 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
     return WIFI_JOINED;
 }
 
-const char *wifiHotspotName() { return HOTSPOT_NAME; }
-const char *wifiHostName() { return HOST_NAME; }
+const char *wifiHostName() {
+    static char name[14]; // "zvukopis-" and four digits
+    if (!name[0]) {
+        // Made once (wifiInit() asks first, before any other task runs), from
+        // the last two bytes of the address the factory gave the chip
+        uint8_t mac[6] = {};
+        esp_efuse_mac_get_default(mac);
+        snprintf(name, sizeof(name), "zvukopis-%02x%02x", mac[4], mac[5]);
+    }
+    return name;
+}
+
+const char *wifiHotspotName() { return wifiHostName(); }
 const char *wifiHotspotPassword() { return hotspotPassword; }

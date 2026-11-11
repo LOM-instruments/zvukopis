@@ -93,6 +93,47 @@ static uint16_t _in_ep_fifo_words[EP_MAX];
 // in place of the one inside the core's prebuilt TinyUSB library
 void tinyusbDcdPatched(void) {}
 
+// Zvukopis: the number of the last frame the host started. A host that is
+// there starts one every millisecond; on a suspended bus, or with the cable
+// out, the number stands still. (The stack's own "suspended" flag cannot say
+// this: this driver never reports a resume, so the flag stays set after the
+// first suspend until the next bus reset.)
+uint16_t tinyusbFrameNumber(void)
+{
+  return (USB0.dsts >> USB_SOFFN_S) & USB_SOFFN_V;
+}
+
+// Zvukopis: stops an IN endpoint that has a transfer armed and empties its
+// FIFO. Writing the control register to zero does not take an armed transfer
+// back: the endpoint stays enabled with the stale packet in its FIFO, and
+// since the next packet is only loaded once the FIFO is empty, a stream
+// opened again never sends. Stopped the way the core asks: NAK, wait until
+// that holds, disable, wait for that, then flush the FIFO. Every wait is
+// bounded (about 2 ms), so nothing here can hang the USB task.
+static void in_ep_stop(uint8_t epnum, uint8_t fifo_num)
+{
+  usb_in_endpoint_t *in_ep = &(USB0.in_ep_reg[0]);
+  // First, so that the interrupt handler does not load the packet again
+  USB0.dtknqr4_fifoemptymsk &= ~(1 << epnum);
+  if (in_ep[epnum].diepctl & USB_D_EPENA1_M) {
+    in_ep[epnum].diepctl |= USB_DI_SNAK1_M;
+    for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_INEPNAKEFF0_M) == 0; i++) esp_rom_delay_us(1);
+    in_ep[epnum].diepctl |= (USB_DI_SNAK1_M | USB_D_EPDIS1_M);
+    for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_EPDISBLD0_M) == 0; i++) esp_rom_delay_us(1);
+    in_ep[epnum].diepint = USB_D_EPDISBLD0_M | USB_D_INEPNAKEFF0_M;
+  }
+  if (fifo_num) {
+    // Assigned, not OR-ed in: bus_reset() leaves the FIFO number at 0x10,
+    // "all of them", and that would empty the other endpoints' FIFOs too
+    USB0.grstctl = (fifo_num << USB_TXFNUM_S) | USB_TXFFLSH_M;
+    for (int i = 0; i < 2000 && (USB0.grstctl & USB_TXFFLSH_M) != 0; i++) esp_rom_delay_us(1);
+    // And back to 0x10 once the flush is over (the number must not change
+    // during one): dcd_edpt_stall() ORs its own FIFO number into the field,
+    // which upstream wrote for the value bus_reset() leaves there
+    if ((USB0.grstctl & USB_TXFFLSH_M) == 0) USB0.grstctl = 0x10 << USB_TXFNUM_S;
+  }
+}
+
 // Will either return an unused FIFO number, or 0 if all are used.
 static uint8_t get_free_fifo(void)
 {
@@ -328,6 +369,11 @@ bool dcd_edpt_open(uint8_t rhport, tusb_desc_endpoint_t const *desc_edpt)
     uint8_t fifo_num = reuse ? _in_ep_fifo[epnum] : get_free_fifo();
     TU_ASSERT(fifo_num != 0);
 
+    // Zvukopis: a transfer still armed from before a bus reset or a change of
+    // configuration (neither goes through dcd_edpt_close) is taken back
+    // first; arming the next one over it is what stopped a reopened stream
+    if (in_ep[epnum].diepctl & USB_D_EPENA1_M) in_ep_stop(epnum, fifo_num);
+
     in_ep[epnum].diepctl &= ~(USB_D_TXFNUM1_M | USB_D_EPTYPE1_M | USB_DI_SETD0PID1 | USB_D_MPS1_M);
     in_ep[epnum].diepctl |= USB_D_USBACTEP1_M |
                             fifo_num << USB_D_TXFNUM1_S |
@@ -394,8 +440,9 @@ void dcd_edpt_close_all(uint8_t rhport)
 
 // Zvukopis: upstream had no single-endpoint close, so the stack's close of
 // an audio stream's endpoint (alternate setting 0) did nothing, and its
-// bookkeeping for the endpoint never cleared. Disabled the way
-// dcd_edpt_close_all does it; an IN endpoint keeps its FIFO for a reopen.
+// bookkeeping for the endpoint never cleared. An IN endpoint is stopped with
+// its armed packet taken back (an audio stream always has the next one
+// loaded) and keeps its FIFO for a reopen.
 void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr)
 {
   (void) rhport;
@@ -403,26 +450,8 @@ void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr)
   uint8_t const dir = tu_edpt_dir(ep_addr);
   if (epnum == 0 || epnum >= EP_MAX) return;
   if (dir == TUSB_DIR_IN) {
-    usb_in_endpoint_t *in_ep = &(USB0.in_ep_reg[0]);
-    USB0.dtknqr4_fifoemptymsk &= ~(1 << epnum);
-    if (in_ep[epnum].diepctl & USB_D_EPENA1_M) {
-      // A transfer is armed (an audio stream always has its next packet
-      // loaded). Writing the control register to zero does not take it back:
-      // the endpoint stays enabled with the stale packet in its FIFO, and a
-      // stream opened again never sends. Stopped the way the core asks: NAK,
-      // wait until that holds, disable, wait for that, then flush the FIFO.
-      // Every wait is bounded (about 2 ms), so nothing here can hang the USB task.
-      in_ep[epnum].diepctl |= USB_DI_SNAK1_M;
-      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_INEPNAKEFF0_M) == 0; i++) esp_rom_delay_us(1);
-      in_ep[epnum].diepctl |= (USB_DI_SNAK1_M | USB_D_EPDIS1_M);
-      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_EPDISBLD0_M) == 0; i++) esp_rom_delay_us(1);
-      in_ep[epnum].diepint = USB_D_EPDISBLD0_M | USB_D_INEPNAKEFF0_M;
-    }
-    if (_in_ep_fifo[epnum]) {
-      USB0.grstctl = (_in_ep_fifo[epnum] << USB_TXFNUM_S) | USB_TXFFLSH_M;
-      for (int i = 0; i < 2000 && (USB0.grstctl & USB_TXFFLSH_M) != 0; i++) esp_rom_delay_us(1);
-    }
-    in_ep[epnum].diepctl &= ~USB_D_USBACTEP1_M;
+    in_ep_stop(epnum, _in_ep_fifo[epnum]);
+    USB0.in_ep_reg[epnum].diepctl &= ~USB_D_USBACTEP1_M;
     USB0.daintmsk &= ~(1 << (0 + epnum));
   } else {
     USB0.out_ep_reg[epnum].doepctl = 0;
@@ -513,12 +542,17 @@ void dcd_edpt_stall(uint8_t rhport, uint8_t ep_addr)
       in_ep[epnum].diepctl |= (USB_DI_SNAK1_M | USB_D_STALL1_M);
     } else {
       // Stop transmitting packets and NAK IN xfers.
+      // Zvukopis: upstream waited here for a bit of the control register to
+      // show in the interrupt register, which it never does, with no way
+      // out: a host that halts an endpoint with a transfer armed would have
+      // hung the USB task. The "NAK effective" interrupt is the one meant,
+      // and both waits are bounded as in in_ep_stop().
       in_ep[epnum].diepctl |= USB_DI_SNAK1_M;
-      while ((in_ep[epnum].diepint & USB_DI_SNAK1_M) == 0) ;
+      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_INEPNAKEFF0_M) == 0; i++) esp_rom_delay_us(1);
 
       // Disable the endpoint. Note that both SNAK and STALL are set here.
       in_ep[epnum].diepctl |= (USB_DI_SNAK1_M | USB_D_STALL1_M | USB_D_EPDIS1_M);
-      while ((in_ep[epnum].diepint & USB_D_EPDISBLD0_M) == 0) ;
+      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_EPDISBLD0_M) == 0; i++) esp_rom_delay_us(1);
       in_ep[epnum].diepint = USB_D_EPDISBLD0_M;
     }
 
