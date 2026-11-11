@@ -143,7 +143,8 @@ static bool ntpQuery(const char *server, timeval &out) {
     return false;
 }
 
-bool clockNtp() {
+bool clockNtp(bool (*abort)()) {
+    (void)abort;
     uint32_t start = millis();
     timeval tv;
     bool ok = false;

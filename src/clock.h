@@ -36,7 +36,9 @@ void clockSyncNow();       // starts a sync in the background
 // State of the last sync, and when it started or finished (millis)
 ClockSync clockSyncState(uint32_t &since);
 bool clockSyncing();
-bool clockNtp(); // with Wi-Fi already connected: NTP time into the clock and RTC
+// With Wi-Fi already connected: NTP time into the clock and RTC. `abort`, when
+// given, is asked while it waits for an answer and ends the wait.
+bool clockNtp(bool (*abort)() = nullptr);
 
 // Sleep: stops a sync in progress (switching Wi-Fi off) and holds off new ones
 void clockPauseSync(bool paused);
