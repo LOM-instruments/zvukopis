@@ -12,6 +12,13 @@ void epdPowerOff();
 
 int batteryPercent(); // 0-100, or -1 without a battery
 bool usbPowered();
+bool boardPowerReady(); // false when the PMIC did not answer at start-up: battery, USB and the PWR key are then unknown
+// On battery and at the end of it. True only after two readings in a row, so
+// that one odd reading cannot switch the board off.
+bool batteryEmpty();
+// The PMIC cuts the power; holding PWR or plugging USB in brings the board
+// back. On battery this does not return.
+void boardPowerOff();
 
 // True once for each 1 s hold of PWR since the last call (it fires while
 // still held). Holding on to 10 s restarts the board in hardware.

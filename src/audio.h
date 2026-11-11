@@ -66,6 +66,9 @@ void audioCancelRecording(); // stops and discards it
 void audioPlay(int index);
 void audioStopPlayback();
 void audioDelete(int index);
+// Deletes the moment with this number, wherever it sits in the list by the
+// time the request is carried out (the list shifts when a recording is saved)
+void audioDeleteNumber(int number);
 void audioSetTag(int index, int tag); // a category slot, or TAG_NONE
 void audioClearTagsAbove(int count); // moments tagged with a slot above `count` lose the tag
 // Tape-style varispeed while playing: +1 speeds up for as long as it's held,
@@ -86,6 +89,20 @@ void audioSuspend();
 bool audioAsleep(); // codec off, I2S stopped, no requests pending
 
 AudioState audioState();
+// False when the audio chain did not start (codec or I2S): nothing can be
+// recorded or played, and requests are dropped
+bool audioReady();
+// The list holds MAX_MOMENTS: no room for another, whatever the card has free
+bool audioListFull();
+// Something that went wrong with a recording, for the screen and the web page
+// to say. It stays until the next recording starts.
+enum AudioNotice {
+    AUDIO_NOTICE_NONE,
+    AUDIO_NOTICE_CARD_FAILED, // the card stopped taking data: the recording ended there, what was written is kept
+    AUDIO_NOTICE_NOT_SAVED,   // a recording could not be kept at all
+    AUDIO_NOTICE_NO_CARD,     // the card that was there at start-up is gone
+};
+AudioNotice audioNotice(uint32_t &since); // and when it happened (millis)
 float audioRecordingSeconds();
 float audioRecordingLimitSeconds();
 int audioPlayingIndex(); // -1 when not playing

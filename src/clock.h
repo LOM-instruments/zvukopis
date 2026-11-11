@@ -23,11 +23,15 @@ enum ClockSync {
 void clockInit();
 
 bool clockValid(); // false until the RTC or NTP has given a plausible time
-void clockSet(time_t utc); // sets the system clock and the RTC (serial 'T<unix time>')
+// Sets the system clock and the RTC (serial 'T<unix time>', the web page).
+// False, and nothing changes, for a time before 2023 or after 2037.
+bool clockSet(time_t utc);
 
 bool clockSyncAvailable(); // false while zvukopis knows no Wi-Fi network
 const char *clockTimeZone(); // POSIX TZ rule, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"
-void clockSetTimeZone(const char *posixTz); // applies it and keeps it
+// Applies a POSIX TZ rule and keeps it. False, and nothing changes, when the
+// text is not such a rule (a name like "Europe/Prague" is not).
+bool clockSetTimeZone(const char *posixTz);
 void clockSyncNow();       // starts a sync in the background
 // State of the last sync, and when it started or finished (millis)
 ClockSync clockSyncState(uint32_t &since);

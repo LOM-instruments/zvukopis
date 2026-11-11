@@ -136,6 +136,10 @@ bool usbPowered() {
     return pmuReady && pmu.isVbusGood();
 }
 
+bool boardPowerReady() { return pmuReady; }
+bool batteryEmpty() { return false; }
+void boardPowerOff() {}
+
 void epdPowerOn() {
     if (!pmuReady) return;
     pmu.setALDO3Voltage(3300);

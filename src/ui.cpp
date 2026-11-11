@@ -3126,6 +3126,8 @@ void uiQuickRecordScreen() {
 
 void uiQuickRecordStarted() { quickRecordScreen = false; }
 
+void uiShowBatteryEmpty() {}
+
 void uiShowSleepScreen(bool on) {
     if (on) quoteIndex = esp_random() % QUOTE_COUNT;
     sleeping = on;

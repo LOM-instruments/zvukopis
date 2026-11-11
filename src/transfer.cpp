@@ -1402,6 +1402,8 @@ static bool joinNetwork() {
     strlcpy(info.network, ssid, sizeof(info.network));
     info.password[0] = 0;
     strlcpy(info.address, WiFi.localIP().toString().c_str(), sizeof(info.address));
+    strlcpy(info.host, wifiHostName(), sizeof(info.host));
+    info.key[0] = 0;
     info.hotspot = false;
     return true;
 }
@@ -1412,6 +1414,8 @@ static void openHotspot() {
     strlcpy(info.network, wifiHotspotName(), sizeof(info.network));
     strlcpy(info.password, wifiHotspotPassword(), sizeof(info.password));
     strlcpy(info.address, WiFi.softAPIP().toString().c_str(), sizeof(info.address));
+    strlcpy(info.host, wifiHostName(), sizeof(info.host));
+    info.key[0] = 0;
     info.hotspot = true;
     dns.start(53, "*", WiFi.softAPIP());
 }

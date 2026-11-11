@@ -27,3 +27,6 @@ bool uiCanRecord(); // not while the SD card is open as a USB drive
 // recording itself takes over the screen
 void uiQuickRecordScreen();
 void uiQuickRecordStarted();
+// The battery is empty: a page saying so (one full refresh), then the panel
+// sleeps. Returns when that is done; the caller then powers the board off.
+void uiShowBatteryEmpty();

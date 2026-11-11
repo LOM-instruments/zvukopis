@@ -19,7 +19,9 @@ struct TransferInfo {
     bool hotspot;       // its own network rather than the configured one
     char network[33];   // network name to join
     char password[33];  // hotspot password (empty when joining the configured network)
-    char address[16];   // the page is at http://address/
+    char address[16];   // the page is at http://address/key
+    char host[24];      // ... and, on a home network, at http://host.local/key
+    char key[12];       // the access key: without it in the address the page stays shut (empty: no key)
     uint32_t requests;  // pages and files served so far
 };
 

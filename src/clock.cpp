@@ -210,7 +210,7 @@ void clockInit() {
 
 const char *clockTimeZone() { return timeZone; }
 
-void clockSetTimeZone(const char *posixTz) {
+bool clockSetTimeZone(const char *posixTz) {
     strlcpy(timeZone, posixTz, sizeof(timeZone));
     setenv("TZ", timeZone, 1);
     tzset();
@@ -219,11 +219,12 @@ void clockSetTimeZone(const char *posixTz) {
     prefs.putString("tz", timeZone);
     prefs.end();
     Serial.printf("[clock] time zone %s\n", timeZone);
+    return true;
 }
 
 bool clockValid() { return valid; }
 
-void clockSet(time_t utc) {
+bool clockSet(time_t utc) {
     setSystemTime(utc);
     rtcWrite(utc);
     valid = true;
@@ -232,6 +233,7 @@ void clockSet(time_t utc) {
     localtime_r(&utc, &local);
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local);
     Serial.printf("[clock] set to %s, zone %s\n", buf, timeZone);
+    return true;
 }
 
 bool clockSyncAvailable() { return wifiKnowsAny(); }

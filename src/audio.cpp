@@ -993,6 +993,14 @@ void audioCancelRecording() { sendCommand(CMD_RECORD_CANCEL); }
 void audioPlay(int index) { sendCommand(CMD_PLAY, index); }
 void audioStopPlayback() { sendCommand(CMD_STOP_PLAYBACK); }
 void audioDelete(int index) { sendCommand(CMD_DELETE, index); }
+void audioDeleteNumber(int number) {
+    for (int i = 0; i < momentTotal; i++) {
+        if (moments[i].number == number) {
+            sendCommand(CMD_DELETE, i);
+            return;
+        }
+    }
+}
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioStartUsbMic() { sendCommand(CMD_USB_MIC); }
 void audioSetTag(int index, int tag) { sendCommand(CMD_TAG, index, tag); }
@@ -1056,6 +1064,13 @@ void audioSuspend() {
 bool audioAsleep() { return !running && uxQueueMessagesWaiting(commandQueue) == 0; }
 
 AudioState audioState() { return state; }
+
+bool audioReady() { return true; }
+bool audioListFull() { return momentTotal >= MAX_MOMENTS; }
+AudioNotice audioNotice(uint32_t &since) {
+    since = 0;
+    return AUDIO_NOTICE_NONE;
+}
 
 float audioRecordingSeconds() {
     return state == AUDIO_RECORDING || state == AUDIO_SAVING ? (float)scratchLength / SAMPLE_RATE : 0;
