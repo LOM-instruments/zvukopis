@@ -19,7 +19,11 @@
 #endif
 
 static const uint8_t RTC_ADDRESS = 0x51;
-static const uint8_t RTC_SECONDS_REG = 0x04; // then minutes, hours, days, weekdays, months, years
+static const uint8_t RTC_RAM_REG = 0x03; // a byte to use freely, then seconds, minutes, hours, days, weekdays, months, years
+// Goes into that byte with every time written here. A time without it was put
+// there by another firmware (Waveshare's writes local time, not UTC) and is
+// not trusted; the byte is back at zero after the RTC lost power.
+static const uint8_t RTC_TIME_IS_OURS = 0x5A;
 static const int MIN_VALID_YEAR = 2023, MAX_VALID_YEAR = 2037; // those of CLOCK_EARLIEST and CLOCK_LATEST
 
 static const uint32_t NTP_REPLY_MS = 1500; // per request; three per server
@@ -47,12 +51,14 @@ static time_t utcToTime(const tm &t) {
     return (time_t)days * 86400 + t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
 }
 
-// False when the RTC can't be read or its oscillator stopped (time lost)
+// False when the RTC can't be read, its oscillator stopped (time lost), or
+// the time in it is not one written here
 static bool rtcRead(time_t &out) {
     Wire.beginTransmission(RTC_ADDRESS);
-    Wire.write(RTC_SECONDS_REG);
+    Wire.write(RTC_RAM_REG);
     if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom(RTC_ADDRESS, (uint8_t)7) != 7) return false;
+    if (Wire.requestFrom(RTC_ADDRESS, (uint8_t)8) != 8) return false;
+    uint8_t mark = Wire.read();
     uint8_t r[7];
     for (uint8_t &b : r) b = Wire.read();
     if (r[0] & 0x80) return false;
@@ -65,6 +71,10 @@ static bool rtcRead(time_t &out) {
     t.tm_mon = fromBcd(r[5] & 0x1F) - 1;
     t.tm_year = fromBcd(r[6]) + 100;
     if (t.tm_year + 1900 < MIN_VALID_YEAR || t.tm_year + 1900 > MAX_VALID_YEAR) return false;
+    if (mark != RTC_TIME_IS_OURS) {
+        Serial.println("[clock] the time in the RTC was not set by Zvukopis");
+        return false;
+    }
     out = utcToTime(t);
     return true;
 }
@@ -73,7 +83,8 @@ static bool rtcWrite(time_t now) {
     tm t;
     gmtime_r(&now, &t);
     Wire.beginTransmission(RTC_ADDRESS);
-    Wire.write(RTC_SECONDS_REG);
+    Wire.write(RTC_RAM_REG);
+    Wire.write(RTC_TIME_IS_OURS);
     Wire.write(toBcd(t.tm_sec)); // also clears the oscillator-stopped flag
     Wire.write(toBcd(t.tm_min));
     Wire.write(toBcd(t.tm_hour));

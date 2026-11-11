@@ -9,6 +9,8 @@
 // Wi-Fi is only switched on for a sync, and never while recording, since the
 // radio could add interference to the audio. Credentials and time zone come
 // from src/wifi_config.h (see wifi_config.example.h).
+// A time found in the RTC counts only if Zvukopis put it there: the factory
+// firmware, for one, keeps local time in it.
 
 // The clock takes no time outside this range: an earlier one is a clock that
 // was never set, and the 32-bit time_t ends in January 2038
