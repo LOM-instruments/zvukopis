@@ -12,13 +12,13 @@ coupler), the relative ones are solid.
 |---|---|
 | Board | Waveshare ESP32-S3-ePaper-3.97 |
 | Processor | ESP32-S3R8, dual core, 8 MB octal PSRAM, 16 MB flash |
-| Screen | 3.97" e-paper, 480 x 800, partial refresh about 0.55 s, full about 2.2 s |
+| Screen | 3.97" e-paper, 480 x 800, partial refresh about 0.55 s, full about 2.2 s at 21 °C and above (4 s from 11 to 20 °C, 5.5 s below; *measured*); the panel is rated for 0 to 50 °C |
 | Controls | Side rocker switch (up, down, press, hold), Settings button, Sleep button |
 | Storage | microSD over SDMMC (4-bit), FAT32 (the firmware formats cards over 32 GB) |
 | Power | LiPo battery through an AXP2101 PMIC, USB-C charging, light sleep between presses |
 | Battery | 3.7 V lithium, 1500 mAh, on an MX1.25 two-pin plug (the one Waveshare ships with the board) |
-| Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started |
-| USB | Serial console and the web flasher; the SD card as a USB drive; a class-compliant microphone (USB Audio Class 2.0, mono 16-bit at the recording rate, gain on the side switch) |
+| Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started, except for one time sync at start-up when the clock was lost and a network is known |
+| USB | Serial console and the web flasher; the SD card as a USB drive (full-speed USB, about 0.8 MB/s); a class-compliant microphone (USB Audio Class 2.0, mono 16-bit at the recording rate, gain on the side switch) |
 | Case | 3D-printed (`docs/case/`, an STL per version, FDM or resin), bolted to the board's standoffs with four countersunk M2.5×6 bolts, hex or Torx |
 
 ## Audio chain
@@ -77,7 +77,7 @@ floor while the headroom it buys (clipping above 145 dB SPL) is of no use.
 |---|---|
 | Spectrogram | 4096-point FFT, Hann window, 23 Hz bins, linear 0 to 48 kHz, four contrast levels |
 | Spectrum | Average of the same FFTs, dB against linear frequency |
-| Band | The range that holds 80 % of the moment's energy |
+| Band | The range that holds 80 % of the moment's energy (computed, not shown) |
 
 ## Web interface
 

@@ -37,8 +37,8 @@ is also on the project page, and it reads on the device (a copy sits in
 - **Calendar:** up from *New recording*, then press in.
 - **Library:** the book button next to the calendar, shown once the card has
   documents. Up and down turn the pages; the page you left at is remembered.
-- **Spectrogram:** up switches between spectrogram and spectrum, down steps
-  through four contrast levels.
+- **Spectrogram:** up and down step through four contrast levels; hold in for
+  the spectrum, or to go back.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader, the USB microphone, formatting the card
@@ -47,7 +47,7 @@ is also on the project page, and it reads on the device (a copy sits in
   screen comes up and the recording starts right after it (the panel's
   refresh is audible to the mic, so it goes first; about 3 s from the press).
   A short knock is ignored. Press in again to stop.
-- **Which firmware:** the version (date and commit) is at the bottom of
+- **Which firmware:** the version (date and commit) is at the top of
   Settings, and in the web interface's first line. The project page installs
   the newest one.
 - **Sleep and wake:** hold the sleep button (PWR on the board) for 1 second.
