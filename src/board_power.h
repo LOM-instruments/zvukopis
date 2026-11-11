@@ -5,7 +5,14 @@
 // every refresh and the PMIC keeps that state while a battery is attached,
 // so the rail must be enabled before talking to the display.
 
-bool boardPowerInit(); // also switches off unused rails and puts the sensors to sleep
+// First thing at start-up: starts the I2C bus and takes the clock chip's
+// alarm off the PWR key. The chip's interrupt output is wired to the key's
+// line, and an alarm left set by another firmware would hold the key down
+// from the moment it goes off, for good.
+void powerKeyRelease();
+// Also sets the charger, switches the codec's rails on and the unused ones
+// off, and puts the sensors to sleep
+bool boardPowerInit();
 void sensorsSleep();
 void epdPowerOn();
 void epdPowerOff();
@@ -13,11 +20,14 @@ void epdPowerOff();
 int batteryPercent(); // 0-100, or -1 without a battery
 bool usbPowered();
 bool boardPowerReady(); // false when the PMIC did not answer at start-up: battery, USB and the PWR key are then unknown
-// On battery and at the end of it. True only after two readings in a row, so
-// that one odd reading cannot switch the board off.
+// One reading: on battery, and under 3.30 V or at 3 % or less by the gauge
+bool batteryLow();
+// On battery and at the end of it. True only after two readings in a row, at
+// least ten seconds apart, so that one odd reading cannot switch the board off.
 bool batteryEmpty();
 // The PMIC cuts the power; holding PWR or plugging USB in brings the board
-// back. On battery this does not return.
+// back. On battery this does not return. On USB power it does nothing: the
+// board would stay off with the cable in.
 void boardPowerOff();
 
 // True once for each 1 s hold of PWR since the last call (it fires while

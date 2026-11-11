@@ -10,6 +10,11 @@
 // radio could add interference to the audio. Credentials and time zone come
 // from src/wifi_config.h (see wifi_config.example.h).
 
+// The clock takes no time outside this range: an earlier one is a clock that
+// was never set, and the 32-bit time_t ends in January 2038
+static const time_t CLOCK_EARLIEST = 1672531200; // 2023-01-01 00:00:00 UTC
+static const time_t CLOCK_LATEST = 2145916799;   // 2037-12-31 23:59:59 UTC
+
 enum ClockSync {
     CLOCK_SYNC_NONE,
     CLOCK_SYNCING,
@@ -24,7 +29,8 @@ void clockInit();
 
 bool clockValid(); // false until the RTC or NTP has given a plausible time
 // Sets the system clock and the RTC (serial 'T<unix time>', the web page).
-// False, and nothing changes, for a time before 2023 or after 2037.
+// False, and nothing changes, for a time before 2023 or after 2037
+// (CLOCK_EARLIEST, CLOCK_LATEST).
 bool clockSet(time_t utc);
 
 bool clockSyncAvailable(); // false while zvukopis knows no Wi-Fi network

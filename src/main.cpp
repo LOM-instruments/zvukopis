@@ -14,6 +14,7 @@
 #include "library.h"
 #include "networks.h"
 #include "storage.h"
+#include "transfer.h"
 #include "ui.h"
 #include "usbport.h"
 
@@ -51,6 +52,50 @@ static bool onUsbPower() {
         checkedAt = millis();
     }
     return usb;
+}
+
+// --- An empty battery ---
+
+// Left to run, the board goes on until the PMIC cuts the power: a recording in
+// progress loses its end, and the screen keeps saying whatever it said last.
+// So at about 3 % (batteryEmpty() in board_power.h) whatever runs is stopped
+// and saved, the screen says the battery is empty, and the board switches
+// off until PWR is held or USB power comes.
+
+static const uint32_t BATTERY_CHECK_MS = 30 * 1000;
+
+// True once the battery is empty; reads it about every 30 s
+static bool batteryRanOut() {
+    static uint32_t checkedAt = 0;
+    if (millis() - checkedAt < BATTERY_CHECK_MS) return false;
+    checkedAt = millis();
+    return batteryEmpty();
+}
+
+// Once whatever was running has been stopped and saved. Does not return.
+static void powerOffEmpty() {
+    Serial.println("[power] battery empty");
+    uiShowBatteryEmpty();
+    boardPowerOff();
+    // Still running: USB power came while the page was drawn. A fresh start
+    // brings the screen back.
+    Serial.println("[power] not switched off, restarting");
+    Serial.flush();
+    ESP.restart();
+}
+
+// At start-up the two readings that batteryEmpty() wants are taken here, ten
+// seconds apart, with nothing drawn yet. A reading that isn't low (USB power
+// arriving, say) ends the wait.
+static bool batteryEmptyAtStart() {
+    if (!batteryLow()) return false;
+    Serial.println("[power] the battery reads empty, looking again for 10 s");
+    uint32_t start = millis();
+    while (millis() - start < 10000) {
+        delay(500);
+        if (!batteryLow()) return false;
+    }
+    return true;
 }
 
 // --- Scheduled recordings (set up on the web interface) ---
@@ -149,7 +194,7 @@ static void printPowerStats() {
 // power isn't scarce then. A 'p' over serial also wakes it in that case.
 static const uint32_t SLEEP_RECHECK_MS = 60 * 1000;
 
-enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE, WAKE_QUICK_RECORD };
+enum Wake { WAKE_KEY, WAKE_POWER_SOURCE, WAKE_SCHEDULE, WAKE_QUICK_RECORD, WAKE_BATTERY_EMPTY };
 
 // The rocker was pressed in while asleep: held for the hold time, it's a
 // quick record; released before that, a knock.
@@ -201,6 +246,12 @@ static Wake sleepUntilWake() {
         }
         esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000);
         esp_light_sleep_start();
+        // Read at every wake-up, a minute apart at most. Before the key: a
+        // hold of PWR on an empty battery gets the page that says so.
+        if (batteryEmpty()) {
+            wake = WAKE_BATTERY_EMPTY;
+            break;
+        }
         if (powerKeyPressed()) {
             wake = WAKE_KEY;
             break;
@@ -241,6 +292,10 @@ static bool recordWhileAsleep() {
             woken = true;
             audioStopRecording();
         }
+        if (batteryRanOut()) {
+            audioSuspend(); // finishes and saves the recording
+            powerOffEmpty();
+        }
         delay(20);
     }
     uint32_t start = millis();
@@ -261,6 +316,7 @@ static void goToSleep() {
     bool quickRecord = false;
     for (;;) {
         Wake wake = sleepUntilWake();
+        if (wake == WAKE_BATTERY_EMPTY) powerOffEmpty(); // nothing runs while asleep, so nothing to save
         if (wake == WAKE_KEY) break;
         if (wake == WAKE_QUICK_RECORD) {
             quickRecord = true;
@@ -310,6 +366,9 @@ static void dumpNewestMoment() {
 }
 
 void setup() {
+    // Before the wait for the serial monitor below: the PMIC may already be
+    // counting the seconds of a PWR key held down by another firmware's alarm
+    powerKeyRelease();
     // Larger USB serial buffer so screenshot dumps arrive intact
     usbPortRestoreAtBoot(); // the console, even after a crash in a USB mode
     Serial.setTxBufferSize(4096);
@@ -334,9 +393,12 @@ void setup() {
     lastUpMs = lastNapMs = lastNaps = lastSleepMs = 0;
     setCpuFrequencyMhz(CPU_MHZ);
 
-    boardPowerInit(); // also starts the I2C bus shared with the audio codec
+    boardPowerInit(); // the PMIC, on the I2C bus shared with the audio codec
     epdPowerOn();
     EPD_3IN97_Init();
+    // Switched on with an empty battery: the page that says so, and off again,
+    // before the main screen is drawn with what little is left
+    if (batteryEmptyAtStart()) powerOffEmpty();
     wifiInit();  // before the clock, which may sync at startup
     clockInit(); // before audio, so moments get start times
     configInit();
@@ -369,12 +431,13 @@ void loop() {
         case 'p': buttonsInject(BTN_POWER); break;
         case 'a': dumpNewestMoment(); break;
         case 'f': storageListFiles(); break;
-        case 'T': clockSet((time_t)Serial.parseInt()); break;
+        case 'T':
+            if (!clockSet((time_t)Serial.parseInt())) Serial.println("[clock] bad time");
+            break;
         case 'Z': { // a POSIX time zone rule up to the end of the line
             String tz = Serial.readStringUntil('\n');
             tz.trim();
-            if (tz.length() >= 1 && tz.length() <= 60) {
-                clockSetTimeZone(tz.c_str());
+            if (tz.length() >= 1 && tz.length() <= 60 && clockSetTimeZone(tz.c_str())) {
                 Serial.printf("[clock] zone set to %s\n", clockTimeZone());
             } else {
                 Serial.println("[clock] bad zone");
@@ -397,6 +460,14 @@ void loop() {
     while (buttonsNextEvent(event)) uiHandleEvent(event);
     uiTick();
     scheduleTick();
+    if (batteryRanOut()) {
+        // Wi-Fi off first, the web interface's and a clock sync's: the last
+        // refresh needs what the battery still gives
+        transferStop();
+        clockPauseSync(true);
+        audioSuspend(); // finishes and saves a recording in progress
+        powerOffEmpty();
+    }
     if (uiTakeSleepRequest()) goToSleep();
     delay(10);
     napIfIdle();
