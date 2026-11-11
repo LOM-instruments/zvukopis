@@ -48,6 +48,7 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image);
 void EPD_3IN97_V2_Display_Window(const UBYTE *Image, UWORD xstart, UWORD ystart, UWORD image_width, UWORD image_heigh);
 void EPD_3IN97_V2_Display_Window_Base(const UBYTE *Image, UWORD xstart, UWORD ystart, UWORD image_width, UWORD image_heigh);
 void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend);
+void EPD_3IN97_Display_Partial_From(const UBYTE *Previous, const UBYTE *Image);
 void EPD_3IN97_Display_4Gray(const UBYTE *Image);
 void EPD_3IN97_WritePicture_4Gray(const UBYTE *Image);
 void EPD_3IN97_Sleep(void);

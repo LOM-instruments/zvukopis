@@ -523,6 +523,47 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
 	EPD_3IN97_TurnOnDisplay_Part();
 }
 
+// The whole frame into one of the controller's two memories (0x24: the new
+// image, 0x26: the previous one), from the first address
+static void EPD_3IN97_WriteFrame(UBYTE Ram, const UBYTE *Image)
+{
+    EPD_3IN97_SendCommand(0x4E);
+    EPD_3IN97_SendData(0x00);
+    EPD_3IN97_SendData(0x00);
+    EPD_3IN97_SendCommand(0x4F);
+    EPD_3IN97_SendData(0x00);
+    EPD_3IN97_SendData(0x00);
+
+    EPD_3IN97_SendCommand(Ram);
+    EPD_3IN97_SendDataBlock(Image, (UDOUBLE)(EPD_3IN97_WIDTH / 8) * EPD_3IN97_HEIGHT);
+}
+
+/******************************************************************************
+function :	Partial update of the whole panel from a known previous image
+parameter:
+    Previous : the image the panel is showing now
+    Image    : the image to show
+******************************************************************************/
+// For the first update after EPD_3IN97_Init (the wake from deep sleep), where
+// the full refresh's 2 to 5 s are not wanted. A partial update drives each
+// pixel by the difference between the previous image (0x26) and the new one
+// (0x24). What the two memories hold after deep sleep and a reset is not
+// relied on: both are written.
+// Previous has to be what the panel really shows: where it is not, those
+// pixels are left as they were, which shows as remains of the old picture
+// until the next full refresh.
+// Afterwards both memories get the new image, as EPD_3IN97_Display_Base leaves
+// them: the partial updates that follow then start from the same state as
+// after a full refresh, whether or not the controller swaps its two memories
+// after an update (a setting in the panel's OTP that this driver cannot read).
+void EPD_3IN97_Display_Partial_From(const UBYTE *Previous, const UBYTE *Image)
+{
+    EPD_3IN97_WriteFrame(0x26, Previous);
+    EPD_3IN97_Display_Partial(Image, 0, 0, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
+    EPD_3IN97_WriteFrame(0x26, Image);
+    EPD_3IN97_WriteFrame(0x24, Image);
+}
+
 void EPD_3IN97_Display_4Gray(const UBYTE *Image)
 {
     UDOUBLE i,j,k;

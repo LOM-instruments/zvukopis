@@ -141,6 +141,11 @@ char *libraryLoad(int index, size_t &length) {
     return text;
 }
 
+void libraryUnload() {
+    free(text);
+    text = nullptr;
+}
+
 int libraryFind(const char *fileName) {
     if (!lock || !fileName) return -1;
     xSemaphoreTake(lock, portMAX_DELAY);

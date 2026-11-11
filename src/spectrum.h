@@ -29,11 +29,16 @@ struct Spectrogram {
 };
 
 // Starts working out the spectrogram of moment `number` at this grid size
-// (unless it's already there or under way)
+// (unless it's already there or under way). The same moment at another size
+// (the button guide shown or hidden) is worked out again.
 void spectrumRequest(int momentNumber, int width, int height);
-// The finished spectrogram of that moment, or nullptr while it's being worked out
+// The finished spectrogram of that moment at the size last asked for, or
+// nullptr while it's being worked out
 const Spectrogram *spectrumResult(int momentNumber);
 int spectrumProgress(int momentNumber); // 0-100 while it's being worked out
+// The analysis of that moment found no memory to work in. Asking for it again
+// tries again.
+bool spectrumFailed(int momentNumber);
 
 // Frequency at the middle of a row (linear)
 float spectrumRowHz(int row, int height);

@@ -22,9 +22,10 @@ int libraryCount();
 bool libraryGet(int index, Document &out); // by title
 
 // The document's text, as ASCII with typographic punctuation mapped
-// (curly quotes, dashes, ellipsis), in PSRAM until the next load. nullptr if
-// it can't be read.
+// (curly quotes, dashes, ellipsis), in PSRAM until the next load or
+// libraryUnload(). nullptr if it can't be read.
 char *libraryLoad(int index, size_t &length);
+void libraryUnload(); // gives the loaded text's memory back
 
 // Indices change when the list is rescanned (an upload from the web), so
 // these go by file name

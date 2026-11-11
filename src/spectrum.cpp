@@ -16,8 +16,14 @@ static float *averageDb = nullptr; // FFT_SIZE / 2
 static volatile int readyNumber = -1;   // moment whose spectrogram is in `result`
 static volatile int progress = 0;       // percent of the columns done
 static volatile int wantedNumber = -1;  // moment being worked out next
-static int wantedWidth = 0, wantedHeight = 0;
+static volatile int failedNumber = -1;  // moment whose analysis found no memory
+// The grid size asked for, width in the upper half and height in the lower:
+// one word, so that the task never takes the width of one request with the
+// height of another. It changes when the button guide is shown or hidden.
+static volatile uint32_t wantedSize = 0;
 static TaskHandle_t task = nullptr;
+
+static uint32_t gridSize(int width, int height) { return (uint32_t)width << 16 | (uint32_t)height; }
 
 float spectrumRowHz(int row, int height) {
     return SPECTRUM_HIGH_HZ * (1 - (row + 0.5f) / height); // row 0 at the top
@@ -53,7 +59,14 @@ class SampleSource {
     File file;
 };
 
-static bool compute(int number, int width, int height) {
+enum Outcome { DONE, SUPERSEDED, FAILED };
+
+// Another moment, or another grid size, has been asked for meanwhile
+static bool superseded(int number, int width, int height) {
+    return wantedNumber != number || wantedSize != gridSize(width, height);
+}
+
+static Outcome compute(int number, int width, int height) {
     int index = -1;
     Moment moment;
     for (int i = 0; momentGet(i, moment); i++) {
@@ -62,13 +75,15 @@ static bool compute(int number, int width, int height) {
             break;
         }
     }
-    if (index < 0 || moment.length < FFT_SIZE / 4) return false;
+    progress = 0; // not the figure the analysis before this one ended on
+    if (index < 0 || moment.length < FFT_SIZE / 4) return FAILED;
     uint32_t start = millis();
 
-    if (!dbGrid || (size_t)wantedWidth * wantedHeight > dbGridCells) {
+    if (!dbGrid || (size_t)width * height > dbGridCells) {
         free(dbGrid);
-        dbGridCells = (size_t)wantedWidth * wantedHeight;
+        dbGridCells = (size_t)width * height;
         dbGrid = (float *)ps_malloc(dbGridCells * sizeof(float));
+        if (!dbGrid) dbGridCells = 0;
     }
     float *db = dbGrid;
     float *fft = (float *)heap_caps_aligned_alloc(16, FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_INTERNAL);
@@ -80,7 +95,12 @@ static bool compute(int number, int width, int height) {
     int *binLow = (int *)malloc(height * sizeof(int)), *binHigh = (int *)malloc(height * sizeof(int));
     bool ok = db && fft && frame && window && rowEnergy && binPower && binLow && binHigh;
     if (ok && !averageDb) averageDb = (float *)ps_malloc(FFT_SIZE / 2 * sizeof(float));
-    ok = ok && averageDb && width * height <= wantedWidth * wantedHeight;
+    ok = ok && averageDb;
+    Outcome outcome = ok ? DONE : FAILED;
+    if (!ok) {
+        Serial.printf("[spectrum] no memory for the analysis of Moment %d (%u KB of PSRAM free)\n", number,
+                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    }
     if (ok) {
         const float rate = moment.sampleRate ? moment.sampleRate : SAMPLE_RATE;
         const float binHz = rate / FFT_SIZE;
@@ -96,8 +116,7 @@ static bool compute(int number, int width, int height) {
 
         SampleSource source(moment);
         float loudest = -1000;
-        progress = 0;
-        for (int c = 0; c < width && wantedNumber == number; c++) {
+        for (int c = 0; c < width && !superseded(number, width, height); c++) {
             progress = c * 100 / width;
             long centre = (long)((c + 0.5) * moment.length / width);
             source.read(centre - FFT_SIZE / 2, FFT_SIZE, frame);
@@ -130,8 +149,8 @@ static bool compute(int number, int width, int height) {
             }
             if (c % 16 == 0) vTaskDelay(1); // let the other tasks on this core run
         }
-        ok = wantedNumber == number;
-        if (ok) {
+        if (superseded(number, width, height)) outcome = SUPERSEDED;
+        if (outcome == DONE) {
             // Where the energy lies: rows from the bottom (low) up, by share of the total
             double total = 0, below = 0;
             for (int r = 0; r < height; r++) total += rowEnergy[r];
@@ -178,36 +197,54 @@ static bool compute(int number, int width, int height) {
     free(binPower);
     free(binLow);
     free(binHigh);
-    return ok;
+    return outcome;
+}
+
+// The result in hand is that moment's, at the grid size now asked for
+static bool ready(int number) {
+    return readyNumber == number && gridSize(result.width, result.height) == wantedSize;
 }
 
 static void spectrumTask(void *) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         int number = wantedNumber;
-        if (number < 0 || number == readyNumber) continue;
+        uint32_t size = wantedSize;
+        if (number < 0 || ready(number)) continue;
         readyNumber = -1;
-        if (compute(number, wantedWidth, wantedHeight)) readyNumber = number;
+        Outcome outcome = compute(number, size >> 16, size & 0xFFFF);
+        if (outcome == DONE) {
+            readyNumber = number;
+        } else if (outcome == FAILED && !superseded(number, size >> 16, size & 0xFFFF)) {
+            // The screen says so, and the request is forgotten, so that asking again tries again
+            failedNumber = number;
+            wantedNumber = -1;
+        }
     }
 }
 
 void spectrumRequest(int momentNumber, int width, int height) {
-    if (momentNumber == wantedNumber) return;
+    uint32_t size = gridSize(width, height);
+    if (momentNumber == wantedNumber && size == wantedSize) return;
+    if (!task) xTaskCreatePinnedToCore(spectrumTask, "spectrum", 6144, NULL, 1, &task, 0);
     if (!task) {
-        // The grid size is fixed by the screen, so the buffer is sized on first use
-        wantedWidth = width;
-        wantedHeight = height;
-        xTaskCreatePinnedToCore(spectrumTask, "spectrum", 6144, NULL, 1, &task, 0);
+        Serial.println("[spectrum] no memory for the analysis task");
+        failedNumber = momentNumber;
+        return;
     }
+    failedNumber = -1;
+    wantedSize = size;
     wantedNumber = momentNumber;
     xTaskNotifyGive(task);
 }
 
 int spectrumProgress(int momentNumber) {
-    if (readyNumber == momentNumber) return 100;
+    if (ready(momentNumber)) return 100;
     return wantedNumber == momentNumber ? progress : 0;
 }
 
 const Spectrogram *spectrumResult(int momentNumber) {
-    return readyNumber == momentNumber ? &result : nullptr;
+    return ready(momentNumber) ? &result : nullptr;
 }
+
+bool spectrumFailed(int momentNumber) { return failedNumber == momentNumber; }

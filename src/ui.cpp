@@ -49,19 +49,29 @@ static const int WAVE_PITCH = 5; // bar width 3 + gap 2
 static const int WAVE_HALF_H = 15;
 
 static const int FULL_REFRESH_EVERY = 30; // partial refreshes, before a full one clears ghosting
-// Playback refreshes once a second, and the partial waveform also pulses the pixels
-// that stay the same, so the ink greys out: a full refresh now and then while
-// playing, and one when playback ends if it was long enough to have left a mark
-static const int PLAYING_FULL_REFRESH_EVERY = 30; // partial refreshes while playing
-static const int PLAYED_FULL_REFRESH_AFTER = 8;   // partial refreshes since the last full one, when playback ends
 static const uint32_t FULL_REFRESH_IDLE_MS = 20000; // ...done once the buttons have been left alone this long
+// Playback redraws the screen each time the playhead moves a step, and the ink
+// greys out over many partial refreshes in a row (seen on the panel; whether
+// the refreshes alone do it or the black areas too has not been measured). So
+// the refreshes made while a moment plays are counted by themselves: a full
+// refresh after this many of them while it still plays, and one when playback
+// ends if there were enough to have left a mark. Both are to be set by eye.
+static const int PLAYING_FULL_REFRESH_EVERY = 60; // playing partial refreshes, before a full one while still playing
+static const int PLAYED_FULL_REFRESH_AFTER = 20;  // playing partial refreshes, from which playback ends in a full one
+// The playhead on the analysis screen moves in this many steps over the whole
+// moment (the list's moves bar by bar, WAVEFORM_BINS of them)
+static const int ANALYSIS_PLAY_STEPS = 100;
+static const uint32_t PLAY_STEP_MIN_MS = 1000; // and no playhead step redraws sooner than this after the last
 static const uint32_t CONFIRM_TIMEOUT_MS = 10000;
 static const uint32_t MENU_TIMEOUT_MS = 15000;
 static const uint32_t SLEEP_SCREEN_TIMEOUT_MS = 15000;
 static const uint32_t BATTERY_READ_MS = 30000;
 static const uint32_t SETTINGS_READ_MS = 2000;       // USB plugged in or not, while settings are up
 static const uint32_t AUTO_SLEEP_MS = 5 * 60 * 1000; // idle time before sleeping on its own
-static const uint32_t RESULT_MS = 10000;             // how long a sync or format result stays up
+static const uint32_t RESULT_MS = 10000;             // how long a sync or format result, or a recording's notice, stays up
+static const uint32_t USB_GONE_MS = 2000;            // without USB power in a USB mode: the cable was pulled
+static const uint32_t USB_GONE_CHECK_MS = 250;       // ... looked at this often, to be gone before the microphone's 3 s stall guard
+static const uint32_t NAP_LOOK_MS = 10;              // how long the main loop waits for the display task's look before a nap
 
 enum Screen {
     SCREEN_LIST,     // all moments, newest first
@@ -125,6 +135,13 @@ static int64_t unscheduleStart = 0;     // the scheduled recording the remove di
 static Screen scheduleFrom = SCREEN_LIST; // where Back on the schedule screen goes
 static Screen menuFrom = SCREEN_LIST;     // where closing the menu (Settings) returns to
 static int menuFromSelected = 0;
+// The screens that belong to Settings: opened from it, and leaving them leads
+// back to it. The Settings button closes Settings from these too; were it to
+// open Settings afresh, closing would lead here and from here back to
+// Settings, with no way to the main screen.
+static bool partOfSettings(int which) {
+    return which == SCREEN_SETTINGS || which == SCREEN_UPDATE || (which == SCREEN_SCHEDULE && scheduleFrom == SCREEN_SETTINGS);
+}
 static volatile int spectrumMoment = 0; // number of the moment being analysed
 enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
 static volatile int spectrumView = VIEW_SPECTROGRAM;
@@ -156,7 +173,16 @@ static volatile uint32_t lastActivity = 0; // last button press, or recording/pl
 static volatile bool sleeping = false;    // what the screen should show
 static volatile bool panelAsleep = false; // what the display task has done
 static volatile int quoteIndex = 0;
-static volatile uint32_t quietSince = 0; // display task found nothing to redraw from then on; 0 while busy
+// Light sleep between presses: the main loop asks the display task to look at
+// the screen once more (napAsk, a running number) and the display task answers
+// with that number (napAck) from a pass that began after the request and found
+// nothing to draw
+static volatile uint32_t napAsk = 0, napAck = 0;
+static volatile bool fullRefreshDue = false; // the display task owes the panel a full refresh, once the buttons rest
+static volatile bool batteryEmptyPage = false;  // see uiShowBatteryEmpty
+static volatile bool batteryEmptyDrawn = false; // ... the display task has put it on the panel
+static volatile uint32_t sleepBeganAt = 0, wokeUpAt = 0; // millis: a recording that went wrong in between is said on waking
+static volatile bool transferWaiting = false; // web interface asked for while a clock sync has Wi-Fi: starts when that ends
 static int lastMomentCount = 0;
 static int lastFormatResult = 0;
 static uint32_t formatResultAt = 0;
@@ -164,6 +190,11 @@ static volatile bool screenshotRequested = false;
 static TaskHandle_t displayTaskHandle = nullptr; // woken on input, so it needn't wait for its next poll
 
 static GFXcanvas1 *canvas;
+// The sleep screen exactly as it went to the panel (PSRAM): waking refreshes
+// the panel partially, and that needs the picture the panel still shows
+static uint8_t *asleepFrame = nullptr;
+static bool asleepFrameValid = false;
+static const size_t FRAME_BYTES = EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT;
 
 // --- Days with moments, for the calendar ---
 
@@ -291,9 +322,33 @@ struct ViewState {
     bool quickRecord; // the recording screen shown ahead of a quick recording
     int libraryCount;
     int readerPage;
-    int playTicks; // playback position in 1/8 s: changes continuously, so the screen refreshes back to back
+    int playStep; // where the playhead is, in steps: bars of the list waveform, or ANALYSIS_PLAY_STEPS on the analysis screen
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
+    int listFull;       // the list holds all the moments it can: no new recording, whatever the room
+    int notice;         // AudioNotice: a recording that went wrong, for RESULT_MS
+    int cardGone;       // the card stopped answering (until the next recording starts)
+    int audioReady;     // 0: the audio chain did not start
+    int powerReady;     // 0: the power chip did not answer at start-up
+    int spectrumFailed; // no memory for the analysis asked for
+    int batteryEmpty;   // the battery-empty page, in place of everything else
 };
+
+// What went wrong with a recording, for the main screen to say for RESULT_MS
+// from when it happened; `msLeft` is how much of that remains. When it
+// happened on the way into sleep or during it (a scheduled recording), the
+// time counts from the wake-up, or nobody would get to see it.
+static AudioNotice noticeToShow(uint32_t &msLeft) {
+    uint32_t since;
+    AudioNotice notice = audioNotice(since);
+    msLeft = 0;
+    if (notice == AUDIO_NOTICE_NONE) return notice;
+    uint32_t began = sleepBeganAt, woke = wokeUpAt;
+    if ((int32_t)(since - began) >= 0 && (int32_t)(woke - since) >= 0) since = woke;
+    uint32_t age = millis() - since;
+    if (age >= RESULT_MS) return AUDIO_NOTICE_NONE;
+    msLeft = RESULT_MS - age;
+    return notice;
+}
 
 static ViewState currentView() {
     static int battery = -1, usb = 0;
@@ -319,20 +374,14 @@ static ViewState currentView() {
     v.listVersion = momentListVersion();
     v.audio = audioState();
     v.playingIndex = audioPlayingIndex();
-    // Playback: the position and speed are sampled once a second, so the
-    // screen refreshes that often at most (each refresh is half a second of work)
-    static uint32_t playSampledAt = 0;
-    static int playSeconds = 0, speedTenths = 10, playTicks = 0, sampledIndex = -1;
-    if (audioState() != AUDIO_PLAYING || millis() - playSampledAt >= 1000 || audioPlayingIndex() != sampledIndex) {
-        playSampledAt = millis();
-        sampledIndex = audioPlayingIndex();
-        playSeconds = (int)audioPlaybackSeconds();
-        speedTenths = (int)roundf(audioPlaybackSpeed() * 10);
-        playTicks = (int)(audioPlaybackSeconds() * 8);
-    }
-    v.playSeconds = playSeconds;
-    v.speedTenths = speedTenths;
     v.secondsLeft = (int)audioSecondsLeft();
+    v.listFull = audioListFull();
+    v.audioReady = audioReady();
+    v.powerReady = boardPowerReady();
+    uint32_t noticeMsLeft, noticeSince;
+    v.notice = noticeToShow(noticeMsLeft);
+    v.cardGone = audioNotice(noticeSince) == AUDIO_NOTICE_NO_CARD;
+    v.batteryEmpty = batteryEmptyPage;
     v.battery = battery;
     v.usb = usb;
     v.sdCard = audioUsingSdCard();
@@ -345,7 +394,7 @@ static ViewState currentView() {
     if (v.audio == AUDIO_FORMATTING) v.formatStatus = 2;
     else if (lastFormatResult != 0 && millis() - formatResultAt < RESULT_MS) v.formatStatus = lastFormatResult;
     TransferInfo transfer = transferInfo();
-    v.transferState = transfer.state;
+    v.transferState = transferWaiting ? TRANSFER_CONNECTING : transfer.state; // waiting for the clock sync looks the same
     v.transferRequests = transfer.requests;
     v.cardEjected = screen == SCREEN_CARD_READER && cardReaderEjected();
     v.gainSetting = audioMicGainSetting();
@@ -360,6 +409,7 @@ static ViewState currentView() {
     v.scheduleCount = scheduleCount();
     v.spectrumMoment = spectrumMoment;
     v.spectrumReady = screen == SCREEN_SPECTRUM && spectrumResult(spectrumMoment) != nullptr;
+    v.spectrumFailed = screen == SCREEN_SPECTRUM && !v.spectrumReady && spectrumFailed(spectrumMoment);
     v.spectrumProgress = screen == SCREEN_SPECTRUM && !v.spectrumReady ? spectrumProgress(spectrumMoment) / 10 * 10 : 0;
     v.spectrumView = spectrumView;
     v.spectrumContrast = spectrumContrast;
@@ -367,7 +417,42 @@ static ViewState currentView() {
     v.quickRecord = quickRecordScreen;
     v.libraryCount = libraryCount();
     v.readerPage = readerPage;
-    if (v.audio == AUDIO_PLAYING) v.playTicks = playTicks;
+
+    // Playback: the playhead moves in steps (a bar of the list's waveform, a
+    // hundredth of the analysis plot), and the elapsed time and the speed are
+    // taken along with it. A new step or speed redraws the screen, but never
+    // sooner than PLAY_STEP_MIN_MS after the last time: each redraw is half a
+    // second of work and one more partial refresh for the panel. All of it
+    // only on the screens that draw a playhead; elsewhere a moment plays
+    // without changing the picture.
+    static uint32_t playSampledAt = 0;
+    static int playSeconds = 0, speedTenths = 10, playStep = 0, sampledIndex = -1, sampledSteps = 0;
+    bool analysis = v.screen == SCREEN_SPECTRUM;
+    int steps = analysis ? (v.spectrumView == VIEW_SPECTROGRAM ? ANALYSIS_PLAY_STEPS : 0)
+              : v.screen == SCREEN_LIST || v.screen == SCREEN_DAY ? WAVEFORM_BINS : 0;
+    Moment playing;
+    if (v.audio != AUDIO_PLAYING || steps == 0 || !momentGet(v.playingIndex, playing) || playing.length == 0) {
+        sampledIndex = -1;
+        playSeconds = playStep = 0;
+        speedTenths = 10;
+    } else {
+        float seconds = audioPlaybackSeconds();
+        uint32_t rate = playing.sampleRate ? playing.sampleRate : SAMPLE_RATE;
+        int step = constrain((int)(seconds * rate / playing.length * steps), 0, steps);
+        int speed = analysis ? 10 : (int)roundf(audioPlaybackSpeed() * 10); // the analysis screen shows no speed
+        bool first = v.playingIndex != sampledIndex || steps != sampledSteps; // playback, or this screen's playhead, just began
+        if (first || ((step != playStep || speed != speedTenths) && millis() - playSampledAt >= PLAY_STEP_MIN_MS)) {
+            playSampledAt = millis();
+            sampledIndex = v.playingIndex;
+            sampledSteps = steps;
+            playSeconds = (int)seconds;
+            speedTenths = speed;
+            playStep = step;
+        }
+    }
+    v.playSeconds = playSeconds;
+    v.speedTenths = speedTenths;
+    v.playStep = playStep;
     return v;
 }
 
@@ -513,6 +598,15 @@ static int iconSdCard(int right, int cy, int scale = 1) {
     canvas->fillTriangle(x + w - 6 * scale, y, x + w, y, x + w, y + 6 * scale, PAPER); // clipped corner
     for (int i = 0; i < 3; i++) canvas->fillRect(x + (3 + 3 * i) * scale, y + 3 * scale, 2 * scale, 5 * scale, PAPER);
     return x;
+}
+
+// The card struck through: it was there and has stopped answering
+static int iconSdCardGone(int right, int cy) {
+    int x = iconSdCard(right, cy);
+    for (int t = -3; t <= 3; t++) { // an ink stroke with paper either side, so it shows across the card
+        canvas->drawLine(x - 3, cy + 11 + t, x + 18, cy - 12 + t, abs(t) <= 1 ? INK : PAPER);
+    }
+    return x - 3;
 }
 
 static void iconStar(int cx, int cy, int r, uint16_t c = INK) {
@@ -725,8 +819,31 @@ static int drawStatus(int right, int baseline, const ViewState &v) {
         iconBolt(x - 6, cy);
         x -= 22;
     }
-    if (v.sdCard) x = iconSdCard(x, cy) - 10;
+    if (v.cardGone) x = iconSdCardGone(x, cy) - 10;
+    else if (v.sdCard) x = iconSdCard(x, cy) - 10;
     return x;
+}
+
+// The largest of three fonts in which `text` is no wider than `maxWidth` (the
+// smallest, if none is)
+static const GFXfont *fittingFont(const char *text, int maxWidth, const GFXfont *large, const GFXfont *medium, const GFXfont *small) {
+    if (textWidth(large, text) <= maxWidth) return large;
+    return textWidth(medium, text) <= maxWidth ? medium : small;
+}
+
+// What the main screen has to say when something is wrong, in place of its
+// line of moments and time left: a part that did not start (for as long as
+// that lasts), or a recording that went wrong (for RESULT_MS). nullptr when
+// all is well.
+static const char *mainNotice(const ViewState &v) {
+    if (!v.audioReady) return "Sound did not start: hold Sleep 10 s";
+    if (!v.powerReady) return "Battery unknown: hold Sleep 10 s";
+    switch (v.notice) {
+    case AUDIO_NOTICE_CARD_FAILED: return "Card error: recording ended early";
+    case AUDIO_NOTICE_NOT_SAVED: return "The recording could not be saved";
+    case AUDIO_NOTICE_NO_CARD: return "The SD card stopped answering";
+    default: return nullptr;
+    }
 }
 
 // "27 Oct  18:23" in the status font
@@ -756,6 +873,24 @@ static void drawMainHeader(const ViewState &v) {
     int titleRight = MARGIN + textWidth(&Bold22, "Zvukopis");
     drawTextCentered((titleRight + statusLeft) / 2, TITLE_BASELINE, STATUS_FONT, when, INK);
 
+    // The calendar has nothing to show until there are moments
+    int buttonsLeft = SW - MARGIN;
+    if (v.momentCount > 0 || v.selected == ROW_CALENDAR) {
+        buttonsLeft -= HEADER_BUTTON;
+        drawHeaderButton(buttonsLeft, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
+        buttonsLeft -= 8;
+    }
+    if (v.libraryCount > 0) {
+        buttonsLeft -= HEADER_BUTTON;
+        drawHeaderButton(buttonsLeft, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_LIBRARY, iconBook);
+    }
+    canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
+
+    const char *notice = mainNotice(v);
+    if (notice) {
+        drawText(MARGIN, SECOND_BASELINE, fittingFont(notice, buttonsLeft - 10 - MARGIN, &Text22, &Text17, &Text17), notice, INK);
+        return;
+    }
     char buf[40];
     // "2 moments  •  3:04 left"
     if (v.momentCount == 1) snprintf(buf, sizeof(buf), "1 moment");
@@ -763,7 +898,9 @@ static void drawMainHeader(const ViewState &v) {
     drawText(MARGIN, SECOND_BASELINE, &Text22, buf, INK);
     int x = MARGIN + textWidth(&Text22, buf) + 14;
     canvas->fillCircle(x, SECOND_BASELINE - 6, 2, INK);
-    if (v.secondsLeft < 1) {
+    if (v.listFull) {
+        snprintf(buf, sizeof(buf), "list full"); // not the card: the list holds no more than MAX_MOMENTS
+    } else if (v.secondsLeft < 1) {
         snprintf(buf, sizeof(buf), v.sdCard ? "card full" : "memory full");
     } else {
         char left[16];
@@ -771,15 +908,6 @@ static void drawMainHeader(const ViewState &v) {
         snprintf(buf, sizeof(buf), "%s to record", left);
     }
     drawText(x + 14, SECOND_BASELINE, &Text22, buf, INK);
-    // The calendar has nothing to show until there are moments
-    if (v.momentCount > 0 || v.selected == ROW_CALENDAR) {
-        drawHeaderButton(SW - MARGIN - HEADER_BUTTON, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_CALENDAR, iconCalendar);
-    }
-    if (v.libraryCount > 0) {
-        int x = SW - MARGIN - HEADER_BUTTON - (v.momentCount > 0 || v.selected == ROW_CALENDAR ? HEADER_BUTTON + 8 : 0);
-        drawHeaderButton(x, SECOND_BASELINE - 7, HEADER_BUTTON, v.selected == ROW_LIBRARY, iconBook);
-    }
-    canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
 }
 
 // Back button and title; a subtitle and the clock below
@@ -817,7 +945,9 @@ static void drawNewRecordingRow(int y, uint16_t fg, bool isSelected, const ViewS
     }
     iconRecord(MARGIN + 14, cy, fg);
     drawText(MARGIN + 44, cy + 8, &Bold22, "New recording", fg);
-    if (isSelected && v.secondsLeft < 1) drawTextRight(SW - MARGIN, cy + 8, &Text22, v.sdCard ? "card full" : "memory full", fg);
+    // Why pressing in would do nothing
+    const char *why = v.listFull ? "list full: delete some" : v.secondsLeft >= 1 ? nullptr : v.sdCard ? "card full" : "memory full";
+    if (isSelected && why) drawTextRight(SW - MARGIN, cy + 8, &Text22, why, fg);
 }
 
 // When the next scheduled recording is, and how long it lasts
@@ -885,10 +1015,7 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
     drawTextRight(SW - MARGIN, lineY, &Mono22, buf, fg);
 
     int waveY = y + 68;
-    int progressBin = WAVEFORM_BINS;
-    if (playing && moment.length > 0) {
-        progressBin = constrain((int)(v.playTicks / 8.0f * (moment.sampleRate ? moment.sampleRate : SAMPLE_RATE) / moment.length * WAVEFORM_BINS), 0, WAVEFORM_BINS);
-    }
+    int progressBin = playing ? constrain(v.playStep, 0, WAVEFORM_BINS) : WAVEFORM_BINS; // on these screens a step is a bar
     for (int b = 0; b < WAVEFORM_BINS; b++) {
         int bx = WAVE_X + b * WAVE_PITCH;
         int h = 1 + moment.waveform[b] * WAVE_HALF_H / 255;
@@ -902,6 +1029,10 @@ static void drawMomentRow(int index, int y, uint16_t fg, const ViewState &v, boo
 }
 
 // Scrolling rows. Row r is New recording (main list, r == 0) or a moment.
+// The selected row is white on a black bar. The row of the moment that plays
+// is black on white inside an outline of the bar's shape instead: the screen
+// refreshes again and again while it plays, and a large black area is where
+// the greying of those partial refreshes shows first.
 static void drawRows(const ViewState &v, int rows, bool withNewRecording, const int *dayMoments) {
     static int scrollTop = 0;
     int sel = max(0, v.selected);
@@ -909,21 +1040,28 @@ static void drawRows(const ViewState &v, int rows, bool withNewRecording, const 
     if (sel >= scrollTop + VISIBLE_ROWS) scrollTop = sel - VISIBLE_ROWS + 1;
     scrollTop = constrain(scrollTop, 0, max(0, rows - VISIBLE_ROWS));
 
+    int first = firstMomentRow(v.scheduleCount > 0);
+    auto momentOfRow = [&](int row) { // list position of the row's moment, -1 for the rows that are none
+        if (row < 0 || row >= rows) return -1;
+        return !withNewRecording ? dayMoments[row] : row >= first ? row - first : -1;
+    };
+    auto plays = [&](int row) { return v.audio == AUDIO_PLAYING && momentOfRow(row) >= 0 && momentOfRow(row) == v.playingIndex; };
+
     for (int i = 0; i < VISIBLE_ROWS && scrollTop + i < rows; i++) {
         int row = scrollTop + i;
         int y = LIST_TOP + i * ROW_H;
-        bool isSelected = row == v.selected;
-        uint16_t fg = isSelected ? PAPER : INK;
-        if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, ROW_H - 8, 12, INK);
+        bool isSelected = row == v.selected, isPlaying = plays(row);
+        uint16_t fg = isSelected && !isPlaying ? PAPER : INK;
+        const int barX = MARGIN - 12, barY = y + 4, barW = SW - 2 * MARGIN + 24, barH = ROW_H - 8, outline = 3;
+        if (isSelected || isPlaying) canvas->fillRoundRect(barX, barY, barW, barH, 12, INK);
+        if (isPlaying) canvas->fillRoundRect(barX + outline, barY + outline, barW - 2 * outline, barH - 2 * outline, 12 - outline, PAPER);
 
-        int first = firstMomentRow(v.scheduleCount > 0);
         if (withNewRecording && row == 0) drawNewRecordingRow(y, fg, isSelected, v);
         else if (withNewRecording && row < first) drawNextScheduledRow(y, fg, v);
-        else if (withNewRecording) drawMomentRow(row - first, y, fg, v, true);
-        else drawMomentRow(dayMoments[row], y, fg, v, false);
+        else drawMomentRow(momentOfRow(row), y, fg, v, withNewRecording);
 
-        bool nextSelected = row + 1 == v.selected;
-        if (!isSelected && !nextSelected && i < VISIBLE_ROWS - 1 && row + 1 < rows) {
+        bool nextFramed = row + 1 == v.selected || plays(row + 1);
+        if (!isSelected && !isPlaying && !nextFramed && i < VISIBLE_ROWS - 1 && row + 1 < rows) {
             dottedLine(MARGIN, SW - MARGIN, y + ROW_H);
         }
     }
@@ -1200,7 +1338,9 @@ static void drawSettings(const ViewState &v) {
     // Card and memory
     int y = LIST_TOP + visible * rowH + 30;
     char buf[64], total[16], free[16];
-    if (v.sdCard) {
+    if (v.cardGone) {
+        drawText(MARGIN, y, &Text17, "The SD card stopped answering: restart with it in", INK);
+    } else if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
         formatBytes(free, sizeof(free), storageFreeBytes());
         iconSdCard(MARGIN + 16, y - 6);
@@ -1249,29 +1389,43 @@ static void drawTransfer(const ViewState &v) {
         drawTextCentered(cx, y + 70, &Bold32, "Connecting...", INK);
         return;
     }
-    const int qrSize = 232, qrY = 132;
-    char buf[96];
+    const int qrSize = 232, qrY = 132, width = SW - 2 * MARGIN;
+    char buf[112];
+    // The page's address ends in the access key, when there is one: without
+    // it the page stays shut. The lines take the largest font they fit in,
+    // since names, passwords and addresses come in all lengths.
+    char address[48], host[56];
+    snprintf(address, sizeof(address), "http://%s%s%s", info.address, info.key[0] ? "/" : "", info.key);
+    snprintf(host, sizeof(host), "or http://%s.local%s%s", info.host, info.key[0] ? "/" : "", info.key);
+    y = qrY + qrSize + 40;
     if (info.hotspot) {
-        snprintf(buf, sizeof(buf), "WIFI:T:WPA;S:%s;P:%s;;", info.network, info.password);
+        const char *name = wifiHotspotName();
+        snprintf(buf, sizeof(buf), "WIFI:T:WPA;S:%s;P:%s;;", name, info.password);
         drawQr(buf, cx - qrSize / 2, qrY, qrSize);
-        y = qrY + qrSize + 40;
         drawTextCentered(cx, y, &Bold22, "Scan with a phone camera to join", INK);
-        snprintf(buf, sizeof(buf), "or join  %s,  password  %s", info.network, info.password);
-        drawTextCentered(cx, y + 32, &Text22, buf, INK);
-        drawTextCentered(cx, y + 74, &Text22, "The page opens by itself, or go to", INK);
+        snprintf(buf, sizeof(buf), "or join  %s", name);
+        drawTextCentered(cx, y + 32, fittingFont(buf, width, &Text22, &Text17, &Text17), buf, INK);
+        snprintf(buf, sizeof(buf), "with the password  %s", info.password);
+        if (textWidth(&Text17, buf) > width) { // a very long password gets a line to itself
+            drawTextCentered(cx, y + 60, &Text22, "with the password", INK);
+            y += 26;
+            drawTextCentered(cx, y + 60, fittingFont(info.password, width, &Text22, &Text17, &Text17), info.password, INK);
+        } else {
+            drawTextCentered(cx, y + 60, fittingFont(buf, width, &Text22, &Text17, &Text17), buf, INK);
+        }
+        drawTextCentered(cx, y + 102, &Text22, "The page opens by itself, or go to", INK);
+        drawTextCentered(cx, y + 144, fittingFont(address, width, &Bold32, &Bold27, &Bold22), address, INK);
+        y += 184;
     } else {
-        snprintf(buf, sizeof(buf), "http://%s/", info.address);
+        snprintf(buf, sizeof(buf), "http://%s/%s", info.address, info.key);
         drawQr(buf, cx - qrSize / 2, qrY, qrSize);
-        y = qrY + qrSize + 40;
         drawTextCentered(cx, y, &Bold22, "Scan with a phone camera", INK);
         snprintf(buf, sizeof(buf), "or on  %s,  go to", info.network);
-        drawTextCentered(cx, y + 32, &Text22, buf, INK);
-        drawTextCentered(cx, y + 116, &Text22, "or http://zvukopis.local", INK);
-        y -= 42;
+        drawTextCentered(cx, y + 32, fittingFont(buf, width, &Text22, &Text17, &Text17), buf, INK);
+        drawTextCentered(cx, y + 74, fittingFont(address, width, &Bold32, &Bold27, &Bold22), address, INK);
+        if (info.host[0]) drawTextCentered(cx, y + 116, fittingFont(host, width, &Text22, &Text17, &Text17), host, INK);
+        y += 148;
     }
-    snprintf(buf, sizeof(buf), "http://%s", info.address);
-    drawTextCentered(cx, y + 116, &Bold32, buf, INK);
-    y += 190;
     if (v.transferRequests > 0) snprintf(buf, sizeof(buf), "%lu request%s served  -  ", v.transferRequests, v.transferRequests == 1 ? "" : "s");
     else buf[0] = 0;
     strlcat(buf, "stops after 10 min unused", sizeof(buf));
@@ -1416,7 +1570,7 @@ static void drawSpectrogram(const ViewState &v, const Spectrogram *sp) {
 
     // Playhead: an ink line with paper edges, and a marker above the plot
     if (v.audio == AUDIO_PLAYING && sp->seconds > 0) {
-        int x = PLOT_X + constrain((int)(v.playTicks / 8.0f / sp->seconds * PLOT_W), 0, PLOT_W - 1);
+        int x = PLOT_X + constrain(v.playStep * PLOT_W / ANALYSIS_PLAY_STEPS, 0, PLOT_W - 1);
         canvas->fillRect(x - 2, PLOT_Y, 5, PLOT_H, PAPER);
         canvas->fillRect(x - 1, PLOT_Y, 3, PLOT_H, INK);
         canvas->fillTriangle(x - 7, PLOT_Y - 10, x + 7, PLOT_Y - 10, x, PLOT_Y - 2, INK);
@@ -1543,6 +1697,12 @@ static void drawSpectrum(const ViewState &v) {
         else canvas->drawRect(bx, by, 6, bh, INK);
     }
     const Spectrogram *sp = spectrumResult(v.spectrumMoment);
+    if (!sp && v.spectrumFailed) {
+        iconBars(SW / 2, 300, 30, INK);
+        drawTextCentered(SW / 2, 380, &Bold22, "Not enough memory for the analysis", INK);
+        drawTextCentered(SW / 2, 414, &Text22, v.sdCard ? "Go back and try once more" : "Deleting a moment makes room", INK);
+        return;
+    }
     if (!sp) {
         iconBars(SW / 2, 300, 30, INK);
         char buf[24];
@@ -1588,6 +1748,9 @@ static Word *words = nullptr;
 static Line *lines = nullptr;
 static uint32_t *pageStarts = nullptr; // line index each page begins at
 static uint32_t wordTotal = 0, lineTotal = 0, pageTotal = 0, wordCapacity = 0, lineCapacity = 0;
+// Held while the layout is built, changed or given back, and while the display
+// task draws a page from it: the loop task must not free what is being drawn
+static SemaphoreHandle_t readerLock = nullptr;
 
 static const GFXfont *lineFont(const Line &line, const Word &word) {
     if (line.kind == LINE_H1) return &Bold38;
@@ -1704,21 +1867,40 @@ static void paginate() {
     if (pageTotal == 0) pageStarts[pageTotal++] = 0;
 }
 
+// Gives the open document's memory back: the layout, and the text it points
+// into. A long document's is over a megabyte, which a recording may need.
+static void readerClose() {
+    if (!readerLock) return;
+    xSemaphoreTake(readerLock, portMAX_DELAY);
+    free(words);
+    free(lines);
+    free(pageStarts);
+    words = nullptr;
+    lines = nullptr;
+    pageStarts = nullptr;
+    wordTotal = lineTotal = pageTotal = 0;
+    readerText = nullptr;
+    libraryUnload();
+    xSemaphoreGive(readerLock);
+}
+
+// Gives back the unused end of a PSRAM block that was sized for the worst case
+template <typename T> static T *shrinkTo(T *block, size_t count) {
+    T *smaller = (T *)heap_caps_realloc(block, max(count, (size_t)1) * sizeof(T), MALLOC_CAP_SPIRAM);
+    return smaller ? smaller : block;
+}
+
 // Reads the document into words, lines and pages. False if it can't be read.
-static bool readerOpen(int doc) {
+static bool layoutDocument(int doc) {
     readerText = libraryLoad(doc, readerLength);
     if (!readerText) return false;
     uint32_t t0 = millis(), newlines = 0;
     for (size_t i = 0; i < readerLength; i++) newlines += readerText[i] == '\n';
     wordCapacity = readerLength / 2 + 64;            // a word takes a byte plus a separator
     lineCapacity = wordCapacity + 2 * newlines + 64; // a line holds a word, or is a blank or rule
-    free(words);
-    free(lines);
-    free(pageStarts);
     words = (Word *)ps_malloc(wordCapacity * sizeof(Word));
     lines = (Line *)ps_malloc(lineCapacity * sizeof(Line));
-    pageStarts = (uint32_t *)ps_malloc((lineCapacity + 1) * sizeof(uint32_t));
-    if (!words || !lines || !pageStarts) {
+    if (!words || !lines) {
         Serial.println("[reader] out of memory for the layout");
         return false;
     }
@@ -1777,9 +1959,45 @@ static bool readerOpen(int doc) {
         p = lineEnd + 1;
     }
     flushParagraph(end);
+    // The two blocks were sized for the worst case, about eight times the
+    // text. A real text fills a fraction of that, and what stays allocated
+    // here is memory a recording or an analysis cannot have.
+    words = shrinkTo(words, wordTotal);
+    lines = shrinkTo(lines, lineTotal);
+    pageStarts = (uint32_t *)ps_malloc((lineTotal + 1) * sizeof(uint32_t)); // a page holds a line at least
+    if (!pageStarts) {
+        Serial.println("[reader] out of memory for the pages");
+        return false;
+    }
     paginate();
     Serial.printf("[reader] %u words, %u lines, %u pages, laid out in %lu ms\n", wordTotal, lineTotal, pageTotal, millis() - t0);
     return true;
+}
+
+static bool readerOpen(int doc) {
+    readerClose(); // a document still held, and whatever a failed open left behind
+    xSemaphoreTake(readerLock, portMAX_DELAY);
+    bool ok = layoutDocument(doc);
+    xSemaphoreGive(readerLock);
+    if (!ok) readerClose();
+    return ok;
+}
+
+// The button guide came or went, so a page holds fewer or more lines: breaks
+// the open document into pages again and stays on the page that now holds the
+// line the old page began with. False when no document is open.
+static bool readerRepaginate() {
+    xSemaphoreTake(readerLock, portMAX_DELAY);
+    bool open = readerText && pageStarts && pageTotal > 0;
+    if (open) {
+        uint32_t firstLine = pageStarts[min((uint32_t)max((int)readerPage, 0), pageTotal - 1)];
+        paginate();
+        uint32_t page = 0;
+        while (page + 1 < pageTotal && pageStarts[page + 1] <= firstLine) page++;
+        readerPage = page;
+    }
+    xSemaphoreGive(readerLock);
+    return open;
 }
 
 static void drawLibrary(const ViewState &v) {
@@ -1815,7 +2033,7 @@ static void drawLibrary(const ViewState &v) {
     }
 }
 
-static void drawReader(const ViewState &v) {
+static void drawReaderPage(const ViewState &v) {
     if (!readerText) return;
     char subtitle[32];
     snprintf(subtitle, sizeof(subtitle), "Page %d of %u", v.readerPage + 1, pageTotal);
@@ -1846,6 +2064,12 @@ static void drawReader(const ViewState &v) {
         }
         y += h;
     }
+}
+
+static void drawReader(const ViewState &v) {
+    xSemaphoreTake(readerLock, portMAX_DELAY);
+    drawReaderPage(v);
+    xSemaphoreGive(readerLock);
 }
 
 // How to update: the project page, as a QR code and three steps
@@ -2312,7 +2536,7 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: actions"};
     }
     if (menuKeys) {
-        keys[nk++] = {HINT_BOOT, v.screen == SCREEN_SETTINGS || v.overlay != OVERLAY_NONE ? "Close" : "Open"};
+        keys[nk++] = {HINT_BOOT, partOfSettings(v.screen) || v.overlay != OVERLAY_NONE ? "Close" : "Open"};
         keys[nk++] = {HINT_PWR, "Hold 1 s"};
     }
 
@@ -2351,8 +2575,35 @@ static void drawFooter(const ViewState &v) {
     for (int i = 0; i < nk; i++) place(keys[i].icon, keys[i].label);
 }
 
+// The battery has run out and the board is about to switch itself off. The
+// page stays on the panel without power, so it says what happened and what
+// brings Zvukopis back.
+static void drawBatteryEmpty() {
+    drawText(MARGIN, TITLE_BASELINE, &Bold22, "Zvukopis", INK);
+    if (clockValid()) { // the day too: the page may be found weeks later
+        char when[24], buf[40];
+        formatLocal(when, sizeof(when), "%e %b, %H:%M", time(nullptr));
+        snprintf(buf, sizeof(buf), "Switched off %s", when);
+        drawText(MARGIN, SECOND_BASELINE, &Text22, buf, INK);
+    }
+    canvas->fillRect(MARGIN, HEADER_LINE_Y, SW - 2 * MARGIN, 2, INK);
+
+    // A battery with nothing in it
+    const int cx = SW / 2, w = 150, h = 72, x = cx - (w + 12) / 2, y = 250;
+    canvas->fillRoundRect(x, y, w, h, 12, INK);
+    canvas->fillRoundRect(x + 6, y + 6, w - 12, h - 12, 6, PAPER);
+    canvas->fillRoundRect(x + w, y + h / 2 - 15, 12, 30, 4, INK);
+    drawTextCentered(cx, 410, &Bold44, "Battery empty", INK);
+    drawTextCentered(cx, 458, &Text22, "Zvukopis has switched itself off", INK);
+    drawTextCentered(cx, 488, &Text22, "Plug in USB to charge it", INK);
+}
+
 static void render(const ViewState &v) {
     canvas->fillScreen(PAPER);
+    if (v.batteryEmpty) {
+        drawBatteryEmpty();
+        return;
+    }
     if (v.sleeping) {
         drawSleepScreen(v); // its own pointer says how to wake, so no footer
         return;
@@ -2407,6 +2658,19 @@ static void pushFull() {
     Serial.printf("[display] %lu ms: full refresh took %lu ms\n", start, millis() - start);
 }
 
+// Waking from the sleep screen: a partial refresh from the picture the panel
+// still shows. It takes about half a second at any temperature, where a full
+// refresh takes 2.2 s in a warm room and 5.5 s in the cold. The init's
+// hardware reset is what ends the panel's deep sleep. What the partial refresh
+// leaves of the sleep screen, the idle full refresh clears a little later.
+static void pushWake() {
+    uint32_t start = millis();
+    EPD_3IN97_Init();
+    if (asleepFrameValid) EPD_3IN97_Display_Partial_From(asleepFrame, canvas->getBuffer());
+    else EPD_3IN97_Display_Base(canvas->getBuffer());
+    Serial.printf("[display] %lu ms: waking with a %s refresh took %lu ms\n", start, asleepFrameValid ? "partial" : "full", millis() - start);
+}
+
 // Raw panel buffer (landscape, 1 bit per pixel) as base64, with the rotation so a viewer can turn it upright
 static void dumpScreenshot() {
     const size_t inLen = EPD_3IN97_WIDTH / 8 * EPD_3IN97_HEIGHT;
@@ -2425,55 +2689,80 @@ static void dumpScreenshot() {
 
 static void displayTask(void *) {
     ViewState shown = currentView();
-    int partials = 0;
+    int partials = 0;     // partial refreshes since the last full one
+    int playPartials = 0; // those of them made while a moment played
     for (;;) {
-        uint32_t iterationStart = millis();
+        uint32_t ask = napAsk; // read before the look: the answer below then covers all that was asked about
         ViewState v = currentView();
+        bool changed = memcmp(&v, &shown, sizeof(v)) != 0;
+        bool recording = v.audio == AUDIO_RECORDING || v.quickRecord; // a frame the microphone hears being drawn
         bool pushed = true;
-        if (v.sleeping != shown.sleeping) {
-            // Going to sleep: full refresh for a clean sleep screen, then the panel's
-            // deep sleep. Waking: the full refresh's init also wakes the panel.
-            Serial.printf("[display] %s\n", v.sleeping ? "sleep screen" : "waking");
+        if (v.batteryEmpty != shown.batteryEmpty || (v.sleeping && !shown.sleeping)) {
+            // The sleep screen, the battery-empty page, or the way back from that
+            // page: a full refresh, for a clean picture that may stay for weeks,
+            // then the panel's deep sleep where the picture is one that stays
+            Serial.printf("[display] %s\n", v.batteryEmpty ? "battery-empty page" : v.sleeping ? "sleep screen" : "back from the battery-empty page");
             render(v);
             pushFull();
-            if (v.sleeping) EPD_3IN97_Sleep();
-            panelAsleep = v.sleeping;
+            asleepFrameValid = asleepFrame && v.sleeping && !v.batteryEmpty;
+            if (asleepFrameValid) memcpy(asleepFrame, canvas->getBuffer(), FRAME_BYTES);
+            if (v.sleeping || v.batteryEmpty) EPD_3IN97_Sleep();
+            batteryEmptyDrawn = v.batteryEmpty;
+            panelAsleep = v.sleeping || v.batteryEmpty;
             shown = v;
-            partials = 0;
-        } else if (v.sleeping) {
+            partials = playPartials = 0;
+        } else if (v.sleeping || v.batteryEmpty) {
             pushed = false; // leave the sleeping panel alone
-        } else if ((v.audio == AUDIO_RECORDING || v.quickRecord) && (shown.audio == AUDIO_RECORDING || shown.quickRecord)) {
+        } else if (shown.sleeping) {
+            Serial.println("[display] waking");
+            render(v);
+            pushWake();
+            panelAsleep = false;
+            shown = v;
+            partials = FULL_REFRESH_EVERY; // the full refresh the panel went without: the idle rule below gives it
+            playPartials = 0;
+        } else if (recording && (shown.audio == AUDIO_RECORDING || shown.quickRecord)) {
             pushed = false; // keep the panel still while recording; see drawRecordingView
         } else if (v.screen == SCREEN_USB_MIC && shown.screen == SCREEN_USB_MIC && v.gainSetting == shown.gainSetting) {
             pushed = false; // the same while the microphone streams; a gain change is worth one refresh
-        } else if (memcmp(&v, &shown, sizeof(v)) != 0 && v.screen == SCREEN_READER && v.readerPage != shown.readerPage &&
+        } else if (changed && !recording && v.screen == SCREEN_READER && v.readerPage != shown.readerPage &&
                    partials >= READER_FULL_REFRESH_EVERY) {
             render(v); // text ghosts; a full refresh every few pages keeps it crisp
             pushFull();
             shown = v;
-            partials = 0;
-        } else if (memcmp(&v, &shown, sizeof(v)) != 0) {
+            partials = playPartials = 0;
+        } else if (changed) {
             uint32_t start = millis();
             render(v);
             Serial.printf("[display] render took %lu ms\n", millis() - start);
-            bool playing = v.audio == AUDIO_PLAYING, stopped = !playing && shown.audio == AUDIO_PLAYING;
-            if ((playing && partials >= PLAYING_FULL_REFRESH_EVERY) || (stopped && partials >= PLAYED_FULL_REFRESH_AFTER)) {
-                pushFull(); // clears the grey that the playback refreshes leave
-                partials = 0;
+            // Playback has its own count of partial refreshes. While a moment
+            // plays, a full refresh after every PLAYING_FULL_REFRESH_EVERY of
+            // them, so never on its first frame; when it ends, one if there
+            // were PLAYED_FULL_REFRESH_AFTER or more. And never when the new
+            // frame is a recording, which would begin under two seconds of the
+            // panel's noise: the idle rule below clears the grey afterwards.
+            bool playing = v.audio == AUDIO_PLAYING, wasPlaying = shown.audio == AUDIO_PLAYING;
+            if (playing && !wasPlaying) playPartials = 0;
+            bool greyed = wasPlaying && playPartials >= (playing ? PLAYING_FULL_REFRESH_EVERY : PLAYED_FULL_REFRESH_AFTER);
+            if (greyed && !recording) {
+                pushFull();
+                partials = playPartials = 0;
             } else {
                 pushPartial(v);
-                partials++;
+                partials = greyed ? max(partials + 1, FULL_REFRESH_EVERY) : partials + 1;
+                if (playing) playPartials++;
             }
+            if (!playing) playPartials = 0;
             shown = v;
-        } else if (partials >= FULL_REFRESH_EVERY && v.audio == AUDIO_IDLE && v.overlay == OVERLAY_NONE &&
+        } else if (partials >= FULL_REFRESH_EVERY && v.audio == AUDIO_IDLE && !v.quickRecord && v.overlay == OVERLAY_NONE &&
                    millis() - lastActivity > FULL_REFRESH_IDLE_MS) {
             pushFull();
-            partials = 0;
+            partials = playPartials = 0;
         } else {
             pushed = false;
         }
-        if (pushed) quietSince = 0;
-        else if (quietSince == 0) quietSince = max(iterationStart, (uint32_t)1);
+        fullRefreshDue = partials >= FULL_REFRESH_EVERY;
+        if (!pushed) napAck = ask; // looked after the request and found nothing to draw: the chip may doze
         if (screenshotRequested) {
             screenshotRequested = false;
             dumpScreenshot();
@@ -2489,8 +2778,10 @@ void uiStart() {
         showGuide = prefs.getBool("guide", true);
         prefs.end();
     }
-    canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
+    if (!canvas) canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT); // uiShowBatteryEmpty may have come first
     canvas->setRotation(SCREEN_ROTATION);
+    asleepFrame = (uint8_t *)ps_malloc(FRAME_BYTES);
+    readerLock = xSemaphoreCreateMutex();
     loopDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     displayDayMoments = (int *)ps_malloc(MAX_MOMENTS * sizeof(int));
     render(currentView());
@@ -2643,7 +2934,13 @@ static void openSettings() {
     showScreen(SCREEN_SETTINGS, 0);
 }
 
-static void closeSettings() { showScreen(menuFrom, menuFromSelected); }
+static void closeSettings() {
+    // A schedule screen that Settings was opened from had been opened from the
+    // main list. Scheduled recordings in Settings has since made its Back
+    // lead to Settings: put that right, or the two would lead to each other.
+    if (menuFrom == SCREEN_SCHEDULE) scheduleFrom = SCREEN_LIST;
+    showScreen(menuFrom, menuFromSelected);
+}
 
 static void handleList(ButtonEvent event) {
     bool scheduled = scheduleCount() > 0;
@@ -2811,6 +3108,7 @@ static void handleReader(ButtonEvent event) {
     case BTN_LONG_CLICK:
         librarySetLastPage(readerDocument.fileName, readerPage);
         showScreen(SCREEN_LIBRARY, max(0, libraryFind(readerDocument.fileName)));
+        readerClose(); // opening it again lays it out again, in well under a second
         return;
     default:
         return;
@@ -2846,6 +3144,10 @@ static void handleSettings(ButtonEvent event) {
             prefs.begin("zvukopis", false);
             prefs.putBool("guide", showGuide);
             prefs.end();
+            // The screen under Settings may hold a layout made for the height
+            // there was: the analysis its plot, an open document its pages
+            if (menuFrom == SCREEN_SPECTRUM) spectrumRequest(spectrumMoment, PLOT_W, PLOT_H);
+            if (readerRepaginate()) librarySetLastPage(readerDocument.fileName, readerPage);
             break;
         }
         case SET_SCHEDULE:
@@ -2869,9 +3171,12 @@ static void handleSettings(ButtonEvent event) {
         }
         case SET_WEB:
         case SET_HOTSPOT:
-            if (clockSyncing()) break; // it has Wi-Fi for now
             transferRow = selected;
-            transferStart(selected == SET_HOTSPOT);
+            // A clock sync has Wi-Fi for now (one starts by itself after the
+            // battery was out): the screen says Connecting, and uiTick starts
+            // the web interface when the sync has ended
+            if (clockSyncing()) transferWaiting = true;
+            else transferStart(selected == SET_HOTSPOT);
             showScreen(SCREEN_TRANSFER, 0);
             break;
         case SET_CARD_READER:
@@ -2911,11 +3216,25 @@ void uiHandleEvent(ButtonEvent event) {
 static uint32_t speedHeldSince = 0;
 static const uint32_t SPEED_TAP_MS = 250;
 
+// Stops the web interface, or the wait for it, and goes back to its row in Settings
+static void leaveTransfer() {
+    transferWaiting = false;
+    transferStop();
+    showScreen(SCREEN_SETTINGS, transferRow);
+}
+
 static void handleEvent(ButtonEvent event) {
     AudioState audio = audioState();
     Serial.printf("[ui] %lu ms: %s (screen %d, selected %d, audio %d, overlay %d)\n",
                   millis(), eventName(event), (int)screen, (int)selected, (int)audio, (int)overlay);
     lastActivity = millis();
+    if (batteryEmptyPage) {
+        // A key after that page: the board stayed on after all (USB came just
+        // then). The key only brings the screen back, since nobody could see
+        // what else it would have done.
+        batteryEmptyPage = false;
+        return;
+    }
 
     if (screen == SCREEN_CARD_READER) {
         if (event == BTN_CLICK) cardReaderLeave(); // restarts
@@ -2934,10 +3253,7 @@ static void handleEvent(ButtonEvent event) {
         return; // and no sleep: light sleep would drop the microphone
     }
     if (event == BTN_POWER) {
-        if (screen == SCREEN_TRANSFER) {
-            transferStop();
-            showScreen(SCREEN_SETTINGS, transferRow);
-        }
+        if (screen == SCREEN_TRANSFER) leaveTransfer();
         overlay = OVERLAY_NONE;
         sleepRequested = true;
         return;
@@ -2957,9 +3273,10 @@ static void handleEvent(ButtonEvent event) {
         return;
     }
     if (audio == AUDIO_FORMATTING) return;
-    // The Settings button (BOOT on the board) opens the menu from anywhere, and closes it again
+    // The Settings button (BOOT on the board) opens the menu from anywhere, and
+    // closes it again, also from the screens that belong to it
     if (event == BTN_MENU) {
-        if (screen == SCREEN_SETTINGS) closeSettings();
+        if (partOfSettings(screen)) closeSettings();
         else if (screen != SCREEN_TRANSFER) openSettings();
         return;
     }
@@ -2995,10 +3312,7 @@ static void handleEvent(ButtonEvent event) {
         }
         break;
     case SCREEN_TRANSFER:
-        if (event == BTN_CLICK) {
-            transferStop();
-            showScreen(SCREEN_SETTINGS, transferRow);
-        }
+        if (event == BTN_CLICK) leaveTransfer();
         break;
     }
 }
@@ -3022,6 +3336,24 @@ void uiTick() {
         if (!ejectedAt) ejectedAt = millis();
         else if (millis() - ejectedAt > 1500) cardReaderLeave();
     } else ejectedAt = 0;
+    // The cable pulled in a USB mode: nothing else would end the mode, and it
+    // keeps the chip awake until the battery is empty. Two seconds without
+    // USB power, so that a short dip is not taken for it, then the same
+    // restart as pressing in.
+    static uint32_t usbCheckedAt = 0, usbGoneSince = 0;
+    if (screen == SCREEN_CARD_READER || screen == SCREEN_USB_MIC) {
+        if (millis() - usbCheckedAt >= USB_GONE_CHECK_MS) { // each check is a read from the power chip
+            usbCheckedAt = millis();
+            if (usbPowered()) {
+                usbGoneSince = 0;
+            } else if (!usbGoneSince) {
+                usbGoneSince = millis() | 1;
+            } else if (millis() - usbGoneSince >= USB_GONE_MS) {
+                if (screen == SCREEN_CARD_READER) cardReaderLeave();
+                else usbMicLeave();
+            }
+        }
+    }
     if (screen == SCREEN_LIBRARY && selected >= libraryCount()) selected = libraryCount() - 1;   // after an upload or delete on the web
     static uint32_t spectrumCheckedVersion = UINT32_MAX;
     if (screen == SCREEN_SPECTRUM && momentListVersion() != spectrumCheckedVersion) {
@@ -3042,7 +3374,12 @@ void uiTick() {
         if (index.count == 0) selected = ROW_BACK;
         else if (findDay(index, calendarDay) < 0 && calendarDay % 100 != 1) calendarDay = index.days[index.count - 1].key;
     }
-    if (screen == SCREEN_TRANSFER && transferInfo().state == TRANSFER_OFF) {
+    if (screen == SCREEN_TRANSFER && transferWaiting) {
+        if (!clockSyncing()) { // Wi-Fi is free now
+            transferWaiting = false;
+            transferStart(transferRow == SET_HOTSPOT);
+        }
+    } else if (screen == SCREEN_TRANSFER && transferInfo().state == TRANSFER_OFF) {
         showScreen(SCREEN_SETTINGS, transferRow); // stopped after 10 minutes unused
     }
 
@@ -3071,16 +3408,25 @@ void uiTick() {
 
 void uiRequestScreenshot() { screenshotRequested = true; }
 
-// Signed, so it holds across millis() wrapping
-static bool after(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
-
+// The chip is about to stop until a key or a timer wakes it, and whatever the
+// panel shows then stays. A change that no key made (a dialog timing out, a
+// clock sync or an analysis ending) may be only milliseconds old, so the
+// display task is asked to look once more, and the nap waits for a look that
+// began after the question and found nothing to draw. The main loop runs
+// nothing between that answer and the nap, so no change of its own slips in.
+// `since` (the last wake-up) is not needed for this: a look taken now covers it.
 bool uiReadyToNap(uint32_t since) {
+    (void)since;
     if (sleeping || overlay != OVERLAY_NONE || audioState() != AUDIO_IDLE) return false;
     if (screen == SCREEN_TRANSFER || screen == SCREEN_CARD_READER || screen == SCREEN_USB_MIC) return false;
-    if (screen == SCREEN_SPECTRUM && !spectrumResult(spectrumMoment)) return false; // still working it out
-    uint32_t quiet = quietSince;
-    // The display task must have looked at the screen state after the last change
-    return quiet != 0 && after(quiet, since) && after(quiet, lastActivity);
+    // An analysis still being worked out; one that found no memory has ended
+    if (screen == SCREEN_SPECTRUM && !spectrumResult(spectrumMoment) && !spectrumFailed(spectrumMoment)) return false;
+    if (!displayTaskHandle) return false;
+    uint32_t ask = ++napAsk;
+    if (ask == 0) ask = ++napAsk; // 0 is the answer to no question
+    xTaskNotifyGive(displayTaskHandle);
+    for (uint32_t waited = 0; waited < NAP_LOOK_MS && napAck != ask; waited++) delay(1);
+    return napAck == ask; // no answer in time: it is drawing, and the next pass of the loop asks again
 }
 
 uint32_t uiMsUntilNextChange() {
@@ -3102,6 +3448,11 @@ uint32_t uiMsUntilNextChange() {
     if (lastFormatResult != 0 && now - formatResultAt <= RESULT_MS) {
         ms = min(ms, RESULT_MS - (now - formatResultAt) + 5);
     }
+    // So does the line about a recording that went wrong
+    uint32_t noticeMsLeft;
+    if (noticeToShow(noticeMsLeft) != AUDIO_NOTICE_NONE) ms = min(ms, noticeMsLeft + 5);
+    // The full refresh the panel is owed comes once the buttons have rested
+    if (fullRefreshDue && idle <= FULL_REFRESH_IDLE_MS) ms = min(ms, FULL_REFRESH_IDLE_MS - idle + 5);
     return ms;
 }
 
@@ -3110,29 +3461,56 @@ bool uiCanRecord() { return screen != SCREEN_CARD_READER && screen != SCREEN_USB
 bool uiTakeSleepRequest() {
     bool requested = sleepRequested;
     sleepRequested = false;
+    if (requested) sleepBeganAt = millis(); // before a recording in progress is saved, should that go wrong
     return requested;
 }
 
 void uiQuickRecordScreen() {
     overlay = OVERLAY_NONE;
+    batteryEmptyPage = false;
     quickRecordScreen = true;
     showScreen(SCREEN_LIST, 0);
+    readerClose(); // a document left open under the sleep screen: the recording may need its memory
     sleeping = false;
-    lastActivity = millis();
+    wokeUpAt = lastActivity = millis();
     if (displayTaskHandle) xTaskNotifyGive(displayTaskHandle);
     uint32_t start = millis();
-    while (panelAsleep && millis() - start < 6000) delay(10); // the full refresh that wakes the panel
+    while (panelAsleep && millis() - start < 6000) delay(10); // the refresh that wakes the panel
 }
 
 void uiQuickRecordStarted() { quickRecordScreen = false; }
 
-void uiShowBatteryEmpty() {}
+void uiShowBatteryEmpty() {
+    batteryEmptyDrawn = false;
+    batteryEmptyPage = true;
+    if (!displayTaskHandle) {
+        // Before uiStart: no display task yet, so the page is drawn from here
+        if (!canvas) canvas = new GFXcanvas1(EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT);
+        canvas->setRotation(SCREEN_ROTATION);
+        canvas->fillScreen(PAPER);
+        drawBatteryEmpty();
+        pushFull();
+        EPD_3IN97_Sleep();
+        return;
+    }
+    xTaskNotifyGive(displayTaskHandle);
+    uint32_t start = millis();
+    while (!batteryEmptyDrawn && millis() - start < SLEEP_SCREEN_TIMEOUT_MS) delay(20);
+}
 
 void uiShowSleepScreen(bool on) {
     if (on) quoteIndex = esp_random() % QUOTE_COUNT;
+    // Sleep began with the request, when there was one since the last wake-up
+    if (on && (int32_t)(sleepBeganAt - wokeUpAt) <= 0) sleepBeganAt = millis();
+    if (batteryEmptyPage) {
+        // The board stayed on after that page, which left the panel asleep:
+        // the sleep screen takes its place, or the screen comes back
+        batteryEmptyPage = false;
+        panelAsleep = false;
+    }
     sleeping = on;
     if (!on) {
-        lastActivity = millis(); // a full idle period again after waking
+        wokeUpAt = lastActivity = millis(); // a full idle period again after waking
         return; // waking happens in the background
     }
     uint32_t start = millis();
