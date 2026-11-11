@@ -32,4 +32,9 @@ enum WifiJoin {
 WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)() = nullptr);
 
 const char *wifiHotspotName();
+// This unit's own name, "zvukopis-ab12" (the last two bytes of its factory
+// address): its host name on a network, the name the page answers to
+// (http://<name>.local), and the name of its hotspot, so that several units in
+// one place can be told apart
+const char *wifiHostName();
 const char *wifiHotspotPassword();

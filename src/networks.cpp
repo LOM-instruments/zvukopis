@@ -147,12 +147,15 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
     WiFi.setSleep(false); // the radio stays awake while the web interface is up: it answers at once, and the link holds
     int found = WiFi.scanNetworks();
     WifiNetwork best = {};
-    int bestRssi = -1000;
+    int bestRssi = -1000, bestChannel = 0;
+    uint8_t bestBssid[6] = {};
     for (int i = 0; i < found; i++) {
         WifiNetwork known;
         if (WiFi.RSSI(i) > bestRssi && knownNetwork(WiFi.SSID(i), known)) {
             best = known;
             bestRssi = WiFi.RSSI(i);
+            bestChannel = WiFi.channel(i);
+            memcpy(bestBssid, WiFi.BSSID(i), sizeof(bestBssid));
         }
     }
     WiFi.scanDelete();
@@ -162,8 +165,11 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
         return WIFI_NOT_IN_REACH;
     }
 
-    Serial.printf("[wifi] joining %s (%d dBm)\n", best.ssid, bestRssi);
-    WiFi.begin(best.ssid, best.password);
+    // That very access point: a network may have several under one name (a
+    // mesh, a repeater), and left to itself the driver joins the first one
+    // its own scan meets, from channel 1 up, however weak
+    Serial.printf("[wifi] joining %s (%d dBm, channel %d)\n", best.ssid, bestRssi, bestChannel);
+    WiFi.begin(best.ssid, best.password, bestChannel, bestBssid);
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED) {
         if ((abort && abort()) || millis() - start > CONNECT_TIMEOUT_MS) {
@@ -179,4 +185,5 @@ WifiJoin wifiJoin(char *ssid, size_t len, bool (*abort)()) {
 }
 
 const char *wifiHotspotName() { return HOTSPOT_NAME; }
+const char *wifiHostName() { return HOST_NAME; }
 const char *wifiHotspotPassword() { return hotspotPassword; }

@@ -32,6 +32,7 @@
 
 // Espressif
 #include <string.h>
+#include "esp_rom_sys.h"
 #include "freertos/xtensa_api.h"
 #include "esp_intr_alloc.h"
 #include "esp_log.h"
@@ -402,9 +403,27 @@ void dcd_edpt_close(uint8_t rhport, uint8_t ep_addr)
   uint8_t const dir = tu_edpt_dir(ep_addr);
   if (epnum == 0 || epnum >= EP_MAX) return;
   if (dir == TUSB_DIR_IN) {
-    USB0.in_ep_reg[epnum].diepctl = 0;
-    USB0.daintmsk &= ~(1 << (0 + epnum));
+    usb_in_endpoint_t *in_ep = &(USB0.in_ep_reg[0]);
     USB0.dtknqr4_fifoemptymsk &= ~(1 << epnum);
+    if (in_ep[epnum].diepctl & USB_D_EPENA1_M) {
+      // A transfer is armed (an audio stream always has its next packet
+      // loaded). Writing the control register to zero does not take it back:
+      // the endpoint stays enabled with the stale packet in its FIFO, and a
+      // stream opened again never sends. Stopped the way the core asks: NAK,
+      // wait until that holds, disable, wait for that, then flush the FIFO.
+      // Every wait is bounded (about 2 ms), so nothing here can hang the USB task.
+      in_ep[epnum].diepctl |= USB_DI_SNAK1_M;
+      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_INEPNAKEFF0_M) == 0; i++) esp_rom_delay_us(1);
+      in_ep[epnum].diepctl |= (USB_DI_SNAK1_M | USB_D_EPDIS1_M);
+      for (int i = 0; i < 2000 && (in_ep[epnum].diepint & USB_D_EPDISBLD0_M) == 0; i++) esp_rom_delay_us(1);
+      in_ep[epnum].diepint = USB_D_EPDISBLD0_M | USB_D_INEPNAKEFF0_M;
+    }
+    if (_in_ep_fifo[epnum]) {
+      USB0.grstctl = (_in_ep_fifo[epnum] << USB_TXFNUM_S) | USB_TXFFLSH_M;
+      for (int i = 0; i < 2000 && (USB0.grstctl & USB_TXFFLSH_M) != 0; i++) esp_rom_delay_us(1);
+    }
+    in_ep[epnum].diepctl &= ~USB_D_USBACTEP1_M;
+    USB0.daintmsk &= ~(1 << (0 + epnum));
   } else {
     USB0.out_ep_reg[epnum].doepctl = 0;
     USB0.daintmsk &= ~(1 << (16 + epnum));

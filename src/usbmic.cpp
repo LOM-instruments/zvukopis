@@ -32,7 +32,13 @@ static const size_t PREFILL_BYTES = CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ / 2; //
 // which runs on the USB task that would have to do the sending). Instead
 // the audio task hands the log to TinyUSB a piece at a time, from a ring of
 // its own, and drops what the host does not take.
-static USBCDC cdc(0);
+// Made when the mode starts, not at boot: the object's constructor already
+// puts a serial port into the USB descriptor, which the card reader must
+// not carry. And without the core's "reboot into the loader" on a DTR/RTS
+// pattern or a 1200 baud open: a program on the computer that opens and closes
+// the port (a terminal, a flasher probing) would otherwise leave the device in
+// the chip's loader, off the bus, until PWR is held for 10 s.
+static USBCDC *cdc = nullptr;
 static char logRing[2048];
 static volatile uint16_t logWr = 0, logRd = 0;
 
@@ -109,7 +115,9 @@ bool usbMicStart() {
     Serial.flush();
     delay(50);
     if (tinyusb_enable_interface(USB_INTERFACE_CUSTOM, TUD_AUDIO_MIC_ONE_CH_DESC_LEN, audioDescriptor) != ESP_OK) return false;
-    cdc.begin(); // a serial port next to the microphone, for the stream's log
+    cdc = new USBCDC(0);
+    cdc->enableReboot(false);
+    cdc->begin(); // a serial port next to the microphone, for the stream's log
     USB.productName("Zvukopis microphone");
     USB.manufacturerName("Zvukopis");
     USB.usbAttributes(TUSB_DESC_CONFIG_ATT_SELF_POWERED); // the battery runs it...
@@ -185,8 +193,8 @@ void usbMicFeed(const int16_t *mono, size_t samples) {
     lastFeedUs = us;
     feeds++;
     feedSamples += samples;
-    if (cdc.available()) { // the serial port next to the microphone, for scripted tests: one key per chunk
-        switch (cdc.read()) {
+    if (cdc && cdc->available()) { // the serial port next to the microphone, for scripted tests: one key per chunk
+        switch (cdc->read()) {
         case 'q': usbMicLeave(); break;
         case 'u': buttonsInject(BTN_UP); break;
         case 'd': buttonsInject(BTN_DOWN); break;
