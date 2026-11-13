@@ -26,6 +26,9 @@ bool storageAvailable();
 // when it has stopped answering or when there was none. True when a card got
 // mounted or the mounted one is gone: the moments have to be loaded again.
 bool storageRecheck();
+// Goes up each time a card is mounted or let go: whoever keeps a list of what
+// is on the card (the library's documents) reads it again when this changes
+uint32_t storageMounts();
 
 // A card that answers but can't be mounted is most likely exFAT (fresh cards
 // over 32 GB): this firmware reads FAT only, so it has to be formatted first

@@ -25,6 +25,7 @@ static const uint32_t MOMENT_CHUNK_VERSION = 2;
 static bool mounted = false;
 static bool cardLent = false; // handed out for raw access (the USB card reader), until the restart that ends it
 static CardState cardState = SD_ABSENT;
+static volatile uint32_t mounts = 0; // mounted or let go so many times (storageMounts)
 static uint64_t freeBytes = 0, totalBytes = 0;
 
 // "zvkp" chunk payload: what the list needs, so it can be built from headers alone
@@ -148,6 +149,7 @@ static bool mountCard() {
     SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN);
     mounted = SD_MMC.begin(MOUNT_POINT, false);
     if (!mounted) return false;
+    mounts = mounts + 1;
     cardState = SD_MOUNTED;
     if (!SD_MMC.exists(MOMENT_DIR)) SD_MMC.mkdir(MOMENT_DIR);
     updateSpace();
@@ -189,6 +191,7 @@ bool storageRecheck() {
         Serial.println("[storage] the SD card has stopped answering: starting it again");
         SD_MMC.end();
         mounted = false;
+        mounts = mounts + 1;
         cardState = SD_ABSENT;
         storageInit();
         return true;
@@ -207,6 +210,7 @@ bool storageRecheck() {
 }
 
 CardState storageCardState() { return cardState; }
+uint32_t storageMounts() { return mounts; }
 
 uint64_t storageFreeBytes() { return mounted ? freeBytes : 0; }
 uint64_t storageTotalBytes() { return mounted ? totalBytes : 0; }
@@ -762,6 +766,7 @@ static sdmmc_card_t *openRawCard(bool quiet) {
     if (mounted) {
         SD_MMC.end();
         mounted = false;
+        mounts = mounts + 1;
         cardState = SD_ABSENT;
     }
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();

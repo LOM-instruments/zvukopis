@@ -54,6 +54,8 @@ static bool onUsbPower() {
     return usb;
 }
 
+static uint32_t libraryMounts = 0; // storageMounts() when the library's documents were last read
+
 // --- An empty battery ---
 
 // Left to run, the board goes on until the PMIC cuts the power: a recording in
@@ -409,6 +411,7 @@ void setup() {
 
     if (!audioInit()) Serial.println("Audio init failed");
     libraryScan(); // the card is mounted by audioInit
+    libraryMounts = storageMounts();
     uiStart();
     buttonsInit();
     Serial.println("Serial commands: u/d = up/down pressed, U/D = released, c = click, l = long click, m = BOOT (menu), "
@@ -464,6 +467,14 @@ void loop() {
     while (buttonsNextEvent(event)) uiHandleEvent(event);
     uiTick();
     scheduleTick();
+    // A card taken out or put in while the device is on is mounted afresh by
+    // the audio task, and formatting does the same: the documents are then
+    // another set. Read once nothing records or plays, and not while the
+    // card is lent to a computer.
+    if (storageMounts() != libraryMounts && audioState() == AUDIO_IDLE && uiCanRecord()) {
+        libraryMounts = storageMounts();
+        libraryScan();
+    }
     if (batteryRanOut()) {
         // Wi-Fi off first, the web interface's and a clock sync's: the last
         // refresh needs what the battery still gives
