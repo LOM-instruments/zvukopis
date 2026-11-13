@@ -1,3 +1,5 @@
+// Modified 2026-11-11 for Zvukopis (github.com/LOM-instruments/zvukopis): no
+// raw-body path, see NOTICE.md of this library and the zvukopis: note below
 #ifndef REQUESTHANDLERSIMPL_H
 #define REQUESTHANDLERSIMPL_H
 

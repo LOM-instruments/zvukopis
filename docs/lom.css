@@ -86,6 +86,9 @@ pre code { border: 0; padding: 0; background: none; }
 .btn.quiet { background: transparent; color: var(--text); }
 .btn:hover, .btn:focus-visible { background: var(--accent); color: #000; }
 esp-web-install-button { --esp-tools-button-color: var(--accent); --esp-tools-button-text-color: #000; --esp-tools-button-border-radius: 0; }
+/* Until the installer script has loaded, the element shows all its children: the button with both
+   of its "can't install" sentences. They belong to the script, which shows the one that applies. */
+esp-web-install-button:not(:defined) [slot="unsupported"], esp-web-install-button:not(:defined) [slot="not-allowed"] { display: none; }
 esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 11px 18px 12px; }
 .install { margin: 14px 0 10px; }
 .version b { font-weight: 400; background: var(--accent); color: var(--text); padding: 1px 7px 2px; }

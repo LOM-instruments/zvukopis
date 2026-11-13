@@ -17,6 +17,8 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   Modified 8 May 2015 by Hristo Gochkov (proper post and file upload handling)
+  Modified 2026-11-11 for Zvukopis (github.com/LOM-instruments/zvukopis): what
+  was changed is listed in NOTICE.md of this library and marked zvukopis: below
 */
 
 #include <Arduino.h>

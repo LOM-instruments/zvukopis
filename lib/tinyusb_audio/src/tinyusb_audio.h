@@ -10,5 +10,13 @@
 // platformio.ini, so that the app and the driver agree.
 
 #include "tusb.h"
+
+// The class driver and the device driver in this library are TinyUSB 0.16.0's,
+// and they talk to the rest of the stack inside the Arduino core: both have
+// to be the same version
+#if TUSB_VERSION_MAJOR != 0 || TUSB_VERSION_MINOR != 16
+#error "lib/tinyusb_audio is TinyUSB 0.16.0: the Arduino core must ship the same TinyUSB version"
+#endif
+
 #include "class/audio/audio_device.h"
 #include "device/usbd_pvt.h"

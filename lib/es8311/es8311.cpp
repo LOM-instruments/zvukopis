@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Changed for Zvukopis (github.com/LOM-instruments/zvukopis), see NOTICE.md beside
+// this file: es8311_power_down() added on 2026-10-26, es8311_microphone_pga_set()
+// and es8311_adc_volume_set() on 2026-10-27.
+
 #include <string.h>
 #include "es8311.h"
 #include "driver/gpio.h"
