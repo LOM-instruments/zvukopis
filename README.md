@@ -114,7 +114,7 @@ What you need:
   speaker is in every box, the battery is not. Any other 3.7 V lithium battery
   with an MX1.25 two-pin plug works too.
 - The case, 3D-printed from
-  [docs/case/zvukopis-case-v1.stl](docs/case/zvukopis-case-v1.stl) (the
+  [docs/case/zvukopis-case-v2.stl](docs/case/zvukopis-case-v2.stl) (the
   newest; every version is listed in that folder) on an ordinary FDM printer
   or a resin printer. The project page shows it in 3D.
 - Four countersunk M2.5×6 bolts, hex (Allen) or Torx, and the key that fits
