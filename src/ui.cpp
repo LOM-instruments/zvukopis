@@ -86,6 +86,7 @@ enum Screen {
     SCREEN_LIBRARY,     // the documents on the card
     SCREEN_READER,      // one of them, page by page
     SCREEN_UPDATE,      // how to get the newest firmware
+    SCREEN_SCHEDULE_EDIT, // one scheduled recording, being set up or changed
 };
 
 enum Overlay {
@@ -140,7 +141,8 @@ static int menuFromSelected = 0;
 // open Settings afresh, closing would lead here and from here back to
 // Settings, with no way to the main screen.
 static bool partOfSettings(int which) {
-    return which == SCREEN_SETTINGS || which == SCREEN_UPDATE || (which == SCREEN_SCHEDULE && scheduleFrom == SCREEN_SETTINGS);
+    return which == SCREEN_SETTINGS || which == SCREEN_UPDATE ||
+           ((which == SCREEN_SCHEDULE || which == SCREEN_SCHEDULE_EDIT) && scheduleFrom == SCREEN_SETTINGS);
 }
 static volatile int spectrumMoment = 0; // number of the moment being analysed
 enum SpectrumView { VIEW_SPECTROGRAM, VIEW_FFT };
@@ -284,6 +286,88 @@ static int momentIndexByNumber(int number) {
     return -1;
 }
 
+// --- Setting up a scheduled recording (SCREEN_SCHEDULE_EDIT) ---
+
+enum EditRow { EDIT_DAY, EDIT_TIME, EDIT_LENGTH, EDIT_REPEAT, EDIT_SAVE, EDIT_ROWS };
+// What up and down do there: move between the rows, or change the value of
+// the row that was pressed in on. The time is changed in two steps, the hours
+// and then the minutes.
+enum EditPart { PART_NONE, PART_VALUE, PART_HOURS, PART_MINUTES };
+// The lengths the web interface offers (LENGTHS in transfer.cpp)
+static const int EDIT_LENGTHS[] = {30, 60, 120, 300, 600, 1800, 3600, 7200, 14400, 28800, 43200};
+static const int EDIT_LENGTH_COUNT = sizeof(EDIT_LENGTHS) / sizeof(EDIT_LENGTHS[0]);
+static const int EDIT_DAYS_AHEAD = 365;   // the last day that can be chosen, counted from today
+static const int EDIT_LAST_DAY = 20371231; // ... and the clock's own last day (CLOCK_LATEST)
+// Up or down held on a value makes it run: after this long, a step this often.
+// The run ends when the key is let go, at any other key, and after the longest
+// time by itself: the serial command for a press sends no release.
+static const uint32_t EDIT_RUN_AFTER_MS = 500;
+static const uint32_t EDIT_RUN_EVERY_MS = 150;
+static const uint32_t EDIT_RUN_MAX_MS = 10000;
+
+static volatile int editDay = 0;      // yyyymmdd, local time
+static volatile int editTime = 0;     // minutes into that day; the seconds are always 00 here
+static volatile int editSeconds = 60; // how long to record
+static volatile bool editDaily = false;
+static volatile int editPart = PART_NONE;
+static int64_t editOriginal = 0; // start of the entry being changed; 0 for a new one
+static int editFromRow = 0;      // the schedule screen's row the editor was opened from
+static int editHeld = 0;         // +1 or -1 while up or down is held on a value
+static uint32_t editHeldSince = 0, editRanAt = 0;
+
+// The day `days` after the day `key` (both yyyymmdd)
+static int dayAfter(int key, int days) {
+    tm day = {};
+    day.tm_year = key / 10000 - 1900;
+    day.tm_mon = key / 100 % 100 - 1;
+    day.tm_mday = key % 100 + days;
+    day.tm_hour = 12; // noon, clear of the hour a clock change takes or adds
+    mktime(&day);
+    return (day.tm_year + 1900) * 10000 + (day.tm_mon + 1) * 100 + day.tm_mday;
+}
+
+// The start that a day and a time of day make, in local time, built as the
+// web interface builds it (handleScheduleAdd in transfer.cpp)
+static int64_t editStartOn(int day, int minutes) {
+    tm local = {};
+    local.tm_year = day / 10000 - 1900;
+    local.tm_mon = day / 100 % 100 - 1;
+    local.tm_mday = day % 100;
+    local.tm_hour = minutes / 60;
+    local.tm_min = minutes % 60;
+    local.tm_isdst = -1; // the zone's rule decides
+    return mktime(&local);
+}
+
+// List position of the entry the editor is changing: -1 for a new one, and
+// when it has gone meanwhile (removed on the web interface, or it ran)
+static int editOriginalIndex() {
+    Schedule s;
+    for (int i = 0; editOriginal && scheduleGet(i, s); i++) {
+        if (s.start == editOriginal) return i;
+    }
+    return -1;
+}
+
+// What Save would do with the editor's values at `now`, and the start it
+// would save. A recording that runs once has to lie ahead: here a time in the
+// past is a mistake, where the web interface takes one whose end is still to
+// come and records the rest at once. One for every day begins on the next day
+// its time comes. The screen and the Save row's press both ask here, so the
+// row never says one thing and does another.
+enum EditCheck { EDIT_OK, EDIT_PASSED, EDIT_FULL };
+static EditCheck editCheck(int day, int minutes, bool daily, int64_t now, int64_t &start) {
+    start = editStartOn(day, minutes);
+    if (daily && start <= now) {
+        int today = dayKey((time_t)now);
+        start = editStartOn(today, minutes);
+        if (start <= now) start = editStartOn(dayAfter(today, 1), minutes);
+    }
+    if (start <= now) return EDIT_PASSED;
+    if (scheduleCount() >= MAX_SCHEDULES && editOriginalIndex() < 0) return EDIT_FULL;
+    return EDIT_OK;
+}
+
 // Everything the screen depends on; the display task redraws when it changes
 struct ViewState {
     int screen;
@@ -335,6 +419,9 @@ struct ViewState {
     int powerReady;     // 0: the power chip did not answer at start-up
     int spectrumFailed; // no memory for the analysis asked for
     int batteryEmpty;   // the battery-empty page, in place of everything else
+    // The schedule editor's values and what is being adjusted; 0 on other screens
+    int editDay, editTime, editSeconds, editDaily, editPart;
+    int editChanging; // it changes an entry, where 0 is a new one
 };
 
 // What went wrong with a recording, for the main screen to say for RESULT_MS
@@ -421,6 +508,14 @@ static ViewState currentView() {
     v.quickRecord = quickRecordScreen;
     v.libraryCount = libraryCount();
     v.readerPage = readerPage;
+    if (v.screen == SCREEN_SCHEDULE_EDIT) {
+        v.editDay = editDay;
+        v.editTime = editTime;
+        v.editSeconds = editSeconds;
+        v.editDaily = editDaily;
+        v.editPart = editPart;
+        v.editChanging = editOriginal != 0;
+    }
 
     // Playback: the playhead moves in steps (a bar of the list's waveform, a
     // hundredth of the analysis plot), and the elapsed time and the speed are
@@ -671,6 +766,16 @@ static void formatIn(char *buf, size_t len, int64_t seconds) {
     else if (seconds < 3600) snprintf(buf, len, "in %d min", (int)(seconds / 60));
     else if (seconds < 48 * 3600) snprintf(buf, len, "in %d h %d min", (int)(seconds / 3600), (int)(seconds / 60 % 60));
     else snprintf(buf, len, "in %d days", (int)(seconds / 86400));
+}
+
+// "12 h", "1 h 30 min", "5 min", "45 s": how long a scheduled recording is to
+// last, in the words the web interface has for it
+static void formatLength(char *buf, size_t len, int seconds) {
+    if (seconds >= 3600 && seconds % 3600 >= 60) snprintf(buf, len, "%d h %d min", seconds / 3600, seconds % 3600 / 60);
+    else if (seconds >= 3600) snprintf(buf, len, "%d h", seconds / 3600);
+    else if (seconds >= 60 && seconds % 60) snprintf(buf, len, "%d min %d s", seconds / 60, seconds % 60);
+    else if (seconds >= 60) snprintf(buf, len, "%d min", seconds / 60);
+    else snprintf(buf, len, "%d s", seconds);
 }
 
 static void iconWifi(int cx, int cy) { canvas->drawXBitmap(cx - IconWifiSize / 2, cy - IconWifiSize / 2, IconWifi, IconWifiSize, IconWifiSize, INK); }
@@ -1259,7 +1364,7 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
             int n = scheduleCount();
             snprintf(detail, len, "Next %s%s", when, n > 1 ? "  (+ more)" : "");
         } else {
-            snprintf(detail, len, "None; set them up on the web interface");
+            snprintf(detail, len, "None; press in to add one");
         }
         break;
     case SET_WEB:
@@ -1437,33 +1542,44 @@ static void drawTransfer(const ViewState &v) {
     drawTextCentered(cx, min(y, listBottom() - 12), &Text17, buf, INK);
 }
 
-// Every scheduled recording, soonest first
+// The schedule screen's first row: pressing in on it sets a recording up
+// here on the device. When that can't be done, it says why.
+static void drawScheduleAddRow(int y, uint16_t fg, const ViewState &v) {
+    bool clockSet = v.clockMinute >= 0, full = v.scheduleCount >= MAX_SCHEDULES;
+    const int cx = MARGIN + 14, cy = y + 25;
+    canvas->fillRect(cx - 10, cy - 1, 21, 3, fg); // a plus
+    canvas->fillRect(cx - 1, cy - 10, 3, 21, fg);
+    drawText(MARGIN + 44, y + 33, clockSet && !full ? &Bold22 : &Text22, "Schedule a recording", fg);
+    drawText(MARGIN + 44, y + 58, &Text17, !clockSet ? "Set the clock first: Settings, Sync clock"
+                                           : full    ? "The schedule is full: remove one first"
+                                                     : "Zvukopis wakes up and records at the time", fg);
+}
+
+// The row that adds a scheduled recording, then every one there is, soonest first
 static void drawScheduleScreen(const ViewState &v) {
     char subtitle[32];
     snprintf(subtitle, sizeof(subtitle), "%d recording%s", v.scheduleCount, v.scheduleCount == 1 ? "" : "s");
     drawSubHeader(v, "Schedule", subtitle);
     int cx = SW / 2;
-    if (v.scheduleCount == 0) {
-        drawTextCentered(cx, 300, &Bold22, "Nothing scheduled", INK);
-        drawTextCentered(cx, 338, &Text22, "Add recordings on the web interface:", INK);
-        drawTextCentered(cx, 366, &Text22, "Settings, Web interface", INK);
-        return;
-    }
-    const int rowH = 74, visible = (listBottom() - LIST_TOP - 4) / rowH;
+    const int rowH = 74, visible = (listBottom() - LIST_TOP - 4) / rowH, rows = 1 + v.scheduleCount;
     static int scrollTop = 0;
     int sel = max(0, v.selected);
     if (sel < scrollTop) scrollTop = sel;
     if (sel >= scrollTop + visible) scrollTop = sel - visible + 1;
-    scrollTop = constrain(scrollTop, 0, max(0, v.scheduleCount - visible));
+    scrollTop = constrain(scrollTop, 0, max(0, rows - visible));
 
-    for (int i = 0; i < visible && scrollTop + i < v.scheduleCount; i++) {
+    for (int i = 0; i < visible && scrollTop + i < rows; i++) {
         int row = scrollTop + i, y = LIST_TOP + i * rowH;
         Schedule s;
-        if (!scheduleGet(row, s)) break;
+        if (row > 0 && !scheduleGet(row - 1, s)) break;
         bool isSelected = row == v.selected;
         uint16_t fg = isSelected ? PAPER : INK;
         if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, rowH - 8, 12, INK);
         else if (i > 0 && row - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
+        if (row == 0) {
+            drawScheduleAddRow(y, fg, v);
+            continue;
+        }
 
         char when[32], length[12], detail[48];
         formatLocal(when, sizeof(when), s.daily ? "Every day, %H:%M:%S" : "%a %e %b, %H:%M:%S", (time_t)s.start);
@@ -1481,9 +1597,106 @@ static void drawScheduleScreen(const ViewState &v) {
         }
         drawText(MARGIN, y + 58, &Text17, detail, fg);
     }
-    if (scrollTop + visible < v.scheduleCount) {
+    // More rows above (the first one among them) or below
+    if (scrollTop > 0) canvas->fillTriangle(cx - 8, LIST_TOP - 3, cx + 8, LIST_TOP - 3, cx, LIST_TOP - 11, INK);
+    if (scrollTop + visible < rows) {
         int bottom = LIST_TOP + visible * rowH;
         canvas->fillTriangle(cx - 8, bottom + 3, cx + 8, bottom + 3, cx, bottom + 11, INK);
+    }
+    if (v.scheduleCount == 0) {
+        drawTextCentered(cx, 300, &Bold22, "Nothing scheduled", INK);
+        drawTextCentered(cx, 338, &Text22, "The web interface can add them too,", INK);
+        drawTextCentered(cx, 366, &Text22, "with a time to the second", INK);
+    }
+}
+
+// A value of the schedule editor, centred in the `width` pixels from x. The
+// one being adjusted is marked: dark on a light field in the row's dark bar
+// (`pad` wider than the value, either side), with an arrow above and one
+// below it for the two ways the rocker moves it.
+static void drawEditValue(int x, int baseline, int width, int pad, const char *text, uint16_t fg, bool marked) {
+    if (marked) {
+        const int top = baseline - 25, h = 34, cx = x + width / 2;
+        canvas->fillRoundRect(x - pad, top, width + 2 * pad, h, 8, PAPER);
+        canvas->fillTriangle(cx - 9, top - 5, cx + 9, top - 5, cx, top - 13, PAPER);
+        canvas->fillTriangle(cx - 9, top + h + 4, cx + 9, top + h + 4, cx, top + h + 12, PAPER);
+    }
+    drawText(x + (width - textWidth(&Text22, text)) / 2, baseline, &Text22, text, marked ? INK : fg);
+}
+
+// One scheduled recording, new or being changed: its day, time, length and
+// whether it repeats, a row each as in Settings, and Save. The selected row
+// is a dark bar; pressing in on a value marks it, and up and down then
+// change it.
+static void drawScheduleEdit(const ViewState &v) {
+    drawSubHeader(v, "Schedule", v.editChanging ? "Change recording" : "New recording");
+    static const char *const titles[EDIT_ROWS] = {"Day", "Time", "Length", "Repeat", "Save"};
+    const int rowH = 80, right = SW - MARGIN;
+    int64_t now = (int64_t)v.clockMinute * 60, start;
+    EditCheck check = editCheck(v.editDay, v.editTime, v.editDaily, now, start);
+    for (int row = 0; row < EDIT_ROWS; row++) {
+        int y = LIST_TOP + row * rowH, baseline = y + 48;
+        bool isSelected = row == v.selected, marked = isSelected && v.editPart != PART_NONE;
+        if (isSelected) canvas->fillRoundRect(MARGIN - 12, y + 4, SW - 2 * MARGIN + 24, rowH - 8, 12, INK);
+        else if (row > 0 && row - 1 != v.selected) dottedLine(MARGIN, SW - MARGIN, y);
+        uint16_t fg = isSelected ? PAPER : INK;
+        drawText(MARGIN, baseline, row == EDIT_SAVE && check != EDIT_OK ? &Text22 : &Bold22, titles[row], fg);
+
+        char value[40];
+        switch (row) {
+        case EDIT_DAY: {
+            // "Today, Sat 14 Nov", "Tomorrow, Sun 15 Nov", "Mon 16 Nov"; with
+            // its year, a day past the ones that can be chosen here (an entry
+            // from the web interface)
+            int today = dayKey((time_t)now);
+            tm day = {};
+            day.tm_year = v.editDay / 10000 - 1900;
+            day.tm_mon = v.editDay / 100 % 100 - 1;
+            day.tm_mday = v.editDay % 100;
+            day.tm_hour = 12;
+            mktime(&day); // fills in the weekday
+            char weekday[8], month[8], year[8] = "";
+            strftime(weekday, sizeof(weekday), "%a", &day);
+            strftime(month, sizeof(month), "%b", &day);
+            if (v.editDay > dayAfter(today, EDIT_DAYS_AHEAD)) strftime(year, sizeof(year), " %Y", &day);
+            snprintf(value, sizeof(value), "%s%s %d %s%s", v.editDay == today ? "Today, " : v.editDay == dayAfter(today, 1) ? "Tomorrow, " : "",
+                     weekday, day.tm_mday, month, year);
+            break;
+        }
+        case EDIT_TIME: {
+            // The hours and the minutes each have a place as wide as the
+            // widest pair of digits, so nothing moves while they change, and
+            // stand apart from the colon by more than the field reaches
+            char hours[4], minutes[4];
+            snprintf(hours, sizeof(hours), "%02d", v.editTime / 60 % 24);
+            snprintf(minutes, sizeof(minutes), "%02d", v.editTime % 60);
+            const int place = textWidth(&Text22, "00"), pad = 5, gap = pad + 2, colonW = textWidth(&Text22, ":");
+            int minutesX = right - place, colonX = minutesX - gap - colonW, hoursX = colonX - gap - place;
+            drawEditValue(hoursX, baseline, place, pad, hours, fg, marked && v.editPart == PART_HOURS);
+            drawText(colonX, baseline, &Text22, ":", fg);
+            drawEditValue(minutesX, baseline, place, pad, minutes, fg, marked && v.editPart == PART_MINUTES);
+            continue;
+        }
+        case EDIT_LENGTH:
+            formatLength(value, sizeof(value), v.editSeconds);
+            break;
+        case EDIT_REPEAT:
+            snprintf(value, sizeof(value), v.editDaily ? "Every day" : "Once");
+            break;
+        default: // Save: when it will record, or why it can't be saved
+            if (check == EDIT_PASSED) {
+                snprintf(value, sizeof(value), "That time has passed");
+            } else if (check == EDIT_FULL) {
+                snprintf(value, sizeof(value), "The schedule is full");
+            } else {
+                char in[24];
+                formatIn(in, sizeof(in), start - now);
+                snprintf(value, sizeof(value), "records %s", in);
+            }
+            break;
+        }
+        int width = textWidth(&Text22, value);
+        drawEditValue(right - width, baseline, width, 7, value, fg, marked);
     }
 }
 
@@ -2516,9 +2729,31 @@ static void drawFooter(const ViewState &v) {
         rocker[nr++] = {HINT_CLICK, "Next page"};
         rocker[nr++] = {HINT_HOLD_CLICK, "Hold: library"};
     } else if (v.screen == SCREEN_SCHEDULE) {
+        // A press that would do nothing gets no hint: no room for one more
+        // entry, or no clock to set one by
+        bool clockSet = v.clockMinute >= 0;
         rocker[nr++] = {HINT_UPDOWN, "Select"};
-        rocker[nr++] = {HINT_CLICK, "Back"};
-        if (v.selected >= 0) rocker[nr++] = {HINT_HOLD_CLICK, "Hold: remove"};
+        if (v.selected == ROW_BACK) {
+            rocker[nr++] = {HINT_CLICK, "Back"};
+        } else if (v.selected == 0) {
+            if (clockSet && v.scheduleCount < MAX_SCHEDULES) rocker[nr++] = {HINT_CLICK, "Add"};
+            rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+        } else {
+            if (clockSet) rocker[nr++] = {HINT_CLICK, "Change"};
+            rocker[nr++] = {HINT_HOLD_CLICK, "Hold: remove"};
+        }
+    } else if (v.screen == SCREEN_SCHEDULE_EDIT) {
+        if (v.editPart != PART_NONE) {
+            rocker[nr++] = {HINT_UPDOWN, v.selected == EDIT_REPEAT ? "Change" : "Change, hold to go faster"};
+            rocker[nr++] = {HINT_CLICK, v.editPart == PART_HOURS ? "Minutes" : "Done"};
+        } else {
+            int64_t start;
+            rocker[nr++] = {HINT_UPDOWN, "Select"};
+            if (v.selected == ROW_BACK) rocker[nr++] = {HINT_CLICK, "Back"};
+            else if (v.selected != EDIT_SAVE) rocker[nr++] = {HINT_CLICK, "Change"};
+            else if (editCheck(v.editDay, v.editTime, v.editDaily, (int64_t)v.clockMinute * 60, start) == EDIT_OK) rocker[nr++] = {HINT_CLICK, "Save"};
+            rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+        }
     } else if (v.screen == SCREEN_CALENDAR) {
         rocker[nr++] = {HINT_UPDOWN, "Day"};
         rocker[nr++] = {HINT_CLICK, v.selected == ROW_BACK ? "Back" : "Open day"};
@@ -2629,6 +2864,7 @@ static void render(const ViewState &v) {
         case SCREEN_LIBRARY: drawLibrary(v); break;
         case SCREEN_UPDATE: drawUpdate(v); break;
         case SCREEN_READER: drawReader(v); break;
+        case SCREEN_SCHEDULE_EDIT: drawScheduleEdit(v); break;
         }
         switch (v.overlay) {
         case OVERLAY_MENU: drawMenu(v); break;
@@ -2930,9 +3166,11 @@ static void handleOverlay(ButtonEvent event) {
     }
 }
 
+// The schedule screen opens on its first row, the one that adds a recording,
+// as the main list opens on New recording
 static void openSchedule(Screen from) {
     scheduleFrom = from;
-    showScreen(SCREEN_SCHEDULE, scheduleCount() > 0 ? 0 : ROW_BACK);
+    showScreen(SCREEN_SCHEDULE, 0);
 }
 
 static void openSettings() {
@@ -3057,6 +3295,169 @@ static void handleCalendar(ButtonEvent event) {
     }
 }
 
+// Opens the editor on the schedule's entry `index`, or on a new one (-1)
+static void openScheduleEdit(int index) {
+    Schedule s;
+    tm local;
+    if (index >= 0 && scheduleGet(index, s)) {
+        time_t start = (time_t)s.start;
+        localtime_r(&start, &local);
+        editOriginal = s.start;
+        editSeconds = s.seconds;
+        editDaily = s.daily;
+    } else {
+        // A new one: the next five-minute mark and five minutes more, so the
+        // time lies ahead and there is a moment to save it in; today, or
+        // tomorrow when that is past midnight
+        time_t now = time(nullptr);
+        localtime_r(&now, &local);
+        local.tm_min = (local.tm_min + (local.tm_sec > 0) + 4) / 5 * 5 + 5;
+        local.tm_sec = 0;
+        local.tm_isdst = -1;
+        mktime(&local); // carries the minutes over into the hour and the day
+        editOriginal = 0;
+        editSeconds = audioLongestRecording() >= 60 ? 60 : EDIT_LENGTHS[0];
+        editDaily = false;
+    }
+    editDay = (local.tm_year + 1900) * 10000 + (local.tm_mon + 1) * 100 + local.tm_mday;
+    editTime = local.tm_hour * 60 + local.tm_min;
+    editPart = PART_NONE;
+    editFromRow = selected;
+    showScreen(SCREEN_SCHEDULE_EDIT, EDIT_DAY);
+}
+
+// Leaves the editor without saving: back to the schedule, on the row it was
+// opened from
+static void closeScheduleEdit() {
+    editPart = PART_NONE;
+    showScreen(SCREEN_SCHEDULE, editFromRow);
+}
+
+// Save: the entry goes into the schedule, in place of the one that was being
+// changed, and the schedule shows again with it selected. Nothing happens
+// while the Save row says why it can't be saved.
+static void saveScheduleEdit() {
+    Schedule fresh = {}, old, s;
+    if (!clockValid() || editCheck(editDay, editTime, editDaily, time(nullptr), fresh.start) != EDIT_OK) return;
+    fresh.seconds = editSeconds;
+    fresh.daily = editDaily;
+    // The old one goes first, since a full schedule has no room for both; it
+    // comes back should the new one be refused after all
+    int index = editOriginalIndex();
+    bool replacing = index >= 0 && scheduleGet(index, old);
+    if (replacing) scheduleRemove(index);
+    if (!scheduleAdd(fresh)) {
+        if (replacing) scheduleAdd(old);
+        return;
+    }
+    int row = 0;
+    for (int i = 0; scheduleGet(i, s); i++) {
+        if (s.start == fresh.start && s.seconds == fresh.seconds && s.daily == fresh.daily) {
+            row = 1 + i;
+            break;
+        }
+    }
+    editPart = PART_NONE;
+    showScreen(SCREEN_SCHEDULE, row);
+}
+
+// One step of the value being adjusted; up is later, or longer. Held, the key
+// makes the value run (uiTick), and the minutes then go from one multiple of
+// five to the next. The hours and the minutes wrap round, each by itself; the
+// day and the length stop at their ends. False when nothing changed.
+static bool editStep(int direction, bool running) {
+    switch (editPart) {
+    case PART_HOURS:
+        editTime = (editTime + direction * 60 + 24 * 60) % (24 * 60);
+        return true;
+    case PART_MINUTES: {
+        int minute = editTime % 60;
+        if (!running) minute += direction;
+        else if (direction > 0) minute = minute / 5 * 5 + 5;
+        else minute = (minute + 4) / 5 * 5 - 5;
+        editTime = editTime / 60 * 60 + (minute + 60) % 60;
+        return true;
+    }
+    case PART_VALUE:
+        if (selected == EDIT_DAY) {
+            // From today to a year ahead. A day from outside that (yesterday's,
+            // once midnight has passed; a far one set on the web interface)
+            // comes inside with its first step.
+            int today = dayKey(time(nullptr)), last = min(dayAfter(today, EDIT_DAYS_AHEAD), EDIT_LAST_DAY);
+            int day = dayAfter(editDay, direction);
+            day = constrain(day, today, last);
+            if (day == editDay) return false;
+            editDay = day;
+            return true;
+        }
+        if (selected == EDIT_LENGTH) {
+            // The lengths the web interface offers: those one recording can
+            // last, as things are (the card's room, and a file's 4 GB), and
+            // the shortest in any case
+            int longest = max((int)audioLongestRecording(), EDIT_LENGTHS[0]), seconds = editSeconds;
+            for (int i = 0; i < EDIT_LENGTH_COUNT; i++) {
+                int choice = EDIT_LENGTHS[direction > 0 ? i : EDIT_LENGTH_COUNT - 1 - i];
+                if (direction > 0 ? choice > seconds && choice <= longest : choice < seconds) {
+                    editSeconds = choice;
+                    return true;
+                }
+            }
+            return false;
+        }
+        editDaily = !editDaily; // Repeat: once, or every day
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void handleScheduleEdit(ButtonEvent event) {
+    if (editPart != PART_NONE) { // a value is being adjusted
+        switch (event) {
+        case BTN_UP:
+        case BTN_DOWN: {
+            int direction = event == BTN_UP ? 1 : -1;
+            // With a way to go and the key held, the value runs from here
+            // (two choices do not: they would only flicker)
+            if (editStep(direction, false) && selected != EDIT_REPEAT) {
+                editHeld = direction;
+                editHeldSince = millis();
+                editRanAt = editHeldSince + EDIT_RUN_AFTER_MS - EDIT_RUN_EVERY_MS;
+            }
+            break;
+        }
+        case BTN_CLICK:
+            editPart = editPart == PART_HOURS ? PART_MINUTES : PART_NONE;
+            break;
+        case BTN_LONG_CLICK:
+            editPart = PART_NONE;
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+    switch (event) {
+    case BTN_UP: // wraps, as in Settings: Save is one press from Back
+        selected = selected > ROW_BACK ? selected - 1 : EDIT_ROWS - 1;
+        break;
+    case BTN_DOWN:
+        selected = selected < EDIT_ROWS - 1 ? selected + 1 : ROW_BACK;
+        break;
+    case BTN_CLICK:
+        if (selected == ROW_BACK) closeScheduleEdit();
+        else if (selected == EDIT_SAVE) saveScheduleEdit();
+        else editPart = selected == EDIT_TIME ? PART_HOURS : PART_VALUE;
+        break;
+    case BTN_LONG_CLICK:
+        closeScheduleEdit();
+        break;
+    default:
+        break;
+    }
+}
+
+// Rows: the one that adds a recording, then the entries
 static void handleSchedule(ButtonEvent event) {
     Schedule s;
     switch (event) {
@@ -3064,13 +3465,17 @@ static void handleSchedule(ButtonEvent event) {
         if (selected > ROW_BACK) selected = selected - 1;
         break;
     case BTN_DOWN:
-        if (selected < scheduleCount() - 1) selected = selected + 1;
+        if (selected < scheduleCount()) selected = selected + 1;
         break;
     case BTN_CLICK:
-        showScreen(scheduleFrom, scheduleFrom == SCREEN_SETTINGS ? SET_SCHEDULE : ROW_NEXT_SCHEDULED);
+        // Setting a recording up needs the clock, and a new one needs room;
+        // the first row says so when either is missing
+        if (selected == ROW_BACK) showScreen(scheduleFrom, scheduleFrom == SCREEN_SETTINGS ? SET_SCHEDULE : ROW_NEXT_SCHEDULED);
+        else if (clockValid() && selected > 0) openScheduleEdit(selected - 1);
+        else if (clockValid() && scheduleCount() < MAX_SCHEDULES) openScheduleEdit(-1);
         break;
     case BTN_LONG_CLICK:
-        if (selected >= 0 && scheduleGet(selected, s)) {
+        if (selected > 0 && scheduleGet(selected - 1, s)) {
             unscheduleStart = s.start;
             openOverlay(OVERLAY_CONFIRM_UNSCHEDULE, 0);
         } else {
@@ -3243,6 +3648,7 @@ static void handleEvent(ButtonEvent event) {
     Serial.printf("[ui] %lu ms: %s (screen %d, selected %d, audio %d, overlay %d)\n",
                   millis(), eventName(event), (int)screen, (int)selected, (int)audio, (int)overlay);
     lastActivity = millis();
+    editHeld = 0; // any key ends a value's run in the schedule editor, its own release among them
     if (batteryEmptyPage) {
         // A key after that page: the board stayed on after all (USB came just
         // then). The key only brings the screen back, since nobody could see
@@ -3293,6 +3699,11 @@ static void handleEvent(ButtonEvent event) {
     // The Settings button (BOOT on the board) opens the menu from anywhere, and
     // closes it again, also from the screens that belong to it
     if (event == BTN_MENU) {
+        // The schedule editor is left first, as by its Back button, on both
+        // ways to it: Settings then closes from the schedule it belongs to, or
+        // opens over the schedule and comes back to that, never to an editor
+        // whose entry may have changed meanwhile
+        if (screen == SCREEN_SCHEDULE_EDIT) closeScheduleEdit();
         if (partOfSettings(screen)) closeSettings();
         else if (screen != SCREEN_TRANSFER) openSettings();
         return;
@@ -3311,6 +3722,7 @@ static void handleEvent(ButtonEvent event) {
     case SCREEN_CALENDAR: handleCalendar(event); break;
     case SCREEN_SETTINGS: handleSettings(event); break;
     case SCREEN_SCHEDULE: handleSchedule(event); break;
+    case SCREEN_SCHEDULE_EDIT: handleScheduleEdit(event); break;
     case SCREEN_LIBRARY: handleLibrary(event); break;
     case SCREEN_UPDATE:
         if (event == BTN_CLICK || event == BTN_LONG_CLICK) showScreen(SCREEN_SETTINGS, SET_UPDATE);
@@ -3345,7 +3757,26 @@ void uiTick() {
     if (count > lastMomentCount && screen == SCREEN_LIST) selected = 0; // after a recording (or at boot): ready to record again
     lastMomentCount = count;
     if (screen == SCREEN_LIST && selected > first + count - 1) selected = first + count - 1;
-    if (screen == SCREEN_SCHEDULE && selected >= scheduleCount()) selected = scheduleCount() - 1; // ROW_BACK when empty
+    if (screen == SCREEN_SCHEDULE && selected > scheduleCount()) selected = scheduleCount(); // the last entry, or the row that adds one
+    // The schedule editor works by the clock: without one, back to the
+    // schedule, whose first row says to set it
+    if (screen == SCREEN_SCHEDULE_EDIT && !clockValid()) closeScheduleEdit();
+    // Up or down held on one of its values: the value runs, a step at a time,
+    // and the screen shows where it has got to whenever it is free to. Not
+    // into a recording that starts meanwhile (the keys are off then, see
+    // handleEvent), and not for ever.
+    if (editHeld) {
+        uint32_t now = millis();
+        AudioState audio = audioState();
+        bool keysOff = audio == AUDIO_RECORDING || audio == AUDIO_SAVING || audio == AUDIO_FORMATTING;
+        if (screen != SCREEN_SCHEDULE_EDIT || editPart == PART_NONE || keysOff || now - editHeldSince >= EDIT_RUN_MAX_MS) {
+            editHeld = 0;
+        } else if ((int32_t)(now - editRanAt) >= (int32_t)EDIT_RUN_EVERY_MS) {
+            editRanAt = now;
+            lastActivity = now; // a key held is the buttons in use
+            if (!editStep(editHeld, true)) editHeld = 0; // at its end
+        }
+    }
     // Ejected on the computer: back to the main screen by itself (a restart),
     // once the screen has had a moment to say so
     static uint32_t ejectedAt = 0;
