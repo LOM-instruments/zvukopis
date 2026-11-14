@@ -76,7 +76,7 @@ floor while the headroom it buys (clipping above 145 dB SPL) is of no use.
 
 | | |
 |---|---|
-| Spectrogram | 4096-point FFT, Hann window, 23 Hz bins, linear 0 to 48 kHz, four contrast levels |
+| Spectrogram | 4096-point FFT, Hann window, 23 Hz bins, linear 0 to 48, 24 or 12 kHz, four contrast levels |
 | Spectrum | Average of the same FFTs, dB against linear frequency |
 | Band | The range that holds 80 % of the moment's energy (computed, not shown) |
 

@@ -56,7 +56,7 @@ While it plays, hold the switch up or down and the speed changes like a tape ree
 Hold the switch in on a moment. A menu opens, titled with the moment's number.
 
 - **Tag it.** The first entries are the tags: sound, music, note, biophony and anthropophony, unless you renamed them or added your own on the web interface (up to twelve; with many, the list scrolls). A tag helps you find the moment later; it does not mean the recording is about that. Choosing the same tag again removes it.
-- **Frequency analysis.** A spectrogram of the whole moment, time across and 0 to 48 kHz up. Up and down step through four contrast levels, and press in plays the moment with a playhead on the picture. Hold in for the spectrum (an FFT graph), or to go back to the moments.
+- **Frequency analysis.** A spectrogram of the whole moment, time across and 0 to 48 kHz up. Up and down step through four contrast levels, and press in plays the moment with a playhead on the picture. Hold in for the spectrum (an FFT graph), for a scale of 0 to 24 or 0 to 12 kHz (which suits birdsong and speech, and stays until you change it), or to go back to the moments.
 - **Delete.** Asks you first. Deleting takes the file off the card, so be sure.
 - **Cancel.** Or hold the switch in again.
 

@@ -38,7 +38,7 @@ is also on the project page, and it reads on the device (a copy sits in
 - **Library:** the book button next to the calendar, shown once the card has
   documents. Up and down turn the pages; the page you left at is remembered.
 - **Spectrogram:** up and down step through four contrast levels; hold in for
-  the spectrum, or to go back.
+  the spectrum, a scale of 0 to 24 or 0 to 12 kHz, or to go back.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
   Mic gain (auto or fixed), scheduled recordings,
   the web interface, clock sync, the USB card reader, the USB microphone, formatting the card
