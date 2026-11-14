@@ -79,6 +79,7 @@ enum CommandType : uint8_t {
     CMD_FORMAT,
     CMD_GAIN,
     CMD_USB_MIC,
+    CMD_RECHECK_CARD,
 };
 
 struct Command {
@@ -325,7 +326,13 @@ static bool prepareRecording(uint32_t seconds) {
     size_t chunks = recordLimit / CHUNK_FRAMES + 1;
     envelopeChunks = (chunks + ENVELOPE_MAX - 1) / ENVELOPE_MAX;
     free(envelope);
-    envelope = (uint16_t *)ps_calloc(chunks / envelopeChunks + 1, sizeof(uint16_t));
+    envelope = nullptr;
+    // Moments held in memory can have left too little PSRAM for an envelope
+    // this fine (a card put in after a start without one): a coarser one
+    // gives a flatter list waveform for a short take, which beats no take
+    while (!(envelope = (uint16_t *)ps_calloc(chunks / envelopeChunks + 1, sizeof(uint16_t))) && chunks / envelopeChunks > 4 * WAVEFORM_BINS) {
+        envelopeChunks *= 2;
+    }
     if (!envelope) {
         Serial.println("Can't allocate the recording envelope");
         streamingRecord = false;
@@ -372,10 +379,11 @@ static bool startRecording(uint32_t seconds) {
     if (!prepareRecording(seconds)) {
         // A card that gives no file may have been taken out and put back,
         // which only asking it shows. Mounted afresh, it takes the recording
-        // after all; if it is gone, memory does.
-        if (!fileRefused) return false;
-        if (!recheckCard() || !prepareRecording(seconds)) {
-            if (fileRefused) setNotice(AUDIO_NOTICE_NOT_SAVED);
+        // after all; if it is gone, memory does. Whatever stops the start,
+        // the screen gets a line for it (unless the card being gone already
+        // has one): the state has said "recording" for a moment by now.
+        if (!fileRefused || !recheckCard() || !prepareRecording(seconds)) {
+            if (notice == AUDIO_NOTICE_NONE) setNotice(AUDIO_NOTICE_NOT_SAVED);
             return false;
         }
     }
@@ -517,6 +525,8 @@ static bool recheckCard() {
     if (had && !storageAvailable()) {
         Serial.println("[audio] the SD card is gone, and its moments are off the list");
         setNotice(AUDIO_NOTICE_NO_CARD);
+    } else if (storageAvailable() && notice == AUDIO_NOTICE_NO_CARD) {
+        setNotice(AUDIO_NOTICE_NONE); // a card is there again
     }
     return true;
 }
@@ -608,6 +618,10 @@ static void finishRecording() {
     momentTotal++;
     listVersion++;
     xSemaphoreGive(momentLock);
+    // The card was found gone when this recording started, and the screen
+    // was held still since: the line that says so counts its seconds from
+    // now, when the list comes back and it can be read
+    if (!onCard && notice == AUDIO_NOTICE_NO_CARD) setNotice(AUDIO_NOTICE_NO_CARD);
     state = AUDIO_IDLE;
     Serial.printf("Saved Moment %d %s%s%s%s in %lu ms: %.2f s, playback gain %.1fx, mic gain %d dB%s\n",
                   moment.number, onCard ? "to SD card as " : "in memory", onCard ? moment.folder : "", onCard ? "/" : "",
@@ -850,6 +864,11 @@ static void handleCommand(const Command &cmd) {
     case CMD_SELF_TEST:
         if (state == AUDIO_IDLE && audioWake()) startSelfTest();
         break;
+    case CMD_RECHECK_CARD:
+        // Only with nothing going on: asking stops a playback, and a card
+        // that is recorded onto is not to be started afresh
+        if (state == AUDIO_IDLE && !running) recheckCard();
+        break;
     case CMD_SUSPEND:
         if (state == AUDIO_RECORDING) finishRecording();
         if (state == AUDIO_PLAYING) stopPlayback();
@@ -1033,7 +1052,16 @@ static void audioTask(void *) {
     for (;;) {
         Command cmd;
         if (!running) {
-            if (xQueueReceive(commandQueue, &cmd, portMAX_DELAY) == pdTRUE) handleCommand(cmd);
+            // The request stays in the queue while it is carried out, so that
+            // audioAsleep() says no for as long as the work lasts. Waking the
+            // codec for a playback takes some 30 ms with the state still idle,
+            // and the main loop, seeing nothing going on, sent the chip into
+            // light sleep in the middle of it: on battery a press on a moment
+            // played nothing until the next key or the next minute.
+            if (xQueuePeek(commandQueue, &cmd, portMAX_DELAY) == pdTRUE) {
+                handleCommand(cmd);
+                xQueueReceive(commandQueue, &cmd, 0); // the same one: only this task takes from the queue
+            }
             idleSince = millis();
             continue;
         }
@@ -1246,6 +1274,7 @@ void audioDelete(int index) {
     if (numberAt(index, number)) sendCommand(CMD_DELETE, number);
 }
 void audioDeleteNumber(int number) { sendCommand(CMD_DELETE, number); }
+void audioRecheckCard() { sendCommand(CMD_RECHECK_CARD); }
 void audioSelfTest() { sendCommand(CMD_SELF_TEST); }
 void audioStartUsbMic() { sendCommand(CMD_USB_MIC); }
 void audioSetTag(int index, int tag) {

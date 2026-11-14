@@ -75,6 +75,10 @@ void audioDelete(int index);
 // Deletes the moment with this number, wherever it sits in the list by the
 // time the request is carried out (the list shifts when a recording is saved)
 void audioDeleteNumber(int number);
+// Has the audio task look at the card slot: a card put in since is mounted
+// and its moments listed, one taken out leaves the list. Nothing while
+// something records or plays; those look for themselves when they start.
+void audioRecheckCard();
 void audioSetTag(int index, int tag); // a category slot, or TAG_NONE
 void audioClearTagsAbove(int count); // moments tagged with a slot above `count` lose the tag
 // Tape-style varispeed while playing: +1 speeds up for as long as it's held,
@@ -106,7 +110,7 @@ enum AudioNotice {
     AUDIO_NOTICE_NONE,
     AUDIO_NOTICE_CARD_FAILED, // the card stopped taking data: the recording ended there, what was written is kept
     AUDIO_NOTICE_NOT_SAVED,   // a recording could not be kept at all
-    AUDIO_NOTICE_NO_CARD,     // the card that was there at start-up is gone
+    AUDIO_NOTICE_NO_CARD,     // the card that was there is gone (until one is mounted again, or the next recording starts)
 };
 AudioNotice audioNotice(uint32_t &since); // and when it happened (millis)
 float audioRecordingSeconds();

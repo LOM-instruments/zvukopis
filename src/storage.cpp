@@ -318,6 +318,7 @@ static const size_t FIRST_WRITE_SAMPLES = WRITE_SAMPLES - WAV_HEADER_BYTES / siz
 // This often, so that a power cut costs the last seconds and no more.
 static const size_t SYNC_SAMPLES = 5 * SAMPLE_RATE;
 static int16_t *ring = nullptr;                     // PSRAM
+static size_t ringSamples = 0;                      // its size: RING_SAMPLES, or less when PSRAM could not give that
 static int16_t *writeBuffer = nullptr;              // internal RAM, which the card driver can DMA from
 static volatile size_t ringHead = 0, ringTail = 0;  // in samples: head moved by the audio task, tail by the writer
 static File streamFile;
@@ -330,7 +331,7 @@ static SemaphoreHandle_t streamDrained;
 
 static size_t ringAvailable() {
     size_t h = ringHead, t = ringTail;
-    return h >= t ? h - t : RING_SAMPLES - t + h;
+    return h >= t ? h - t : ringSamples - t + h;
 }
 
 // Nothing here opens a file or looks one up by name: those calls go deepest
@@ -345,9 +346,9 @@ static void writerLoop(void *) {
             size_t available = ringAvailable();
             if (available == 0 || (available < block && !finishing)) break;
             size_t n = min(available, block), tail = ringTail;
-            for (size_t i = 0; i < n; i++) writeBuffer[i] = ring[(tail + i) % RING_SAMPLES];
+            for (size_t i = 0; i < n; i++) writeBuffer[i] = ring[(tail + i) % ringSamples];
             size_t wrote = streamFile.write((const uint8_t *)writeBuffer, n * sizeof(int16_t)) / sizeof(int16_t);
-            ringTail = (tail + wrote) % RING_SAMPLES;
+            ringTail = (tail + wrote) % ringSamples;
             streamWritten += wrote;
             if (wrote < n) {
                 Serial.println("Writing to the SD card failed; the recording stops here");
@@ -370,7 +371,24 @@ static void writerLoop(void *) {
 // The ring, the write buffer and the writer task serve every recording onto
 // the card. False when one of them can't be had.
 static bool streamReady() {
-    if (!ring) ring = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
+    // The full four seconds when PSRAM has them. When moments held in memory
+    // have filled it (a card put in after a start without one), a shorter
+    // ring: a slow card may then cost samples, where no ring at all refused
+    // every recording. Called only while no recording runs, so the size is
+    // the writer's to rely on for a whole recording; a short ring is traded
+    // for a full one as soon as there is room.
+    if (ring && ringSamples < RING_SAMPLES && !streamOpen) {
+        int16_t *full = (int16_t *)ps_malloc(RING_SAMPLES * sizeof(int16_t));
+        if (full) {
+            free(ring);
+            ring = full;
+            ringSamples = RING_SAMPLES;
+        }
+    }
+    for (size_t want = RING_SAMPLES; !ring && want >= SAMPLE_RATE / 2; want /= 2) {
+        ring = (int16_t *)ps_malloc(want * sizeof(int16_t));
+        if (ring) ringSamples = want;
+    }
     if (!writeBuffer) writeBuffer = (int16_t *)heap_caps_malloc(WRITE_SAMPLES * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!streamDrained) streamDrained = xSemaphoreCreateBinary();
     if (!ring || !writeBuffer || !streamDrained) return false;
@@ -419,11 +437,11 @@ bool storageStreamBegin(Moment &moment) {
 
 size_t storageStreamWrite(const int16_t *samples, size_t n) {
     if (!streaming) return 0;
-    size_t room = RING_SAMPLES - 1 - ringAvailable();
+    size_t room = ringSamples - 1 - ringAvailable();
     size_t take = min(n, room);
     size_t head = ringHead;
-    for (size_t i = 0; i < take; i++) ring[(head + i) % RING_SAMPLES] = samples[i];
-    ringHead = (head + take) % RING_SAMPLES;
+    for (size_t i = 0; i < take; i++) ring[(head + i) % ringSamples] = samples[i];
+    ringHead = (head + take) % ringSamples;
     streamDropped += n - take;
     if (writerTask) xTaskNotifyGive(writerTask);
     return take;
@@ -441,6 +459,15 @@ bool storageStreamEnd(Moment &moment) {
         streamFailed = true; // what it is stuck on is given up, like a write that failed
     }
     streamOpen = false;
+    if (!streamFailed) {
+        // The last, short block may still sit in the C library's buffer: a
+        // card with no room left for it shows that only now, at the flush
+        streamFile.flush();
+        if (streamFile.size() != WAV_HEADER_BYTES + streamWritten * sizeof(int16_t)) {
+            Serial.println("The end of the recording did not reach the SD card");
+            streamFailed = true;
+        }
+    }
     moment.length = streamWritten;
     moment.dataOffset = WAV_HEADER_BYTES;
     char path[96];
