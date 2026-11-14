@@ -92,6 +92,8 @@ esp-web-install-button:not(:defined) [slot="unsupported"], esp-web-install-butto
 esp-web-install-button button { font: 17px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 11px 18px 12px; }
 .install { margin: 14px 0 10px; }
 .version b { font-weight: 400; background: var(--accent); color: var(--text); padding: 1px 7px 2px; }
+/* A sentence marked as with a highlighter, in the accent colour; each line of it gets its own padded stripe */
+mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 
 /* Footer */
 .site-footer { font-size: 14px; line-height: 1.5; color: var(--muted); border-bottom: 0; }
