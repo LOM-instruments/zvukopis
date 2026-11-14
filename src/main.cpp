@@ -141,6 +141,7 @@ static bool scheduleTick() {
     if (!scheduleNext(now, s, index) || now < s.start || !uiCanRecord()) return false;
     AudioState a = audioState();
     if (a == AUDIO_RECORDING || a == AUDIO_SAVING || a == AUDIO_FORMATTING) return false; // tried again while its time lasts
+    if (uiFullRefreshRunning()) return false; // the microphone hears it: the recording starts when it is over
     if (a == AUDIO_PLAYING) audioStopPlayback();
     uint32_t seconds = (uint32_t)(s.start + s.seconds - now);
     Serial.printf("[schedule] recording for %lu s\n", seconds);

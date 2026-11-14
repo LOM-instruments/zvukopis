@@ -81,11 +81,15 @@ bool boardPowerInit() {
     // until it loses all power, so left alone they would be the last
     // firmware's, or after a power loss the chip's own, which differ.
     Serial.printf("[power] charger was at %u/%u/%u/%u (codes for precharge, current, end, voltage), now %u/%u/%u/%u: 50 mA, 200 mA, 25 mA, 4.2 V\n",
-                  (unsigned)pmu.getPrechargeCurr(), (unsigned)pmu.getChargerConstantCurr(),
+                  (unsigned)(pmu.readRegister(XPOWERS_AXP2101_IPRECHG_SET) & 0x0F), (unsigned)pmu.getChargerConstantCurr(),
                   (unsigned)pmu.getChargerTerminationCurr(), (unsigned)pmu.getChargeTargetVoltage(),
                   (unsigned)XPOWERS_AXP2101_PRECHARGE_50MA, (unsigned)XPOWERS_AXP2101_CHG_CUR_200MA,
                   (unsigned)XPOWERS_AXP2101_CHG_ITERM_25MA, (unsigned)XPOWERS_AXP2101_CHG_VOL_4V2);
-    pmu.setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_50MA);
+    // The library's setter for the precharge current keeps the upper two of
+    // the field's four bits (25 mA a step): from the chip's own 125 mA it
+    // made 150 mA, not the 50 it was asked for. The whole field is written.
+    int precharge = pmu.readRegister(XPOWERS_AXP2101_IPRECHG_SET);
+    if (precharge >= 0) pmu.writeRegister(XPOWERS_AXP2101_IPRECHG_SET, (uint8_t)((precharge & 0xF0) | XPOWERS_AXP2101_PRECHARGE_50MA));
     pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_200MA);
     pmu.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
     pmu.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);

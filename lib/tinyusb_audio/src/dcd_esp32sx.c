@@ -93,16 +93,6 @@ static uint16_t _in_ep_fifo_words[EP_MAX];
 // in place of the one inside the core's prebuilt TinyUSB library
 void tinyusbDcdPatched(void) {}
 
-// Zvukopis: the number of the last frame the host started. A host that is
-// there starts one every millisecond; on a suspended bus, or with the cable
-// out, the number stands still. (The stack's own "suspended" flag cannot say
-// this: this driver never reports a resume, so the flag stays set after the
-// first suspend until the next bus reset.)
-uint16_t tinyusbFrameNumber(void)
-{
-  return (USB0.dsts >> USB_SOFFN_S) & USB_SOFFN_V;
-}
-
 // Zvukopis: stops an IN endpoint that has a transfer armed and empties its
 // FIFO. Writing the control register to zero does not take an armed transfer
 // back: the endpoint stays enabled with the stale packet in its FIFO, and

@@ -179,6 +179,10 @@ static volatile int quoteIndex = 0;
 // nothing to draw
 static volatile uint32_t napAsk = 0, napAck = 0;
 static volatile bool fullRefreshDue = false; // the display task owes the panel a full refresh, once the buttons rest
+// A full refresh is on the panel now, for two to five seconds in which the
+// screen can show nothing new: a recording started by a press in that time
+// runs before its screen appears
+static volatile bool fullRefreshRunning = false;
 static volatile bool batteryEmptyPage = false;  // see uiShowBatteryEmpty
 static volatile bool batteryEmptyDrawn = false; // ... the display task has put it on the panel
 static volatile uint32_t sleepBeganAt = 0, wokeUpAt = 0; // millis: a recording that went wrong in between is said on waking
@@ -326,7 +330,7 @@ struct ViewState {
     int nextScheduleMinute; // start of the next scheduled recording, -1 if none
     int listFull;       // the list holds all the moments it can: no new recording, whatever the room
     int notice;         // AudioNotice: a recording that went wrong, for RESULT_MS
-    int cardGone;       // the card stopped answering (until the next recording starts)
+    int cardGone;       // the card stopped answering, and none has been mounted since
     int audioReady;     // 0: the audio chain did not start
     int powerReady;     // 0: the power chip did not answer at start-up
     int spectrumFailed; // no memory for the analysis asked for
@@ -380,7 +384,7 @@ static ViewState currentView() {
     v.powerReady = boardPowerReady();
     uint32_t noticeMsLeft, noticeSince;
     v.notice = noticeToShow(noticeMsLeft);
-    v.cardGone = audioNotice(noticeSince) == AUDIO_NOTICE_NO_CARD;
+    v.cardGone = audioNotice(noticeSince) == AUDIO_NOTICE_NO_CARD && !audioUsingSdCard() && storageCardState() != SD_UNREADABLE;
     v.batteryEmpty = batteryEmptyPage;
     v.battery = battery;
     v.usb = usb;
@@ -838,6 +842,9 @@ static const GFXfont *fittingFont(const char *text, int maxWidth, const GFXfont 
 static const char *mainNotice(const ViewState &v) {
     if (!v.audioReady) return "Sound did not start: hold Sleep 10 s";
     if (!v.powerReady) return "Battery unknown: hold Sleep 10 s";
+    // On the recording screen, which is drawn once and then left alone, a
+    // line about an earlier recording would stand over this one to its end
+    if (v.audio == AUDIO_RECORDING || v.audio == AUDIO_SAVING || v.quickRecord) return nullptr;
     switch (v.notice) {
     case AUDIO_NOTICE_CARD_FAILED: return "Card error: recording ended early";
     case AUDIO_NOTICE_NOT_SAVED: return "The recording could not be saved";
@@ -1338,9 +1345,7 @@ static void drawSettings(const ViewState &v) {
     // Card and memory
     int y = LIST_TOP + visible * rowH + 30;
     char buf[64], total[16], free[16];
-    if (v.cardGone) {
-        drawText(MARGIN, y, &Text17, "The SD card stopped answering: restart with it in", INK);
-    } else if (v.sdCard) {
+    if (v.sdCard) {
         formatBytes(total, sizeof(total), storageTotalBytes());
         formatBytes(free, sizeof(free), storageFreeBytes());
         iconSdCard(MARGIN + 16, y - 6);
@@ -2653,8 +2658,10 @@ static void pushPartial(const ViewState &v) {
 
 static void pushFull() {
     uint32_t start = millis();
+    fullRefreshRunning = true;
     EPD_3IN97_Init();
     EPD_3IN97_Display_Base(canvas->getBuffer()); // writes both panel buffers, which partial refreshes build on
+    fullRefreshRunning = false;
     Serial.printf("[display] %lu ms: full refresh took %lu ms\n", start, millis() - start);
 }
 
@@ -2931,6 +2938,9 @@ static void openSchedule(Screen from) {
 static void openSettings() {
     menuFrom = (Screen)(int)screen;
     menuFromSelected = selected;
+    // A card put in since the start is found only when it is asked for, and
+    // this is where one comes to format it or to open it over USB
+    audioRecheckCard();
     showScreen(SCREEN_SETTINGS, 0);
 }
 
@@ -2958,7 +2968,11 @@ static void handleList(ButtonEvent event) {
         else if (selected < first + momentCount() - 1) selected = selected + 1;
         break;
     case BTN_CLICK:
-        if (selected == ROW_LIBRARY) showScreen(SCREEN_LIBRARY, libraryCount() > 0 ? 0 : ROW_BACK);
+        // While a moment plays the footer says "Press in: stop", and up and
+        // down are its speed: the selection can sit on another row (the list
+        // was shown again, or grew), and the press still means stop
+        if (audioState() == AUDIO_PLAYING) audioStopPlayback();
+        else if (selected == ROW_LIBRARY) showScreen(SCREEN_LIBRARY, libraryCount() > 0 ? 0 : ROW_BACK);
         else if (selected == ROW_CALENDAR) openCalendar();
         else if (selected == 0) audioStartRecording();
         else if (selected < first) openSchedule(SCREEN_LIST);
@@ -2982,7 +2996,8 @@ static void handleDay(ButtonEvent event) {
         if (selected < n - 1) selected = selected + 1;
         break;
     case BTN_CLICK:
-        if (selected == ROW_BACK) showScreen(SCREEN_CALENDAR, 0);
+        if (audioState() == AUDIO_PLAYING) audioStopPlayback(); // as in the main list
+        else if (selected == ROW_BACK) showScreen(SCREEN_CALENDAR, 0);
         else if (selected < n) togglePlay(loopDayMoments[selected]);
         break;
     case BTN_LONG_CLICK:
@@ -3269,7 +3284,9 @@ static void handleEvent(ButtonEvent event) {
         return;
     }
     if (audio == AUDIO_RECORDING || audio == AUDIO_SAVING) {
-        if (event == BTN_CLICK) audioStopRecording();
+        // Not while a full refresh keeps the recording screen from showing:
+        // a second press then is somebody who thinks the first did nothing
+        if (event == BTN_CLICK && !fullRefreshRunning) audioStopRecording();
         return;
     }
     if (audio == AUDIO_FORMATTING) return;
@@ -3455,6 +3472,8 @@ uint32_t uiMsUntilNextChange() {
     if (fullRefreshDue && idle <= FULL_REFRESH_IDLE_MS) ms = min(ms, FULL_REFRESH_IDLE_MS - idle + 5);
     return ms;
 }
+
+bool uiFullRefreshRunning() { return fullRefreshRunning; }
 
 bool uiCanRecord() { return screen != SCREEN_CARD_READER && screen != SCREEN_USB_MIC; }
 

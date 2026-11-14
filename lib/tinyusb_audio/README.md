@@ -57,8 +57,7 @@ with a host closing the audio stream and opening it again:
 - **`dcd_sof_enable`** is implemented (upstream left it empty and switched the
   frame interrupt off after each one), and `transmit_packet` never writes more
   than the FIFO has room for.
-- **`tinyusbFrameNumber()`** gives the app the number of the last frame the
-  host started. `src/usbmic.cpp` tells a stalled stream from a host that has
-  gone quiet by it (a suspended bus, a pulled cable: no frames). The stack's
-  own `tud_suspended()` cannot be used for that: this driver keeps the resume
-  interrupt masked, so the flag, once set, stays set until the next bus reset.
+- The stack's own `tud_suspended()` cannot tell a quiet bus: this driver
+  keeps the resume interrupt masked, so the flag, once set, stays set until
+  the next bus reset. `src/usbmic.cpp` therefore watches the USB task itself
+  (a call queued to it with `usbd_defer_func`), not the bus.

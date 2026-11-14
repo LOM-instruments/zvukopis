@@ -112,7 +112,6 @@ static uint16_t audioDescriptor(uint8_t *dst, uint8_t *itf) {
 }
 
 extern "C" void tinyusbDcdPatched(void); // lib/tinyusb_audio/src/dcd_esp32sx.c
-extern "C" uint16_t tinyusbFrameNumber(void); // the same file: it moves on every millisecond while a host is there
 
 bool usbMicStart() {
     tinyusbDcdPatched(); // links the patched USB driver (its comment says why)
@@ -129,12 +128,12 @@ bool usbMicStart() {
     USB.usbPower(100);                                    // ...and the host is asked for what a tablet allows
     if (!USB.begin()) return false; // takes the USB port over from the serial/JTAG controller
     // Should the audio task stall, the task watchdog panics; should the USB
-    // task stall while the host streams, the audio task aborts (log()). Either
+    // task stall with a stream open, the audio task aborts (log()). Either
     // way a core dump lands in flash (scripts/coredump.py reads it) and the
     // restart brings the console back. (The USB task cannot be watched by
     // the frame tick: the stack switches that interrupt off on a bus reset.)
-    // A host that has gone quiet is neither: the cable pulled, or the
-    // computer asleep, leaves the mode as it is, waiting.
+    // A host that has gone quiet, or holds the stream open without reading
+    // it, is neither: the mode stays as it is, waiting.
     esp_task_wdt_init(8, true);
     return true;
 }
@@ -148,27 +147,41 @@ void usbMicLeave() { usbPortRestart(); }
 static volatile uint32_t packets = 0; // loads of the IN endpoint, on the USB task
 static uint32_t feeds = 0, feedSamples = 0, feedGapMaxUs = 0, lastFeedUs = 0; // the audio task's chunks
 
+// The USB task's sign of life: asked for about once a second while a stream
+// is open, by a call queued to that task, which answers by counting up
+static volatile uint32_t usbBeats = 0;
+static volatile bool beatAsked = false;
+
+extern "C" {
+static void usbBeat(void *) {
+    usbBeats = usbBeats + 1;
+    beatAsked = false;
+}
+}
+
 static void log() {
     uint32_t now = millis();
     esp_task_wdt_reset();
     logPump();
-    // A stall is a host that keeps starting frames, with the stream open, and
-    // no packet loaded for 3 s. A bus that has gone quiet is not one: with
-    // the cable pulled or the computer asleep no frame starts, the packet
-    // that is loaded waits, and the stream goes on when the host is back.
-    // (The screen leaves the mode when USB power has gone for good.)
-    static uint32_t packetsSeen = 0, packetsMovedAt = 0;
-    static uint16_t frameSeen = 0;
-    // Looked at with a stream open only: the audio task feeds this from before
-    // USB starts, when the controller has no clock to be read by
-    uint16_t frame = streaming ? tinyusbFrameNumber() : frameSeen;
-    bool hostThere = frame != frameSeen;
-    frameSeen = frame;
-    if (!streaming || !hostThere || packets != packetsSeen) {
-        packetsSeen = packets;
-        packetsMovedAt = now;
-    } else if (now - packetsMovedAt > 3000) {
-        abort(); // the USB task has stopped loading packets: a core dump says where it is
+    // A stall is the USB task standing still with a stream open: it no
+    // longer answers a call queued to it, for 3 s. Packets not being
+    // fetched is not one. That is how a pulled cable and a sleeping
+    // computer look, and also a program that has opened the stream and
+    // not started reading yet, or has stopped and keeps it open (programs
+    // on Linux that use the sound device directly do both): the packet that
+    // is loaded waits, and the stream goes on when the host reads again.
+    // One call in the queue at most: queueing waits when the queue is full.
+    static uint32_t beatsSeen = 0, beatsMovedAt = 0, beatAskedAt = 0;
+    if (streaming && !beatAsked && now - beatAskedAt >= 1000) {
+        beatAskedAt = now;
+        beatAsked = true;
+        usbd_defer_func(usbBeat, nullptr, false);
+    }
+    if (!streaming || usbBeats != beatsSeen) {
+        beatsSeen = usbBeats;
+        beatsMovedAt = now;
+    } else if (now - beatsMovedAt > 3000) {
+        abort(); // the USB task has stopped: a core dump says where it is
     }
     if (loggedOpens != opens) {
         loggedOpens = opens;

@@ -19,6 +19,9 @@ bool uiTakeSleepRequest();
 // a few milliseconds for that look, so call it last, right before the nap.
 // `since` (the last wake-up, millis) is no longer needed and is ignored.
 bool uiReadyToNap(uint32_t since);
+// A full refresh is on the panel right now (two to five seconds): a
+// recording started meanwhile would have its static at its start
+bool uiFullRefreshRunning();
 // Until the screen next changes on its own: the clock's minute, a result or
 // notice going away, the idle full refresh, auto-sleep
 uint32_t uiMsUntilNextChange();
