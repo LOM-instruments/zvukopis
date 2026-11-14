@@ -81,13 +81,40 @@ pre code { border: 0; padding: 0; background: none; }
 .tiles .cap { padding: 8px var(--edge) 9px; background: var(--text); color: #fff; font-size: 15px; line-height: 1.3; }
 .tiles .what { padding: 12px var(--edge) 16px; font-size: 16px; line-height: 1.4; flex: 1 0 auto; }
 
-/* The device's own screens, each under its name: four abreast, two on a phone. A press opens one at its full size */
-.cell ul.screens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--line); margin: 0; padding: 0; max-width: none; list-style: none; }
-.cell ul.screens > li { margin: 0; outline: var(--line) solid var(--text); background: #fff; }
-.screens .cap { display: block; padding: 6px 10px 7px; background: var(--text); color: #fff; font-size: 15px; line-height: 1.3; }
-.screens a { display: block; }
-.screens img { display: block; width: 100%; height: auto; }
-@media (min-width: 720px) { .cell ul.screens { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* The hero: the photo of the device in a hand, its panel empty, and the device's screens playing on it.
+   Each screen is a picture of what the panel adds to the photo, white where it leaves the paper alone:
+   multiplied onto the photo, so no edge of it can show. The first lies there always. Each of the others
+   fades in over the one before, stays, and fades out unseen, under its follower by then; the last one's
+   fade-out is the change back to the first. One animation for all, each starting later.
+   A press on the photo holds the screen it shows, another lets it go on: the photo is the label of
+   a checkbox nobody sees, which the keyboard reaches too. */
+.hand { display: block; position: relative; isolation: isolate; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.hand input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.hand:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: -3px; }
+.hand .panel { position: absolute; left: 34.5333%; top: 19.6%; width: 31.8667%; height: 52.2667%; mix-blend-mode: multiply; }
+.cell.photo .panel img { position: absolute; left: 0; top: 0; object-fit: fill; }
+.hand input:checked ~ .panel img { animation-play-state: paused; }
+.panel img + img { opacity: 0; animation: screen 32.6s linear infinite; }
+@keyframes screen { 0% { opacity: 0; } 0.9202% { opacity: 1; } 8.2822% { opacity: 1; } 9.2025%, 100% { opacity: 0; } }
+.panel img:nth-child(2) { animation-delay: 1.8s; }
+.panel img:nth-child(3) { animation-delay: 3.6s; }
+.panel img:nth-child(4) { animation-delay: 5.3s; }
+.panel img:nth-child(5) { animation-delay: 7s; }
+.panel img:nth-child(6) { animation-delay: 8.8s; }
+.panel img:nth-child(7) { animation-delay: 11s; }
+.panel img:nth-child(8) { animation-delay: 12.7s; }
+.panel img:nth-child(9) { animation-delay: 14.4s; }
+.panel img:nth-child(10) { animation-delay: 16.4s; }
+.panel img:nth-child(11) { animation-delay: 18.4s; }
+.panel img:nth-child(12) { animation-delay: 20.1s; }
+.panel img:nth-child(13) { animation-delay: 21.8s; }
+.panel img:nth-child(14) { animation-delay: 23.8s; }
+.panel img:nth-child(15) { animation-delay: 25.8s; }
+.panel img:nth-child(16) { animation-delay: 27.4s; }
+.panel img:nth-child(17) { animation-delay: 29.6s; }
+@media (prefers-reduced-motion: reduce) { .panel img + img { animation: none; } }
+/* Should the text beside the photo ever stand taller than it, the photo's dark backdrop goes on below */
+.band.hero .cell.photo { background: #101010; }
 
 /* Buttons and fields */
 .btn { display: inline-block; padding: 11px 18px 12px; background: var(--text); color: #fff; font-size: 17px; line-height: 1.2; text-decoration: none; border: var(--line) solid var(--text); border-radius: 0; cursor: pointer; transition: background-color .15s; }
