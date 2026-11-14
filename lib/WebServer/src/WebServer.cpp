@@ -18,7 +18,7 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   Modified 8 May 2015 by Hristo Gochkov (proper post and file upload handling)
-  Modified 2026-11-02 and 2026-11-11 for Zvukopis (github.com/LOM-instruments/zvukopis):
+  Modified 2026-11-02, 2026-11-11 and 2026-11-14 for Zvukopis (github.com/LOM-instruments/zvukopis):
   what was changed is listed in NOTICE.md of this library
 */
 
@@ -339,6 +339,20 @@ void WebServer::handleClient() {
     _currentStatus = HC_NONE;
     _currentUpload.reset();
     _currentRaw.reset();
+    // zvukopis: what the request brought is given back now. The stock code
+    // kept its arguments and headers until the next request was parsed, and
+    // this server object lives for good: a request's memory stayed taken
+    // through the hours in which the web interface is off.
+    delete[] _currentArgs;
+    _currentArgs = nullptr;
+    _currentArgCount = 0;
+    delete[] _postArgs;
+    _postArgs = nullptr;
+    _postArgsLen = 0;
+    for (int i = 0; i < _headerKeysCount; ++i) {
+      _currentHeaders[i].value = String();
+    }
+    _hostHeader = String();
   }
 
   if (callYield) {

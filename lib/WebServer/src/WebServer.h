@@ -18,7 +18,7 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   Modified 8 May 2015 by Hristo Gochkov (proper post and file upload handling)
-  Modified 2026-10-28, 2026-11-02 and 2026-11-11 for Zvukopis
+  Modified 2026-10-28, 2026-11-02, 2026-11-11 and 2026-11-14 for Zvukopis
   (github.com/LOM-instruments/zvukopis): what was changed is listed in NOTICE.md
   of this library and marked zvukopis: below
 */
@@ -56,6 +56,11 @@ enum HTTPAuthMethod { BASIC_AUTH, DIGEST_AUTH };
 #define HTTP_MAX_PLAIN_BODY 8192 // zvukopis: a body that is not a form upload is held in memory whole, so it has a limit
 #define HTTP_MAX_BOUNDARY 70     // zvukopis: the longest multipart boundary there is (RFC 2046); the parser keeps it on the stack
 #define HTTP_MAX_FORM_LINE 2048  // zvukopis: a header line of a form part, or a line of a field's value
+#define HTTP_MAX_REQUEST_LINE 4096 // zvukopis: the first line of a request, with its address and arguments; the page's longest is under 2000
+#define HTTP_MAX_HEADER_LINE 4096  // zvukopis: one header line; the rest of a longer one is dropped
+#define HTTP_MAX_HEADER_LINES 64   // zvukopis: browsers send a dozen or two
+#define HTTP_MAX_LINE_WAIT 1000    // zvukopis: ms without a byte before a request or header line counts as ended (the stock reads waited as long)
+#define HTTP_MAX_ARGS 48           // zvukopis: arguments in one request; the page's largest request has 25
 
 #define CONTENT_LENGTH_UNKNOWN ((size_t) -1)
 #define CONTENT_LENGTH_NOT_SET ((size_t) -2)
@@ -180,7 +185,7 @@ protected:
   void _handleRequest();
   void _finalizeResponse();
   bool _parseRequest(WiFiClient& client);
-  void _parseArguments(String data);
+  bool _parseArguments(String data);
   static String _responseCodeToString(int code);
   bool _parseForm(WiFiClient& client, String boundary, uint32_t len);
   bool _parseFormUploadAborted();

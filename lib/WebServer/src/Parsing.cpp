@@ -17,12 +17,13 @@
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   Modified 8 May 2015 by Hristo Gochkov (proper post and file upload handling)
-  Modified 2026-11-11 for Zvukopis (github.com/LOM-instruments/zvukopis): what
+  Modified 2026-11-11 and 2026-11-14 for Zvukopis (github.com/LOM-instruments/zvukopis): what
   was changed is listed in NOTICE.md of this library and marked zvukopis: below
 */
 
 #include <Arduino.h>
 #include <esp32-hal-log.h>
+#include <new>
 #include "WiFiServer.h"
 #include "WiFiClient.h"
 #include "WebServer.h"
@@ -75,23 +76,26 @@ static char* readBytesWithTimeout(WiFiClient& client, size_t maxLength, size_t& 
   return buf;
 }
 
-// zvukopis: one line of a multipart body, without its line end, as the pair
-// readStringUntil('\r') and readStringUntil('\n') read it. False when nothing
-// came at all, because the client has gone or has sent nothing for
-// HTTP_MAX_POST_WAIT, and when the line is longer than HTTP_MAX_FORM_LINE.
-// The stock pair returned an empty line for all of these, and the loops of
-// the form parser then went round for ever on a body that stopped short. A
+// zvukopis: one line, without its line end, as the pair readStringUntil('\r')
+// and readStringUntil('\n') read it, but with a longest length and a deadline.
+// False when nothing came at all, because the client has gone or has sent
+// nothing for `wait` ms, and when the line is longer than `longest`; with
+// `cut` a longer line is cut there instead and its rest dropped. The stock
+// pair read a line of any length the sender chose (megabytes, held in memory
+// before the request was even looked at), and returned an empty line when
+// nothing came, on which the loops of the form parser went round for ever. A
 // line that only lacks its end still counts, as it did: some clients leave
 // the line end off the closing boundary.
-static bool readFormLine(WiFiClient& client, String& line)
+static bool readLine(WiFiClient& client, String& line, size_t longest, uint32_t wait, bool cut)
 {
   line = "";
   bool ended = false; // the '\r' has come; what follows up to the '\n' is dropped
+  bool full = false;  // the line is at its longest, and the rest of it is dropped
   uint32_t lastByte = millis();
   for (;;) {
     int c = client.read();
     if (c < 0) {
-      if (!client.connected() || millis() - lastByte > HTTP_MAX_POST_WAIT) {
+      if (!client.connected() || millis() - lastByte > wait) {
         return ended || line.length() > 0;
       }
       delay(1);
@@ -104,16 +108,31 @@ static bool readFormLine(WiFiClient& client, String& line)
       }
     } else if (c == '\r') {
       ended = true;
-    } else if (line.length() >= HTTP_MAX_FORM_LINE || !line.concat((char) c)) {
+    } else if (full) {
+      continue;
+    } else if (line.length() >= longest) {
+      if (!cut) {
+        return false;
+      }
+      full = true;
+    } else if (!line.concat((char) c)) {
       return false;
     }
   }
 }
 
+// A line of a multipart body
+static bool readFormLine(WiFiClient& client, String& line)
+{
+  return readLine(client, line, HTTP_MAX_FORM_LINE, HTTP_MAX_POST_WAIT, false);
+}
+
 bool WebServer::_parseRequest(WiFiClient& client) {
   // Read the first line of HTTP request
-  String req = client.readStringUntil('\r');
-  client.readStringUntil('\n');
+  // zvukopis: with a longest length, like the header lines below. All of them
+  // are read before any handler can ask who is sending.
+  String req;
+  bool gotLine = readLine(client, req, HTTP_MAX_REQUEST_LINE, HTTP_MAX_LINE_WAIT, false);
   //reset header value
   for (int i = 0; i < _headerKeysCount; ++i) {
     _currentHeaders[i].value =String();
@@ -127,6 +146,11 @@ bool WebServer::_parseRequest(WiFiClient& client) {
     _postArgs = nullptr;
   }
   _postArgsLen = 0;
+  if (!gotLine) {
+    log_e("No request line, or one over %d characters", HTTP_MAX_REQUEST_LINE);
+    return false;
+  }
+  int headerLines = 0;
 
   // First line of HTTP request looks like "GET /path HTTP/1.1"
   // Retrieve the "/path" part by finding the spaces
@@ -185,8 +209,12 @@ bool WebServer::_parseRequest(WiFiClient& client) {
     bool isEncoded = false;
     //parse headers
     while(1){
-      req = client.readStringUntil('\r');
-      client.readStringUntil('\n');
+      // zvukopis: a header line longer than the limit is cut, not refused
+      // (a browser may carry a long cookie of some other device that had
+      // this address before); headers that never end are refused
+      if (++headerLines > HTTP_MAX_HEADER_LINES || !readLine(client, req, HTTP_MAX_HEADER_LINE, HTTP_MAX_LINE_WAIT, true)) {
+        return false;
+      }
       if (req == "") break;//no moar headers
       int headerDiv = req.indexOf(':');
       if (headerDiv == -1){
@@ -261,7 +289,10 @@ bool WebServer::_parseRequest(WiFiClient& client) {
           if (searchStr != "") searchStr += '&';
           searchStr += plainBuf;
         }
-        _parseArguments(searchStr);
+        if (!_parseArguments(searchStr)) {
+          free(plainBuf);
+          return false;
+        }
         if(!isEncoded){
           //plain post json or other data
           RequestArgument& arg = _currentArgs[_currentArgCount++];
@@ -273,7 +304,9 @@ bool WebServer::_parseRequest(WiFiClient& client) {
         free(plainBuf);
       } else {
         // No content - but we can still have arguments in the URL.
-        _parseArguments(searchStr);
+        if (!_parseArguments(searchStr)) {
+          return false;
+        }
       }
     } else {
       // it IS a form
@@ -283,8 +316,7 @@ bool WebServer::_parseRequest(WiFiClient& client) {
         log_e("Boundary of %u characters refused", boundaryStr.length());
         return false;
       }
-      _parseArguments(searchStr);
-      if (!_parseForm(client, boundaryStr, _clientContentLength)) {
+      if (!_parseArguments(searchStr) || !_parseForm(client, boundaryStr, _clientContentLength)) {
         return false;
       }
     }
@@ -293,8 +325,12 @@ bool WebServer::_parseRequest(WiFiClient& client) {
     String headerValue;
     //parse headers
     while(1){
-      req = client.readStringUntil('\r');
-      client.readStringUntil('\n');
+      // zvukopis: a header line longer than the limit is cut, not refused
+      // (a browser may carry a long cookie of some other device that had
+      // this address before); headers that never end are refused
+      if (++headerLines > HTTP_MAX_HEADER_LINES || !readLine(client, req, HTTP_MAX_HEADER_LINE, HTTP_MAX_LINE_WAIT, true)) {
+        return false;
+      }
       if (req == "") break;//no moar headers
       int headerDiv = req.indexOf(':');
       if (headerDiv == -1){
@@ -311,7 +347,9 @@ bool WebServer::_parseRequest(WiFiClient& client) {
         _hostHeader = headerValue;
       }
     }
-    _parseArguments(searchStr);
+    if (!_parseArguments(searchStr)) {
+      return false;
+    }
   }
   client.flush();
 
@@ -331,28 +369,40 @@ bool WebServer::_collectHeader(const char* headerName, const char* headerValue) 
   return false;
 }
 
-void WebServer::_parseArguments(String data) {
+// zvukopis: false when the request has more arguments than HTTP_MAX_ARGS or
+// their array cannot be had; the request is then dropped. The stock code made
+// an array for as many '&' as the sender cared to send, with a new that ends
+// the program when it fails: one request restarted the device.
+bool WebServer::_parseArguments(String data) {
   log_v("args: %s", data.c_str());
   if (_currentArgs)
     delete[] _currentArgs;
   _currentArgs = 0;
+  _currentArgCount = 0;
   if (data.length() == 0) {
-    _currentArgCount = 0;
-    _currentArgs = new RequestArgument[1];
-    return;
+    _currentArgs = new (std::nothrow) RequestArgument[1];
+    return _currentArgs != nullptr;
   }
-  _currentArgCount = 1;
+  int count = 1;
 
   for (int i = 0; i < (int)data.length(); ) {
     i = data.indexOf('&', i);
     if (i == -1)
       break;
     ++i;
-    ++_currentArgCount;
+    ++count;
   }
-  log_v("args count: %d", _currentArgCount);
+  log_v("args count: %d", count);
+  if (count > HTTP_MAX_ARGS) {
+    log_e("%d arguments refused", count);
+    return false;
+  }
 
-  _currentArgs = new RequestArgument[_currentArgCount+1];
+  _currentArgs = new (std::nothrow) RequestArgument[count+1];
+  if (!_currentArgs) {
+    return false;
+  }
+  _currentArgCount = count;
   int pos = 0;
   int iarg;
   for (iarg = 0; iarg < _currentArgCount;) {
@@ -377,7 +427,7 @@ void WebServer::_parseArguments(String data) {
   }
   _currentArgCount = iarg;
   log_v("args count: %d", _currentArgCount);
-
+  return true;
 }
 
 void WebServer::_uploadWriteByte(uint8_t b){
@@ -411,17 +461,25 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
   log_v("Parse Form: Boundary: %s Length: %d", boundary.c_str(), len);
   String line;
   int retry = 0;
+  // zvukopis: the first line is read like every other line of the form, with
+  // a longest length and a deadline
+  bool got;
   do {
-    line = client.readStringUntil('\r');
+    got = readFormLine(client, line);
     ++retry;
-  } while (line.length() == 0 && retry < 3);
+  } while (got && line.length() == 0 && retry < 3);
+  if (!got) {
+    return false;
+  }
 
-  client.readStringUntil('\n');
   //start reading the form
   if (line == ("--"+boundary)){
    if(_postArgs) delete[] _postArgs;
-    _postArgs = new RequestArgument[WEBSERVER_MAX_POST_ARGS];
+    _postArgs = new (std::nothrow) RequestArgument[WEBSERVER_MAX_POST_ARGS];
     _postArgsLen = 0;
+    if (!_postArgs) {
+      return false;
+    }
     while(1){
       String argName;
       String argValue;
@@ -479,7 +537,10 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
               return false;
             }
           } else {
-            _currentUpload.reset(new HTTPUpload());
+            _currentUpload.reset(new (std::nothrow) HTTPUpload());
+            if (!_currentUpload) {
+              return false;
+            }
             _currentUpload->status = UPLOAD_FILE_START;
             _currentUpload->name = argName;
             _currentUpload->filename = argFilename;
@@ -536,8 +597,10 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
                 _currentUpload->type.c_str(),
                 (int)_currentUpload->totalSize);
             if (!client.connected()) return _parseFormUploadAborted();
-            if (!readFormLine(client, line)) return false;
-            if (line == "--") {     // extra two dashes mean we reached the end of all form fields
+            // zvukopis: the file is whole and has been handed over; a closing
+            // line that never comes ends the form all the same, so that the
+            // handler runs and the upload is answered
+            if (!readFormLine(client, line) || line == "--") {     // extra two dashes mean we reached the end of all form fields
                 log_v("Done Parsing POST");
                 break;
             }
@@ -555,7 +618,14 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
       arg.value = _currentArgs[iarg].value;
     }
     if (_currentArgs) delete[] _currentArgs;
-    _currentArgs = new RequestArgument[_postArgsLen];
+    _currentArgs = new (std::nothrow) RequestArgument[_postArgsLen];
+    if (!_currentArgs) {
+      _currentArgCount = 0;
+      delete[] _postArgs;
+      _postArgs = nullptr;
+      _postArgsLen = 0;
+      return false;
+    }
     for (iarg = 0; iarg < _postArgsLen; iarg++){
       RequestArgument& arg = _currentArgs[iarg];
       arg.key = _postArgs[iarg].key;

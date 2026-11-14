@@ -28,5 +28,20 @@ a comment where they sit):
 - 2026-11-11, `src/Parsing.cpp`: each request starts without the Host header and the form
   fields of the one before. A form that was cut off left its fields behind,
   and `arg()` then gave them to the requests that followed.
+- 2026-11-14, `src/Parsing.cpp`, `src/WebServer.h`: the request line and the
+  header lines are read with a longest length (`HTTP_MAX_REQUEST_LINE`,
+  `HTTP_MAX_HEADER_LINE`, at most `HTTP_MAX_HEADER_LINES` of them) and a
+  deadline, and so is the first line of a form. The stock reads took a line of
+  any length, megabytes of it, before any handler could ask who was sending.
+- 2026-11-14, `src/Parsing.cpp`, `src/WebServer.h`: a request may have
+  `HTTP_MAX_ARGS` (48) arguments at most, and the arrays for arguments and
+  uploads are made with a `new` that can fail; such a request is dropped. The
+  stock code sized the array by the number of `&` in the request, and its
+  `new` ended the program when memory ran out: one request restarted the
+  device.
+- 2026-11-14, `src/WebServer.cpp`: the arguments and headers of a request are
+  freed when its connection is done, not when the next request is parsed.
+- 2026-11-14, `src/Parsing.cpp`: after a complete file, a closing line that
+  never comes ends the form, so that the upload is answered.
 
 The examples and keywords file are left out.

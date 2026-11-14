@@ -221,16 +221,23 @@ static bool namesThisDevice(const char *host) {
     return n > 0 && strncmp(host, info.host, n) == 0 && (host[n] == 0 || host[n] == '.');
 }
 
+static bool toOwnName();
+
 // A second lock on everything that changes something. Browsers say in the
 // Origin header which site's page sends a POST. The cookie alone does not
 // stop a browser too old to know SameSite, nor a page served under a name
 // that ends in this device's own (the "site" is the same then); this does.
-// A request without the header is not from another site's page.
+// The page that sends must be the one the request is addressed to, letter
+// for letter, and that address this device's own: a pattern for the name
+// would let through a site that merely begins with it. A request without
+// the header is not from another site's page.
 static bool fromOwnPage() {
     String origin = server.header("Origin");
     if (origin.length() == 0) return true;
+    String own = String("http://") + server.hostHeader();
     origin.toLowerCase();
-    return origin.startsWith("http://") && namesThisDevice(origin.c_str() + 7);
+    own.toLowerCase();
+    return origin == own && toOwnName();
 }
 
 // Phones and laptops check for a captive portal by fetching a known page;
@@ -525,7 +532,7 @@ static void sendRecord(char *buf, size_t len) {
         notice = "<p class=note><b>The last recording could not be saved.</b></p>";
         break;
     case AUDIO_NOTICE_NO_CARD:
-        notice = "<p class=note><b>The SD card is no longer there.</b> Put it back and restart Zvukopis.</p>";
+        notice = "<p class=note><b>The SD card is no longer there.</b> Put it back: the next recording goes onto it.</p>";
         break;
     default:
         break;
