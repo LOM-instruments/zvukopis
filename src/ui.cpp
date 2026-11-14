@@ -1737,7 +1737,7 @@ static void drawUnscheduleDialog(const ViewState &v) {
         formatTime(length, sizeof(length), s.seconds);
         snprintf(detail, sizeof(detail), "%s  -  %s", when, length);
     }
-    drawConfirm(v, [] { iconClock(SW / 2, CONFIRM_Y + 52, 30, INK); }, "Remove recording?", detail, "Remove");
+    drawConfirm(v, [] { iconClock(SW / 2, CONFIRM_Y + 52, 30, INK); }, "Remove scheduled recording?", detail, "Remove");
 }
 
 // "2.4 kHz", "180 Hz"
@@ -2410,7 +2410,8 @@ static void drawConfirm(const ViewState &v, void (*icon)(), const char *title, c
     const int x = (SW - w) / 2, y = CONFIRM_Y, cx = SW / 2;
     dialogBox(y, h);
     icon();
-    drawTextCentered(cx, y + 134, &Bold32, title, INK);
+    // The largest of the title fonts that fits the box: one title is long
+    drawTextCentered(cx, y + 134, fittingFont(title, w - 40, &Bold32, &Bold27, &Bold22), title, INK);
     drawTextCentered(cx, y + 166, &Text22, detail, INK);
 
     const char *labels[2] = {"Cancel", action};
