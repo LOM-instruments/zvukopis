@@ -18,6 +18,8 @@ The top line shows the date and time, whether the SD card is in, the battery and
 
 Below that is the list: *New recording* first, then your moments, newest on top, each with its time, length and waveform. The list always opens on *New recording*, so a press is all it takes.
 
+Now and then the whole screen flashes black and white for a moment. That is the e-paper cleaning itself, and it is normal: it happens a little while after waking, during long playback and every few pages in the library.
+
 ## Recording
 
 Press the side switch in on *New recording*. The screen shows that it is recording and when it started. Press in again to stop. The moment appears at the top of the list.
@@ -128,7 +130,7 @@ Hold the side switch in, or press the Settings button again, to leave.
 - **"No SD card" with a card in.** Push the card in until it clicks. A card put in while Zvukopis is on is taken up when you open Settings, record or play. A card over 32 GB needs formatting first, see above.
 - **The web page does not open.** Make sure the phone or computer is on the same Wi-Fi, and use the address shown on the screen, with the key at its end, rather than the name. A page left open from an earlier start needs the new address. The web interface runs only while that screen is up on the device.
 - **A recording sounds faint or distorted.** Set the mic gain back to Auto.
-- **The whole screen flashes black and white.** That is the e-paper cleaning itself: a little while after waking, during long playback, every few pages in the library. It is normal.
+- **The whole screen flashes black and white.** That is the e-paper cleaning itself, see "The main screen". It is normal.
 - **The screen is slow in the cold.** Under about ten degrees Celsius a full change of the screen takes five seconds and more, and near freezing it may lag far behind. Recording carries on regardless, so give it time before pressing again. Keep the screen out of direct sun and hot cars.
 
 ---
