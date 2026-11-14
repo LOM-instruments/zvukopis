@@ -110,7 +110,7 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 
 - **Mic gain.** Auto, or a fixed value.
 - **Varispeed.** The top speed, the ramp, and whether letting go brings the speed back or keeps it.
-- **Scheduled recordings.** The list of what is planned; they are set up on the web interface.
+- **Scheduled recordings.** The list of what is planned. *Schedule a recording* adds one: a day, a time, a length, once or every day. Press in on a value to change it with up and down (hold to go faster), and save. Press in on a planned recording to change it, hold in to remove it. The web interface sets them up too, with a time to the second.
 - **Web interface.** On your Wi-Fi.
 - **Web interface on own hotspot.** Zvukopis makes its own network.
 - **Sync clock.** Sets the clock from the internet, over Wi-Fi. Zvukopis also does this by itself at start-up when its clock was lost (the battery was empty or unplugged) and it knows a Wi-Fi network. The time zone is Central European until you set it on the web interface.
