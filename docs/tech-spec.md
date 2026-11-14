@@ -15,7 +15,7 @@ coupler), the relative ones are solid.
 | Screen | 3.97" e-paper, 480 x 800, partial refresh about 0.55 s, full about 2.2 s at 21 °C and above (4 s from 11 to 20 °C, 5.5 s below; *measured*); the panel is rated for 0 to 50 °C |
 | Controls | Side rocker switch (up, down, press, hold), Settings button, Sleep button |
 | Storage | microSD over SDMMC (4-bit), FAT32 (the firmware formats cards over 32 GB) |
-| Power | LiPo battery through an AXP2101 PMIC, USB-C charging (200 mA, to 4.2 V), light sleep between presses; at about 3 % it saves and switches itself off |
+| Power | LiPo battery through an AXP2101 PMIC, USB-C charging (200 mA, to 4.2 V), light sleep between presses; at about 3 % it saves and switches itself off, and starts again when USB is plugged in |
 | Battery | 3.7 V lithium, 1500 mAh, on an MX1.25 two-pin plug (the one Waveshare ships with the board) |
 | Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started, except for one time sync at start-up when the clock was lost and a network is known |
 | USB | Serial console and the web flasher; the SD card as a USB drive (full-speed USB, about 0.8 MB/s); a class-compliant microphone (USB Audio Class 2.0, mono 16-bit at the recording rate, gain on the side switch) |

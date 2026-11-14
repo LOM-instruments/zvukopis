@@ -74,7 +74,7 @@ Headings, paragraphs, quotations, lists, italics and bold are laid out; the text
 
 Hold the Sleep button for a second. The screen shows a quote about listening and the device uses almost no power; it wakes the same way. It also goes to sleep by itself after five minutes of nothing, and it wakes by itself for scheduled recordings and for a quick record.
 
-The battery charges whenever the USB cable is plugged in; the lightning mark in the top line shows it. A full battery lasts for days of ordinary use. When it is nearly empty (about 3 %), Zvukopis saves a recording that is running, says so on the screen and switches itself off: plug in USB to charge it, and hold the Sleep button for a second if it does not start by itself.
+The battery charges whenever the USB cable is plugged in; the lightning mark in the top line shows it. A full battery lasts for days of ordinary use. When it is nearly empty (about 3 %), Zvukopis saves a recording that is running, says so on the screen and switches itself off. Plug in USB: it starts again by itself, and charges.
 
 If Zvukopis ever stops responding, hold the Sleep button for ten seconds: it restarts. Nothing on the card is lost; a recording that was running keeps all but its last few seconds.
 
