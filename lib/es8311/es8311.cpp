@@ -504,6 +504,37 @@ esp_err_t es8311_power_down(es8311_handle_t dev)
     return ESP_OK;
 }
 
+esp_err_t es8311_registers_default(es8311_handle_t dev, int *changed)
+{
+    // The values a codec holds straight after power-up, read from one on 2026-11-14. Left out are
+    // the registers that es8311_init(), the volume and gain setters and es8311_power_down() write.
+    static const struct {
+        uint8_t first, last, value;
+    } defaults[] = {
+        {0x0B, 0x0B, 0x00}, {0x0C, 0x0C, 0x20},                     // system
+        {0x0F, 0x0F, 0x00}, {0x10, 0x10, 0x13}, {0x11, 0x11, 0x7C}, // low power, analog references
+        {0x18, 0x1A, 0x00},                                         // ADC: automatic level control off
+        {0x1B, 0x1B, 0x0C},                                         // ADC: high-pass
+        {0x1D, 0x30, 0x00},                                         // ADC: equalizer coefficients
+        {0x31, 0x31, 0x00},                                         // DAC: not muted
+        {0x33, 0x36, 0x00},                                         // DAC: offset, range control off
+        {0x38, 0x43, 0x00},                                         // DAC: equalizer coefficients
+        {0x44, 0x44, 0x00},                                         // the ADC's data alone on the serial output
+    };
+    int count = 0;
+    for (const auto &range : defaults) {
+        for (int reg = range.first; reg <= range.last; reg++) {
+            uint8_t value;
+            ESP_RETURN_ON_ERROR(es8311_read_reg(dev, reg, &value), TAG, "I2C read/write error");
+            if (value == range.value) continue;
+            ESP_RETURN_ON_ERROR(es8311_write_reg(dev, reg, range.value), TAG, "I2C read/write error");
+            count++;
+        }
+    }
+    if (changed) *changed = count;
+    return ESP_OK;
+}
+
 void es8311_register_dump(es8311_handle_t dev)
 {
     for (int reg = 0; reg < 0x4A; reg++) {

@@ -6,7 +6,8 @@
 
 // Changed for Zvukopis (github.com/LOM-instruments/zvukopis), see NOTICE.md beside
 // this file: es8311_power_down() added on 2026-10-26, es8311_microphone_pga_set()
-// and es8311_adc_volume_set() on 2026-10-27.
+// and es8311_adc_volume_set() on 2026-10-27, es8311_registers_default() on
+// 2026-11-14.
 
 /**
  * @file
@@ -160,6 +161,20 @@ esp_err_t es8311_voice_mute(es8311_handle_t dev, bool enable);
  *     - Else fail
  */
 esp_err_t es8311_power_down(es8311_handle_t dev);
+
+/**
+ * @brief Give every register that nothing else in this driver writes the value the chip powers up with.
+ *        The codec keeps its registers for as long as it has power, so through a reset of the ESP32
+ *        and through a flashing: what another firmware wrote there (a muted DAC, say) would stay.
+ *        Call it once, before es8311_init().
+ *
+ * @param dev ES8311 handle
+ * @param[out] changed How many registers held another value (NULL: not wanted)
+ * @return
+ *     - ESP_OK success
+ *     - Else fail
+ */
+esp_err_t es8311_registers_default(es8311_handle_t dev, int *changed);
 
 /**
  * @brief Set Microphone gain

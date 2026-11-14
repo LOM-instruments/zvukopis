@@ -12,3 +12,9 @@ Changed for Zvukopis, in `es8311.cpp` and `es8311.h`:
   brings them back.
 - 2026-10-27: `es8311_microphone_pga_set()` and `es8311_adc_volume_set()`
   added, for the analog preamp gain and the ADC's digital volume.
+- 2026-11-14: `es8311_registers_default()` added. `es8311_init()` resets the
+  codec's digital blocks, not its registers, and writes only some of them:
+  the rest keep what the last firmware wrote for as long as the chip has
+  power. Waveshare's factory firmware leaves the DAC muted (REG31) and five
+  more registers changed, so a board flashed over it played nothing until it
+  lost power. The function gives those registers their power-on values.

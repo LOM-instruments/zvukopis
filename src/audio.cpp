@@ -1143,6 +1143,17 @@ static void audioTask(void *) {
 static bool codecInit() {
     if (!codec) codec = es8311_create(I2C_NUM_0, ES8311_ADDRRES_0);
     if (!codec) return false;
+    // Once a start, before anything is set: the codec has kept its registers through the reset, and
+    // through a flashing too, and es8311_init() writes only some of them. Waveshare's factory
+    // firmware leaves the DAC muted: flashed over it, the speaker stayed silent until the board
+    // lost its power.
+    static bool ownRegisters = false;
+    if (!ownRegisters) {
+        int changed = 0;
+        if (es8311_registers_default(codec, &changed) != ESP_OK) return false;
+        ownRegisters = true;
+        if (changed) Serial.printf("[audio] codec: %d registers held another firmware's values, set back to the chip's own\n", changed);
+    }
     const es8311_clock_config_t clk = {
         .mclk_inverted = false,
         .sclk_inverted = false,
