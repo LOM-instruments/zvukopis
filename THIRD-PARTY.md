@@ -63,7 +63,7 @@ downloads:
 
 - **Arduino core for ESP32 2.0.17** (PlatformIO platform `espressif32`
   6.13.0), <https://github.com/espressif/arduino-esp32>: the core and its
-  libraries WiFi, FS, SD_MMC, Wire, SPI, Preferences, DNSServer and ESPmDNS;
+  libraries WiFi, FS, SD_MMC, Wire, SPI, Preferences and ESPmDNS;
   `boot_app0.bin` comes from it too. Copyright Espressif Systems and the
   authors of the Arduino and ESP8266 cores named in the files. GNU Lesser
   General Public License 2.1 or later, below. Some of its files are under the

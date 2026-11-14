@@ -15,7 +15,7 @@ coupler), the relative ones are solid.
 | Screen | 3.97" e-paper, 480 x 800, partial refresh about 0.55 s, full about 2.2 s at 21 °C and above (4 s from 11 to 20 °C, 5.5 s below; *measured*); the panel is rated for 0 to 50 °C |
 | Controls | Side rocker switch (up, down, press, hold), Settings button, Sleep button |
 | Storage | microSD over SDMMC (4-bit), FAT32 (the firmware formats cards over 32 GB) |
-| Power | LiPo battery through an AXP2101 PMIC, USB-C charging, light sleep between presses |
+| Power | LiPo battery through an AXP2101 PMIC, USB-C charging (200 mA, to 4.2 V), light sleep between presses; at about 3 % it saves and switches itself off |
 | Battery | 3.7 V lithium, 1500 mAh, on an MX1.25 two-pin plug (the one Waveshare ships with the board) |
 | Radio | Wi-Fi 2.4 GHz (web interface, time sync); off unless started, except for one time sync at start-up when the clock was lost and a network is known |
 | USB | Serial console and the web flasher; the SD card as a USB drive (full-speed USB, about 0.8 MB/s); a class-compliant microphone (USB Audio Class 2.0, mono 16-bit at the recording rate, gain on the side switch) |
@@ -68,7 +68,8 @@ floor while the headroom it buys (clipping above 145 dB SPL) is of no use.
 | Longest moment | 6 hours with a card (one WAV file stays under 4 GB); about 30 s in memory without a card |
 | File format | WAV, PCM 16-bit mono 96 kHz; a Broadcast Wave `bext` chunk (time of day the recording started as a sample timecode, the mic gain in the description) and a `zvkp` chunk (number, tag, waveform) |
 | Files | `/moments/YYYY-MM-DD/YYYY-MM-DDTHH-MM-SS_tag.wav` |
-| Card writing | Through a 4 s PSRAM ring, so the card's pauses don't drop samples |
+| Card writing | Through a 4 s PSRAM ring, so the card's pauses don't drop samples; the file is synced every 5 s, so a power cut costs the last seconds only |
+| Moments | Up to 500 in the list |
 | Quick record | From sleep, about 3 s from the press to the first sample (0.8 s hold, then the panel refresh, which the microphone would otherwise hear) |
 
 ## Analysis on the device
@@ -83,5 +84,5 @@ floor while the headroom it buys (clipping above 145 dB SPL) is of no use.
 
 | | |
 |---|---|
-| Address | `http://zvukopis.local` on the joined network, or the device's own hotspot with a QR code |
+| Address | The one on the screen, ending in a key made anew at each start (`http://<address>/<key>`, also `http://zvukopis-xxxx.local/<key>`), on the joined network or on the device's own hotspot `zvukopis-xxxx`, with a QR code |
 | Functions | Record and stop, mic gain, calendar of moments, play, download one moment, a day or everything (ZIP, under 4 GB), scheduled recordings, tags, clock and time zone, library documents, Wi-Fi networks |

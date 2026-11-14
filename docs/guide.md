@@ -22,7 +22,7 @@ Below that is the list: *New recording* first, then your moments, newest on top,
 
 Press the side switch in on *New recording*. The screen shows that it is recording and when it started. Press in again to stop. The moment appears at the top of the list.
 
-A recording can run for up to six hours with an SD card in. Without a card the moments live in memory only, which holds about half a minute, and they are gone when the device restarts or is switched off.
+A recording can run for up to six hours with an SD card in. Without a card the moments live in memory only, which holds about half a minute, and they are gone when the device restarts or is switched off. The list holds up to 500 moments; at 500 it says *list full* and nothing is recorded until some are deleted or moved off the card.
 
 The screen keeps still while recording, because the panel's refresh is faintly audible to the microphone.
 
@@ -72,13 +72,13 @@ Headings, paragraphs, quotations, lists, italics and bold are laid out; the text
 
 Hold the Sleep button for a second. The screen shows a quote about listening and the device uses almost no power; it wakes the same way. It also goes to sleep by itself after five minutes of nothing, and it wakes by itself for scheduled recordings and for a quick record.
 
-The battery charges whenever the USB cable is plugged in; the lightning mark in the top line shows it. A full battery lasts for days of ordinary use.
+The battery charges whenever the USB cable is plugged in; the lightning mark in the top line shows it. A full battery lasts for days of ordinary use. When it is nearly empty (about 3 %), Zvukopis saves a recording that is running, says so on the screen and switches itself off: plug in USB to charge it, and hold the Sleep button for a second if it does not start by itself.
 
-If Zvukopis ever stops responding, hold the Sleep button for ten seconds: it restarts. Nothing on the card is lost.
+If Zvukopis ever stops responding, hold the Sleep button for ten seconds: it restarts. Nothing on the card is lost; a recording that was running keeps all but its last few seconds.
 
 ## The web interface
 
-Open Settings and choose *Web interface*. The screen shows the address; on a phone or computer on the same Wi-Fi, open http://zvukopis.local (or the address shown).
+Open Settings and choose *Web interface*. The screen shows the address and a code for it; on a phone or computer on the same Wi-Fi, scan the code or open the address as shown. It ends in a key, a new one every time the web interface starts, so the page opens only for someone who can see the screen.
 
 **The first time**, when Zvukopis knows no Wi-Fi network yet, it makes its own: scan the code on the screen with a phone camera, join, and the page opens by itself. Choose your network there and enter its password. From then on Zvukopis joins that network when you start the web interface. *Web interface on own hotspot* makes its own network on purpose, for a field without Wi-Fi.
 
@@ -88,7 +88,7 @@ The page has two tabs.
 
 **Settings.** Scheduled recordings (a date, a time and a length; Zvukopis wakes up for them), the tags with their names and icons (add more, up to twelve, or remove the last), varispeed, the clock and the time zone, the library (upload and remove documents) and the Wi-Fi networks it knows.
 
-The web interface stays on until you leave the screen on the device. Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
+The web interface stays on until you leave the screen on the device, or until ten minutes pass with nothing done on the page (a recording counts as something). Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
 
 ## The SD card
 
@@ -125,9 +125,11 @@ Hold the side switch in, or press the Settings button again, to leave.
 
 - **The screen says it is asleep.** Hold the Sleep button for a second.
 - **Nothing happens at all.** Hold the Sleep button for ten seconds to restart.
-- **"No SD card" with a card in.** Push the card in until it clicks. A card over 32 GB needs formatting first, see above.
-- **The web page does not open.** Make sure the phone or computer is on the same Wi-Fi, and use the address shown on the screen rather than the name. The web interface runs only while that screen is up on the device.
+- **"No SD card" with a card in.** Push the card in until it clicks. A card put in while Zvukopis is on is taken up when you open Settings, record or play. A card over 32 GB needs formatting first, see above.
+- **The web page does not open.** Make sure the phone or computer is on the same Wi-Fi, and use the address shown on the screen, with the key at its end, rather than the name. A page left open from an earlier start needs the new address. The web interface runs only while that screen is up on the device.
 - **A recording sounds faint or distorted.** Set the mic gain back to Auto.
+- **The whole screen flashes black and white.** That is the e-paper cleaning itself: a little while after waking, during long playback, every few pages in the library. It is normal.
+- **The screen is slow in the cold.** Under about ten degrees Celsius a full change of the screen takes five seconds and more, and near freezing it may lag far behind. Recording carries on regardless, so give it time before pressing again. Keep the screen out of direct sun and hot cars.
 
 ---
 

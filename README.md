@@ -61,7 +61,8 @@ is also on the project page, and it reads on the device (a copy sits in
 with no Wi-Fi network known, Zvukopis opens its own hotspot and shows a QR code:
 scan it with a phone camera to join, and the page opens by itself so you can
 save your Wi-Fi network. From then on it joins that network and is at
-`http://zvukopis.local` (or the address shown on the screen).
+the address shown on the screen, which ends in a key that is new at every start
+(each unit also answers to its own name, such as `zvukopis-ab12.local`).
 
 The page has a *Recording* tab (record and stop, mic gain, a calendar of the
 days with moments, the moments with playback, download and delete) and a
@@ -112,7 +113,7 @@ What you need:
   board, from Waveshare or a distributor. Take the version *with lithium
   battery* (or the kit, which adds a card, a cable and a card reader): the
   speaker is in every box, the battery is not. Any other 3.7 V lithium battery
-  with an MX1.25 two-pin plug works too.
+  with an MX1.25 two-pin plug works too, if it takes a 200 mA charge (400 mAh or more).
 - The case, 3D-printed from
   [docs/case/zvukopis-case-v2.stl](docs/case/zvukopis-case-v2.stl) (the
   newest; every version is listed in that folder) on an ordinary FDM printer
@@ -162,8 +163,10 @@ For development, `src/wifi_config.example.h` can be copied to
   (web interface), `networks.cpp` (Wi-Fi), `clock.cpp` (RTC, NTP, time zone),
   `config.cpp` (categories, schedule), `spectrum.cpp` (FFT analysis),
   `cardreader.cpp` (USB mass storage), `main.cpp` (sleep, scheduler).
-- `lib/` the e-paper driver (Waveshare), the ES8311 codec driver (Espressif)
-  and a copy of the Arduino `WebServer` library with shorter connection waits.
+- `lib/` the e-paper driver (Waveshare), the ES8311 codec driver (Espressif),
+  a copy of the Arduino `WebServer` library, hardened (its `NOTICE.md` lists
+  the changes), TinyUSB's audio class with a patched device driver
+  (`tinyusb_audio`) and a small name server for the hotspot (`CaptiveDns`).
 - `scripts/` tools: `make_fonts.py` renders the UI fonts, `import_quotes.py`
   builds the sleep-screen quotes, `serial_session.py` drives the device over
   USB for testing, `make_release.py` prepares the web flasher.
@@ -173,7 +176,7 @@ For development, `src/wifi_config.example.h` can be copied to
 ## Licence
 
 MIT, see `LICENSE`. The third-party parts under `lib/` keep their own
-licences, listed below.
+licences, listed below and, with their texts, in `THIRD-PARTY.md`.
 
 ## Credits
 
@@ -183,6 +186,8 @@ licences, listed below.
   by the Braille Institute of America, rendered to bitmaps unaltered.
 - Sleep-screen quotes: Pauline Oliveros.
 - E-paper driver: Waveshare. ES8311 driver: Espressif (Apache 2.0).
-  `WebServer`: the Arduino core for ESP32 (LGPL 2.1), two timeouts changed.
-- Web flasher: [ESP Web Tools](https://esphome.github.io/esp-web-tools/) (MIT).
+  `WebServer`: the Arduino core for ESP32 (LGPL 2.1), changed as its `NOTICE.md` lists.
+- USB audio: [TinyUSB](https://github.com/hathach/tinyusb) (MIT). Drawing: Adafruit GFX (BSD).
+  Power chip: XPowersLib (MIT).
+- Web flasher: [ESP Web Tools](https://esphome.github.io/esp-web-tools/) (Apache 2.0).
 - Icons: [Lucide](https://lucide.dev) (ISC).
