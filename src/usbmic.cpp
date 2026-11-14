@@ -177,7 +177,7 @@ static void log() {
         beatAsked = true;
         usbd_defer_func(usbBeat, nullptr, false);
     }
-    if (!streaming || usbBeats != beatsSeen) {
+    if (!streaming || usbBeats != beatsSeen || !beatsMovedAt) { // the very first look only starts the wait
         beatsSeen = usbBeats;
         beatsMovedAt = now;
     } else if (now - beatsMovedAt > 3000) {

@@ -736,6 +736,7 @@ static void formatCard() {
     if (state == AUDIO_PLAYING) stopPlayback();
     state = AUDIO_FORMATTING;
     bool ok = storageFormat();
+    if (storageAvailable() && notice == AUDIO_NOTICE_NO_CARD) setNotice(AUDIO_NOTICE_NONE); // a card is there again
     xSemaphoreTake(momentLock, portMAX_DELAY);
     int kept = 0;
     for (int i = 0; i < momentTotal; i++) {
@@ -867,7 +868,7 @@ static void handleCommand(const Command &cmd) {
     case CMD_RECHECK_CARD:
         // Only with nothing going on: asking stops a playback, and a card
         // that is recorded onto is not to be started afresh
-        if (state == AUDIO_IDLE && !running) recheckCard();
+        if (state == AUDIO_IDLE) recheckCard();
         break;
     case CMD_SUSPEND:
         if (state == AUDIO_RECORDING) finishRecording();

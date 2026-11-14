@@ -1002,6 +1002,13 @@ static void handleRecordStart() {
         server.send(409, "text/plain", "The list is full: " + String(MAX_MOMENTS) + " moments. Delete some, or move them off the card.");
         return;
     }
+    // No room in memory, and no card as far as is known: a card put in since
+    // would take the recording, and only the audio task can ask the slot.
+    // It is asked now, and the room judged after its answer.
+    if (uiCanRecord() && !audioUsingSdCard() && audioLongestRecording() < 1 && a == AUDIO_IDLE) {
+        audioRecheckCard();
+        for (int i = 0; i < 100 && !audioAsleep(); i++) delay(20);
+    }
     if (!uiCanRecord() || audioLongestRecording() < 1) {
         server.send(409, "text/plain", "No room to record (memory or card full)");
         return;

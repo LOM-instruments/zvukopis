@@ -30,7 +30,7 @@ a comment where they sit):
   and `arg()` then gave them to the requests that followed.
 - 2026-11-14, `src/Parsing.cpp`, `src/WebServer.h`: the request line and the
   header lines are read with a longest length (`HTTP_MAX_REQUEST_LINE`,
-  `HTTP_MAX_HEADER_LINE`, at most `HTTP_MAX_HEADER_LINES` of them) and a
+  `HTTP_MAX_HEADER_LINE`, a longer one is cut; at most `HTTP_MAX_HEADER_LINES` of them) and a
   deadline, and so is the first line of a form. The stock reads took a line of
   any length, megabytes of it, before any handler could ask who was sending.
 - 2026-11-14, `src/Parsing.cpp`, `src/WebServer.h`: a request may have
@@ -40,7 +40,14 @@ a comment where they sit):
   `new` ended the program when memory ran out: one request restarted the
   device.
 - 2026-11-14, `src/WebServer.cpp`: the arguments and headers of a request are
-  freed when its connection is done, not when the next request is parsed.
+  freed when its connection is done, not when the next request is parsed (the
+  Strings by destroying them: assigning an empty one keeps the buffer).
+- 2026-11-14, `src/Parsing.cpp`, `src/WebServer.h`: a request has to arrive
+  within `HTTP_MAX_REQUEST_TIME` (30 s), one with a file within
+  `HTTP_MAX_UPLOAD_TIME` (5 min); the other waits are between bytes, and a
+  slow sender held the server, which takes one request at a time, for as long
+  as it liked. All the fields of a form together may take
+  `HTTP_MAX_PLAIN_BODY` bytes.
 - 2026-11-14, `src/Parsing.cpp`: after a complete file, a closing line that
   never comes ends the form, so that the upload is answered.
 

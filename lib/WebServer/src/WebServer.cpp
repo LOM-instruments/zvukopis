@@ -33,6 +33,7 @@
 #include "FS.h"
 #include "detail/RequestHandlersImpl.h"
 #include "MD5Builder.h"
+#include <new>
 
 
 static const char AUTHORIZATION_HEADER[] = "Authorization";
@@ -275,6 +276,14 @@ void WebServer::serveStatic(const char* uri, FS& fs, const char* path, const cha
     _addRequestHandler(new StaticRequestHandler(fs, path, uri, cache_header));
 }
 
+// zvukopis: empties a String and frees its buffer. Assigning an empty String
+// does not: the core's String keeps a buffer that is large enough, and a long
+// header's 4 KB then stayed with this object for good.
+static void _giveBack(String& s) {
+  s.~String();
+  new (&s) String();
+}
+
 void WebServer::handleClient() {
   if (_currentStatus == HC_NONE) {
     _currentClient = _server.available();
@@ -350,9 +359,10 @@ void WebServer::handleClient() {
     _postArgs = nullptr;
     _postArgsLen = 0;
     for (int i = 0; i < _headerKeysCount; ++i) {
-      _currentHeaders[i].value = String();
+      _giveBack(_currentHeaders[i].value);
     }
-    _hostHeader = String();
+    _giveBack(_hostHeader);
+    _giveBack(_currentUri);
   }
 
   if (callYield) {

@@ -44,11 +44,22 @@ const char * _http_method_str[] = {
 static const char Content_Type[] PROGMEM = "Content-Type";
 static const char filename[] PROGMEM = "filename";
 
+// zvukopis: when the request being read has to have arrived in full. The
+// waits below are between bytes: a sender that kept a byte coming every few
+// seconds held the server, which takes one request at a time, for as long
+// as it liked, with Wi-Fi on and no way to stop the web interface.
+static uint32_t requestEndsAt = 0;
+
+static bool requestLate()
+{
+  return (int32_t)(millis() - requestEndsAt) > 0;
+}
+
 static char* readBytesWithTimeout(WiFiClient& client, size_t maxLength, size_t& dataLength, int timeout_ms)
 {
   char *buf = nullptr;
   dataLength = 0;
-  while (dataLength < maxLength) {
+  while (dataLength < maxLength && !requestLate()) {
     int tries = timeout_ms;
     size_t newLength;
     while (!(newLength = client.available()) && tries--) delay(1);
@@ -93,6 +104,9 @@ static bool readLine(WiFiClient& client, String& line, size_t longest, uint32_t 
   bool full = false;  // the line is at its longest, and the rest of it is dropped
   uint32_t lastByte = millis();
   for (;;) {
+    if (requestLate()) {
+      return false;
+    }
     int c = client.read();
     if (c < 0) {
       if (!client.connected() || millis() - lastByte > wait) {
@@ -132,6 +146,7 @@ bool WebServer::_parseRequest(WiFiClient& client) {
   // zvukopis: with a longest length, like the header lines below. All of them
   // are read before any handler can ask who is sending.
   String req;
+  requestEndsAt = millis() + HTTP_MAX_REQUEST_TIME;
   bool gotLine = readLine(client, req, HTTP_MAX_REQUEST_LINE, HTTP_MAX_LINE_WAIT, false);
   //reset header value
   for (int i = 0; i < _headerKeysCount; ++i) {
@@ -441,6 +456,9 @@ void WebServer::_uploadWriteByte(uint8_t b){
 }
 
 int WebServer::_uploadReadByte(WiFiClient& client) {
+  if (requestLate()) {
+    return -1;
+  }
   int res = client.read();
 
   if (res < 0) {
@@ -480,6 +498,7 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
     if (!_postArgs) {
       return false;
     }
+    size_t fieldBytes = 0; // names and values of the fields taken so far
     while(1){
       String argName;
       String argValue;
@@ -519,7 +538,10 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
             while(1){
               if (!readFormLine(client, line)) return false;
               if (line.startsWith("--"+boundary)) break;
-              if (argValue.length() + line.length() > HTTP_MAX_PLAIN_BODY) return false;
+              // zvukopis: one limit for all the fields of a form together: they
+              // are held in memory before any handler runs, and 32 of them with
+              // long names and values took more than the device has free
+              if (fieldBytes + argName.length() + argValue.length() + line.length() > HTTP_MAX_PLAIN_BODY) return false;
               if (argValue.length() > 0) argValue += "\n";
               argValue += line;
             }
@@ -528,6 +550,7 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
             RequestArgument& arg = _postArgs[_postArgsLen++];
             arg.key = argName;
             arg.value = argValue;
+            fieldBytes += argName.length() + argValue.length();
 
             if (line == ("--"+boundary+"--")){
               log_v("Done Parsing POST");
@@ -541,6 +564,7 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
             if (!_currentUpload) {
               return false;
             }
+            requestEndsAt = millis() + HTTP_MAX_UPLOAD_TIME; // a file takes its time on a weak link
             _currentUpload->status = UPLOAD_FILE_START;
             _currentUpload->name = argName;
             _currentUpload->filename = argFilename;
