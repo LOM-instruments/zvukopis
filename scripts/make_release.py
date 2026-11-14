@@ -95,6 +95,10 @@ def release_notes(version, code_commit):
         item = f"- **{subject.strip()}**"
         if paragraph:
             item += "  \n  " + " ".join(paragraph)
+        # GitHub reads "@name" in release notes as a mention of that account:
+        # "ESP Web Tools as @10" listed the user called 10 as a contributor.
+        # An "@" at the start of a word loses that meaning in code marks.
+        item = re.sub(r"(?<![\w`/.-])@([A-Za-z0-9](?:[\w.-]*\w)?)", r"`@\1`", item)
         items.append(item)
     notes = [f"Firmware `{version}`, built from commit `{code_commit[:7]}`.", ""]
     notes += items if items else ["- The same firmware as the previous release, republished."]
