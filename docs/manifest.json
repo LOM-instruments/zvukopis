@@ -1,7 +1,8 @@
 {
   "name": "zvukopis",
-  "version": "2026-11-06-2033fdc",
+  "version": "2026-11-14-baf2db3",
   "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
