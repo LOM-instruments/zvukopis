@@ -81,6 +81,14 @@ pre code { border: 0; padding: 0; background: none; }
 .tiles .cap { padding: 8px var(--edge) 9px; background: var(--text); color: #fff; font-size: 15px; line-height: 1.3; }
 .tiles .what { padding: 12px var(--edge) 16px; font-size: 16px; line-height: 1.4; flex: 1 0 auto; }
 
+/* The device's own screens, each under its name: four abreast, two on a phone. A press opens one at its full size */
+.cell ul.screens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--line); margin: 0; padding: 0; max-width: none; list-style: none; }
+.cell ul.screens > li { margin: 0; outline: var(--line) solid var(--text); background: #fff; }
+.screens .cap { display: block; padding: 6px 10px 7px; background: var(--text); color: #fff; font-size: 15px; line-height: 1.3; }
+.screens a { display: block; }
+.screens img { display: block; width: 100%; height: auto; }
+@media (min-width: 720px) { .cell ul.screens { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
 /* Buttons and fields */
 .btn { display: inline-block; padding: 11px 18px 12px; background: var(--text); color: #fff; font-size: 17px; line-height: 1.2; text-decoration: none; border: var(--line) solid var(--text); border-radius: 0; cursor: pointer; transition: background-color .15s; }
 .btn.quiet { background: transparent; color: var(--text); }
