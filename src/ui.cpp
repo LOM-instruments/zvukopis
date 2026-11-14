@@ -299,9 +299,12 @@ static const int EDIT_LENGTH_COUNT = sizeof(EDIT_LENGTHS) / sizeof(EDIT_LENGTHS[
 static const int EDIT_DAYS_AHEAD = 365;   // the last day that can be chosen, counted from today
 static const int EDIT_LAST_DAY = 20371231; // ... and the clock's own last day (CLOCK_LATEST)
 // Up or down held on a value makes it run: after this long, a step this often.
+// The wait is as long as the press in takes to count as held, and longer
+// than a refresh: the first step is on the panel before the run begins, so
+// a press held "until it moves" is still one step.
 // The run ends when the key is let go, at any other key, and after the longest
 // time by itself: the serial command for a press sends no release.
-static const uint32_t EDIT_RUN_AFTER_MS = 500;
+static const uint32_t EDIT_RUN_AFTER_MS = 800;
 static const uint32_t EDIT_RUN_EVERY_MS = 150;
 static const uint32_t EDIT_RUN_MAX_MS = 10000;
 
@@ -311,6 +314,8 @@ static volatile int editSeconds = 60; // how long to record
 static volatile bool editDaily = false;
 static volatile int editPart = PART_NONE;
 static int64_t editOriginal = 0; // start of the entry being changed; 0 for a new one
+static uint32_t editOriginalSeconds = 0; // ... and the rest of it as it was opened
+static bool editOriginalDaily = false;
 static int editFromRow = 0;      // the schedule screen's row the editor was opened from
 static int editHeld = 0;         // +1 or -1 while up or down is held on a value
 static uint32_t editHeldSince = 0, editRanAt = 0;
@@ -340,11 +345,28 @@ static int64_t editStartOn(int day, int minutes) {
 }
 
 // List position of the entry the editor is changing: -1 for a new one, and
-// when it has gone meanwhile (removed on the web interface, or it ran)
+// when it has gone meanwhile (removed on the web interface, or it ran). An
+// entry is told by its start, length and repeat together: two can share a
+// start. One for every day that has run meanwhile is not gone but a day on
+// (the editor left open over its time, through a sleep, say): it is the one
+// with the same length at the same time of a later day, and saving has to
+// replace that, or the day would get a second recording from then on.
 static int editOriginalIndex() {
+    if (!editOriginal) return -1;
     Schedule s;
-    for (int i = 0; editOriginal && scheduleGet(i, s); i++) {
-        if (s.start == editOriginal) return i;
+    for (int i = 0; scheduleGet(i, s); i++) {
+        if (s.start == editOriginal && s.seconds == editOriginalSeconds && (s.daily != 0) == editOriginalDaily) return i;
+    }
+    if (!editOriginalDaily) return -1;
+    time_t was = (time_t)editOriginal;
+    tm wasLocal;
+    localtime_r(&was, &wasLocal);
+    for (int i = 0; scheduleGet(i, s); i++) {
+        if (!s.daily || s.seconds != editOriginalSeconds || s.start <= editOriginal) continue;
+        time_t is = (time_t)s.start;
+        tm isLocal;
+        localtime_r(&is, &isLocal);
+        if (isLocal.tm_hour == wasLocal.tm_hour && isLocal.tm_min == wasLocal.tm_min && isLocal.tm_sec == wasLocal.tm_sec) return i;
     }
     return -1;
 }
@@ -1363,6 +1385,8 @@ static void settingsRowText(SettingsRow row, const ViewState &v, const char *&ti
             formatLocal(when, sizeof(when), "%a %e %b %H:%M", (time_t)v.nextScheduleMinute * 60);
             int n = scheduleCount();
             snprintf(detail, len, "Next %s%s", when, n > 1 ? "  (+ more)" : "");
+        } else if (v.scheduleCount > 0) {
+            snprintf(detail, len, "Set the clock for these to run"); // as the main list says it
         } else {
             snprintf(detail, len, "None; press in to add one");
         }
@@ -1691,7 +1715,7 @@ static void drawScheduleEdit(const ViewState &v) {
             } else {
                 char in[24];
                 formatIn(in, sizeof(in), start - now);
-                snprintf(value, sizeof(value), "records %s", in);
+                snprintf(value, sizeof(value), "would record %s", in);
             }
             break;
         }
@@ -2542,11 +2566,13 @@ static void drawMenu(const ViewState &v) {
         if (chosen) canvas->fillRoundRect(x + 12, iy, w - 24, itemH - 4, 10, INK);
         int cy = iy + (itemH - 4) / 2;
         const char *label;
+        Category category;
         if (i == menuAnalysis() && !chosen && i > first) dottedLine(x + 24, x + w - 24, iy - 2); // tags above, actions below
         if (i < menuAnalysis()) {
             int tag = 1 + i;
             iconTag(tag, x + 44, cy, 13, fg);
-            label = configCategory(tag).name;
+            category = configCategory(tag); // kept to the end of the loop's pass: the label points into it
+            label = category.name;
             if (moment.tag == tag) {
                 // Check mark: choosing it again removes the tag
                 canvas->drawLine(x + w - 56, cy, x + w - 48, cy + 8, fg);
@@ -2752,7 +2778,7 @@ static void drawFooter(const ViewState &v) {
             if (v.selected == ROW_BACK) rocker[nr++] = {HINT_CLICK, "Back"};
             else if (v.selected != EDIT_SAVE) rocker[nr++] = {HINT_CLICK, "Change"};
             else if (editCheck(v.editDay, v.editTime, v.editDaily, (int64_t)v.clockMinute * 60, start) == EDIT_OK) rocker[nr++] = {HINT_CLICK, "Save"};
-            rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
+            if (v.selected != EDIT_SAVE) rocker[nr++] = {HINT_HOLD_CLICK, "Hold: back"};
         }
     } else if (v.screen == SCREEN_CALENDAR) {
         rocker[nr++] = {HINT_UPDOWN, "Day"};
@@ -3303,6 +3329,8 @@ static void openScheduleEdit(int index) {
         time_t start = (time_t)s.start;
         localtime_r(&start, &local);
         editOriginal = s.start;
+        editOriginalSeconds = s.seconds;
+        editOriginalDaily = s.daily != 0;
         editSeconds = s.seconds;
         editDaily = s.daily;
     } else {
@@ -3316,7 +3344,7 @@ static void openScheduleEdit(int index) {
         local.tm_isdst = -1;
         mktime(&local); // carries the minutes over into the hour and the day
         editOriginal = 0;
-        editSeconds = audioLongestRecording() >= 60 ? 60 : EDIT_LENGTHS[0];
+        editSeconds = 60;
         editDaily = false;
     }
     editDay = (local.tm_year + 1900) * 10000 + (local.tm_mon + 1) * 100 + local.tm_mday;
@@ -3391,10 +3419,11 @@ static bool editStep(int direction, bool running) {
             return true;
         }
         if (selected == EDIT_LENGTH) {
-            // The lengths the web interface offers: those one recording can
-            // last, as things are (the card's room, and a file's 4 GB), and
-            // the shortest in any case
-            int longest = max((int)audioLongestRecording(), EDIT_LENGTHS[0]), seconds = editSeconds;
+            // The lengths the web interface offers, up to what one file can
+            // hold. Not up to the room there is now: the recording is for
+            // later, when the card may be back in or emptied, and one that
+            // finds less room records what fits.
+            int longest = (int)MAX_RECORDING_SECONDS, seconds = editSeconds;
             for (int i = 0; i < EDIT_LENGTH_COUNT; i++) {
                 int choice = EDIT_LENGTHS[direction > 0 ? i : EDIT_LENGTH_COUNT - 1 - i];
                 if (direction > 0 ? choice > seconds && choice <= longest : choice < seconds) {
@@ -3450,7 +3479,9 @@ static void handleScheduleEdit(ButtonEvent event) {
         else editPart = selected == EDIT_TIME ? PART_HOURS : PART_VALUE;
         break;
     case BTN_LONG_CLICK:
-        closeScheduleEdit();
+        // Not on Save: a firm press there counts as a hold, and going back
+        // would throw away what was set, on a screen that then looks saved
+        if (selected != EDIT_SAVE) closeScheduleEdit();
         break;
     default:
         break;
