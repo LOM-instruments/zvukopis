@@ -102,6 +102,8 @@ The time uses dashes, because FAT names cannot hold colons, and the tag goes at 
 
 **USB card reader.** With the USB cable in a computer, Settings > *USB card reader* turns Zvukopis into a card reader: the card appears on the computer, and you can copy moments off or documents on. Eject the drive on the computer when you are done and Zvukopis restarts into its main screen by itself (pressing the side switch in does the same; eject first, or the computer may not have finished writing).
 
+**Big files.** For long recordings, take the card out and use an external card reader. Wi-Fi and the USB card reader above are not very fast: an hour of recording is about 700 MB, which takes a quarter of an hour over USB and longer over Wi-Fi.
+
 **USB microphone.** With the USB cable in a computer or a tablet, Settings > *USB microphone* turns Zvukopis into a microphone for it: it appears as "Zvukopis microphone", mono, 16-bit, 96 kHz, with nothing to install (macOS, Windows 10 and later, Linux and iPadOS have the driver; Android phones vary). Up and down on the side switch set the mic gain, Auto at the bottom, and the choice stays as the recording gain. On a Mac, set the input to 96 kHz, 16-bit in Audio MIDI Setup; at another setting the recording comes out wrong. The screen holds still while the microphone is on, because a refresh is heard in it, so it redraws only when the gain changes. Press the side switch in to leave; Zvukopis restarts.
 
 **Formatting.** Cards over 32 GB come formatted as exFAT, which Zvukopis cannot read. It says so and offers Settings > *Format SD card*, which makes it FAT32. Formatting erases the card.
