@@ -180,16 +180,12 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 /* A section's only picture: its caption may run on beside it */
 .screens figure:only-of-type { grid-column: 1 / -1; }
 .screens figure:only-of-type a { max-width: 164px; }
-/* The drawing of the device is larger than a screen's picture, and the names of its numbered parts
-   follow its caption as a list; from 600 px the list stands beside the drawing */
+/* The drawing of the device is larger than a screen's picture. Under the large picture the names of
+   its numbered parts stand as a list. */
 .screens figure.wide { grid-column: 1 / -1; }
 .screens figure.wide a { max-width: 340px; }
-.screens ol, .look ol { margin: 6px 0 0; padding: 0 0 0 1.5em; color: var(--text); font-size: 15px; line-height: 1.45; }
-.screens li, .look li { margin: 0; padding-left: .2em; }
-@media (min-width: 600px) and (max-width: 1199px) {
-  .screens figure.wide { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); column-gap: var(--edge); align-items: start; }
-  .screens figure.wide figcaption { margin-top: 0; }
-}
+.look ol { margin: 6px 0 0; padding: 0 0 0 1.5em; font-size: 15px; line-height: 1.45; }
+.look li { margin: 0; padding-left: .2em; }
 /* On a phone two side by side, at the size of a section's only picture, however wide the phone */
 @media (max-width: 545px) { .screens { grid-template-columns: repeat(2, minmax(0, 164px)); } }
 /* Words for a reader who cannot see the picture */

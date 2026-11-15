@@ -67,9 +67,10 @@
   // a reader who cannot see the picture, and under the large picture.
   // The pictures were taken with the button guide turned off, which the page says once (NOTE).
   // The first picture is not a screen but the author's drawing of the device with its parts numbered
-  // (device-parts.png, here at half its pixels); the names of the parts follow its caption as a list.
+  // (device-parts.png, here at half its pixels). The section's text goes through the numbers one by one;
+  // under the large picture, where that text is out of sight, the names of the parts stand as a list.
   const SCREENS = {
-    'the-buttons': [
+    'parts-and-controls': [
       ['device-parts.png', 'Zvukopis from the front', 'A drawing of Zvukopis seen from the front, with its screen on and six numbered parts. Number 1, the side switch, is on the left edge. Numbers 2, 3 and 4, the microphone, the USB-C port and the microSD card slot, are on the bottom edge, from left to right. Number 5, the Settings button, is on the right edge, and number 6, the Sleep button, is above it.', 'wide',
         { width: 600, height: 775, parts: ['The side switch', 'The microphone', 'The USB-C port', 'The microSD card slot', 'The Settings button', 'The Sleep button'] }],
     ],
@@ -197,7 +198,6 @@
       described.className = 'unseen';
       described.textContent = (caption.endsWith('.') ? ' ' : '. ') + alt;
       words.append(caption, described);
-      if (more.parts) words.append(listOf(more.parts));
       link.append(picture);
       figure.append(link, words);
       box.append(figure);

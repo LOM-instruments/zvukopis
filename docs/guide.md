@@ -4,11 +4,14 @@
 
 Zvukopis is a pocket recorder for sonic moments. A moment is a recording: the sound of here and now, kept with its time, a waveform and a tag. This guide covers the whole device.
 
-## The buttons
+## Parts and controls
 
-- **The side switch.** The rocker on the left edge. Move it up or down to choose, press it in to confirm the choice, and hold it in for more options. This is the main controller of the device.
-- **The Settings button.** The small button on the right side of the device marked with a cog icon on the case. Press it to open Settings, and press it again to leave.
-- **The Sleep button.** The small button on the right side of the device marked with a moon icon on the case. It is placed above the Settings button.
+1. **The side switch.** The rocker on the left edge. Move it up or down to choose, press it in to confirm the choice, and hold it in for more options. This is the main controller of the device.
+2. **The microphone.** A small hole at the bottom of the device, to the left of the USB-C port. Zvukopis records through it, so keep it uncovered while you record.
+3. **The USB-C port.** The socket in the middle of the bottom edge. It charges the battery, and it connects Zvukopis to a computer: for installing the firmware, and for using Zvukopis as a card reader or as a USB microphone.
+4. **The microSD card slot.** The slot at the bottom of the device, to the right of the USB-C port. Push the card in until it clicks. The moments are kept on the card, and so are the documents of the library.
+5. **The Settings button.** The small button on the right side of the device marked with a cog icon on the case. Press it to open Settings, and press it again to leave.
+6. **The Sleep button.** The small button on the right side of the device marked with a moon icon on the case. It is placed above the Settings button.
 
 The button guide at the bottom of every screen says what the switch does right there: "Up or down", "Press in" and "Hold in". Once you know your way around, you can turn it off in Settings > *Button guide*, which leaves that space to the screens themselves. The two pointers on the sleep screen, which show how to wake Zvukopis and how to start a quick record, are turned off with it.
 
