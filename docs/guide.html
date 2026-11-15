@@ -62,10 +62,17 @@
 
   // The pictures of the device's screens, by the address of the section they stand beside. They are
   // the files in hand/, which the project page plays on the photo of the device. For each: the file's
-  // name, the caption, what the picture shows in words, and whether it gets the larger size. The words
-  // stand unseen after the caption, for a reader who cannot see the picture, and under the large picture.
+  // name, the caption, what the picture shows in words, and its size ('large', or 'wide' for the whole
+  // column; a section's only picture is large by itself). The words stand unseen after the caption, for
+  // a reader who cannot see the picture, and under the large picture.
   // The pictures were taken with the button guide turned off, which the page says once (NOTE).
+  // The first picture is not a screen but the author's drawing of the device with its parts numbered
+  // (device-parts.png, here at half its pixels); the names of the parts follow its caption as a list.
   const SCREENS = {
+    'the-buttons': [
+      ['device-parts.png', 'Zvukopis from the front', 'A drawing of Zvukopis seen from the front, with its screen on and six numbered parts. Number 1, the side switch, is on the left edge. Numbers 2, 3 and 4, the microphone, the USB-C port and the microSD card slot, are on the bottom edge, from left to right. Number 5, the Settings button, is on the right edge, and number 6, the Sleep button, is above it.', 'wide',
+        { width: 600, height: 775, parts: ['The side switch', 'The microphone', 'The USB-C port', 'The microSD card slot', 'The Settings button', 'The Sleep button'] }],
+    ],
     'the-main-screen': [
       ['01-main', 'The main screen, here with a recording scheduled', 'The main screen of Zvukopis: the date and time, the SD card and the battery in the top line, then the count of moments, the recording time left and the buttons for the library and the calendar. Below them the list starts with New recording, followed by the next scheduled recording and five moments with their waveforms.'],
     ],
@@ -95,7 +102,7 @@
       ['14-hotspot', 'The screen of the web interface on its own hotspot. The code, the network\'s name and the password in this picture are examples.', 'The Web interface screen while Zvukopis runs its own Wi-Fi network: a QR code to scan with a phone camera, the name and the password of the network under it, and the address of the page, which ends in a key.'],
     ],
     'settings-in-order': [
-      ['13-settings', 'Settings, the first ten entries', 'The Settings screen with ten entries, each with a short line under its name: Mic gain, Varispeed, Scheduled recordings, Web interface, Web interface on own hotspot, which is selected, Sync clock, Button guide, USB card reader, USB microphone and Format SD card.', true],
+      ['13-settings', 'Settings, the first ten entries', 'The Settings screen with ten entries, each with a short line under its name: Mic gain, Varispeed, Scheduled recordings, Web interface, Web interface on own hotspot, which is selected, Sync clock, Button guide, USB card reader, USB microphone and Format SD card.', 'large'],
       ['11-schedule', 'Scheduled recordings', 'The list of scheduled recordings: Schedule a recording at the top, then one every day at 06:30 for 30 minutes, one on Sunday 15 November at 21:00 and one on Thursday 19 November at 04:45.'],
       ['12-schedule-editor', 'Changing a planned recording', 'The screen for changing a planned recording, with the rows Day, Time, Length, Repeat and Save. Time is selected, and small arrows above and below its hours show that the side switch changes them.'],
     ],
@@ -112,6 +119,11 @@
   function show(at) {
     if (at < 0 || at >= shots.length) return;
     shown = at;
+    large.width = shots[at].width;
+    large.height = shots[at].height;
+    large.style.setProperty('--natural', shots[at].width + 'px');
+    // The room that the caption and the buttons need under the picture; the list of parts needs more
+    large.style.setProperty('--below', shots[at].parts ? '370px' : '210px');
     if (large.src !== shots[at].file) {
       large.src = shots[at].file;
       // A file that has not come yet leaves the frame empty until it has: the picture before it must
@@ -124,9 +136,12 @@
     }
     large.alt = shots[at].alt;
     // In a low window the large picture keeps a height at which it can be read (the stylesheet's part);
-    // it is also never less than a quarter larger than the picture in the page, up to the file's own size
-    large.style.minHeight = Math.min(784, Math.round(shots[at].picture.getBoundingClientRect().height * 1.25)) + 'px';
-    $('guide-look-caption').textContent = shots[at].caption;
+    // it is also never less than a quarter larger than the picture in the page, up to the file's own
+    // size and to the width the window leaves it (the stylesheet's max-width)
+    const edge = parseFloat(getComputedStyle(look).paddingLeft) || 16;
+    const room = Math.min(shots[at].width, document.documentElement.clientWidth - 4 * edge - 8);
+    large.style.minHeight = Math.round(Math.min(shots[at].height, shots[at].picture.getBoundingClientRect().height * 1.25, room * shots[at].height / shots[at].width)) + 'px';
+    $('guide-look-caption').replaceChildren(shots[at].caption, ...(shots[at].parts ? [listOf(shots[at].parts)] : []));
     $('guide-look-count').textContent = (at + 1) + ' of ' + shots.length;
     // Not "disabled": a button that held the keyboard's place would lose it
     $('guide-look-previous').setAttribute('aria-disabled', at === 0);
@@ -151,17 +166,29 @@
     if (event.target === look && (event.clientX < frame.left || event.clientX > frame.right || event.clientY < frame.top || event.clientY > frame.bottom)) look.close();
   });
 
+  // The names of the numbered parts of a drawing, as a numbered list
+  function listOf(parts) {
+    const list = document.createElement('ol');
+    for (const part of parts) {
+      const item = document.createElement('li');
+      item.textContent = part;
+      list.append(item);
+    }
+    return list;
+  }
+
   function picturesOf(address) {
     const pictures = SCREENS[address];
     if (!pictures) return null;
     const box = document.createElement('div');
     box.className = 'screens';
-    for (const [name, caption, alt, large] of pictures) {
+    for (const [name, caption, alt, size, more = {}] of pictures) {
       const figure = document.createElement('figure'), link = document.createElement('a'), picture = document.createElement('img'), words = document.createElement('figcaption');
-      if (large || pictures.length === 1) figure.className = 'large';
-      link.href = 'hand/' + name + '.jpg';
-      picture.width = 478;
-      picture.height = 784;
+      const width = more.width || 478, height = more.height || 784;
+      figure.className = size || (pictures.length === 1 ? 'large' : '');
+      link.href = name.includes('.') ? name : 'hand/' + name + '.jpg';
+      picture.width = width;
+      picture.height = height;
       picture.alt = 'Show larger: ' + caption;
       picture.loading = 'lazy';
       picture.decoding = 'async';
@@ -170,12 +197,14 @@
       described.className = 'unseen';
       described.textContent = (caption.endsWith('.') ? ' ' : '. ') + alt;
       words.append(caption, described);
+      if (more.parts) words.append(listOf(more.parts));
       link.append(picture);
       figure.append(link, words);
       box.append(figure);
-      const at = shots.push({ file: link.href, caption, alt, picture }) - 1;
+      const at = shots.push({ file: link.href, caption, alt, picture, width, height, parts: more.parts }) - 1;
       link.addEventListener('click', event => enlarge(at, event));
-      if (at === 0) {
+      // The note stands with the first picture of a screen
+      if (address === 'the-main-screen' && !box.querySelector('.note')) {
         const note = document.createElement('p');
         note.className = 'note';
         note.textContent = NOTE;
