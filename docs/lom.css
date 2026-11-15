@@ -158,9 +158,10 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 /* A section that begins with a list starts level with its title, as one that begins with a paragraph does */
 .guide .doc > :first-child { margin-top: 0; }
 .toc .cell ol { margin: 0; padding: 0; max-width: none; list-style: none; columns: 15em; column-gap: 28px; font-size: 16px; line-height: 1.3; }
-.toc .cell li { margin: 0; break-inside: avoid; }
-/* The whole line of an entry takes the finger, not only its letters */
-.toc a { display: block; padding: .3em 0; text-decoration: none; }
+/* Each entry is a row of its own between two rules; the whole row takes the pointer or the finger */
+.toc .cell li { margin: 0 0 -1px; break-inside: avoid; border-top: var(--line) solid var(--muted); border-bottom: var(--line) solid var(--muted); }
+.toc .cell li:last-child { margin-bottom: 0; }
+.toc a { display: block; padding: .62em 0 .66em; text-decoration: none; }
 .toc a:hover { text-decoration: underline; }
 /* White on black, like the black cells of the project page: the list stands out from the text beside it,
    and the accent colour of a link under the pointer can be read */
@@ -215,6 +216,10 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 }
 @media (max-width: 899px) {
   .guide .band { border-bottom-width: 3px; }
+  /* The rows of the contents run from edge to edge, and its title has no square */
+  .toc .band > .cell:first-child .title::before { content: none; }
+  .toc .text { padding-left: 0; padding-right: 0; padding-bottom: 20px; }
+  .toc a { padding-left: var(--edge); padding-right: var(--edge); }
 }
 @media (min-width: 900px) {
   .guide .text { grid-column: 4 / -1; }
@@ -227,13 +232,19 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
   .guide > .sections { grid-column: 1 / span 9; grid-row: 2; }
   .guide .band { grid-template-columns: repeat(9, minmax(0, 1fr)); }
   .guide > .toc { grid-column: 10 / span 3; grid-row: 1 / span 2; border-left: var(--line) solid var(--text); border-bottom: var(--line) solid var(--text); }
-  .toc > .band { display: block; position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; border-bottom: 0; }
-  .toc .cell + .cell { border-left: 0; padding-top: 0; }
-  .toc .cell:first-child { padding-bottom: 12px; }
-  .toc .title { font-size: 15px; color: #bbb; }
+  .toc > .band { display: block; position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--muted) var(--text); border-bottom: 0; }
+  /* The rows run from edge to edge of the column */
+  .toc .cell + .cell { border-left: 0; padding: 0; }
+  .toc .cell:first-child { padding-bottom: 16px; }
+  .toc .title { font-size: 21px; }
   .toc .cell ol { columns: auto; font-size: clamp(16px, .42vw + 10px, 18px); }
-  .toc a { position: relative; display: inline-block; vertical-align: top; }
+  .toc a { padding-left: var(--edge); padding-right: var(--edge); }
+  /* The section being read is underlined */
   .toc a[aria-current] { text-decoration: underline; }
-  .toc a[aria-current]::before { content: ""; position: absolute; left: -.95em; top: .7em; width: .5em; height: .5em; background: var(--accent); }
   .guide .doc p, .guide .doc li, .guide .doc ol, .guide .doc ul { font-size: clamp(17px, .5vw + 10.4px, 20px); }
+}
+/* In a low window the rows of the contents are closer, so that the list still fits beside the page */
+@media (min-width: 1200px) and (max-height: 780px) {
+  .toc .cell:first-child { padding-top: 14px; padding-bottom: 10px; }
+  .toc a { padding-top: .36em; padding-bottom: .4em; }
 }
