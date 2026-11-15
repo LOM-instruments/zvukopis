@@ -4,9 +4,13 @@
 #include <Preferences.h>
 #include <SD_MMC.h>
 
+#include "guide_text.h" // GUIDE_TEXT, GUIDE_LENGTH: docs/guide.md as built in by scripts/embed_guide.py
 #include "storage.h"
 
 static const char *DOC_DIR = "/doc";
+// The user guide's name among the documents. A guide under another name
+// (the website serves it as guide.md) is the user's own and is left alone.
+static const char *GUIDE_FILE = "zvukopis-guide.md";
 
 static Document *documents = nullptr; // MAX_DOCUMENTS, in PSRAM
 static int documentTotal = 0;
@@ -41,6 +45,55 @@ static void readTitle(File &f, Document &doc) {
     strlcpy(doc.title, doc.fileName, sizeof(doc.title));
     char *dot = strrchr(doc.title, '.');
     if (dot && dot != doc.title) *dot = 0;
+}
+
+bool libraryIsGuide(const char *fileName) {
+    return fileName && strcasecmp(fileName, GUIDE_FILE) == 0; // FAT names don't tell upper case from lower
+}
+
+// True when the file holds this firmware's guide, byte for byte
+static bool holdsTheGuide(const char *path) {
+    if (!SD_MMC.exists(path)) return false;
+    File f = SD_MMC.open(path);
+    if (!f) return false;
+    bool same = !f.isDirectory() && f.size() == GUIDE_LENGTH;
+    uint8_t block[256];
+    for (size_t at = 0; same && at < GUIDE_LENGTH;) {
+        size_t n = f.read(block, min(sizeof(block), GUIDE_LENGTH - at));
+        same = n > 0 && memcmp(block, GUIDE_TEXT + at, n) == 0;
+        at += n;
+    }
+    f.close();
+    return same;
+}
+
+void libraryInstallGuide() {
+    if (!storageAvailable()) return;
+    uint32_t t0 = millis();
+    char path[64], part[64];
+    docPath(path, sizeof(path), GUIDE_FILE);
+    docPath(part, sizeof(part), "guide.part"); // a name the library does not list
+    if (!holdsTheGuide(path)) {
+        // Written beside it first and read back, and only then put in its
+        // place: a full card or a power cut leaves the guide that was there
+        if (!SD_MMC.exists(DOC_DIR)) SD_MMC.mkdir(DOC_DIR);
+        File f = SD_MMC.open(part, FILE_WRITE);
+        if (f) {
+            f.write(GUIDE_TEXT, GUIDE_LENGTH);
+            f.close();
+        }
+        bool ok = holdsTheGuide(part);
+        if (ok && SD_MMC.exists(path)) ok = SD_MMC.remove(path);
+        ok = ok && SD_MMC.rename(part, path);
+        if (!ok) {
+            SD_MMC.remove(part);
+            Serial.println("[library] the user guide could not be written to the card");
+            return;
+        }
+        Serial.printf("[library] user guide written to %s (%u bytes, %lu ms)\n", path, (unsigned)GUIDE_LENGTH, millis() - t0);
+    } else {
+        Serial.printf("[library] the card has this firmware's user guide (checked in %lu ms)\n", millis() - t0);
+    }
 }
 
 void libraryScan() {
@@ -185,6 +238,7 @@ void librarySetLastPage(const char *fileName, int page) {
 }
 
 bool libraryDelete(const char *fileName) {
+    if (libraryIsGuide(fileName)) return false; // it would be back at the next start
     if (libraryFind(fileName) < 0) return false;
     char path[64];
     docPath(path, sizeof(path), fileName);

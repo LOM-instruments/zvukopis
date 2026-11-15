@@ -795,9 +795,15 @@ static void sendLibrary(char *buf, size_t len) {
         // Into a JS string inside an HTML attribute: JSON-escape, then HTML-escape the lot
         htmlEscape(jsonString(doc.fileName).c_str(), jsName, textLen);
         htmlEscape(jsonString(doc.title).c_str(), jsTitle, textLen);
-        snprintf(buf, len, "<tr><td><b>%s</b><br><small>%s, %lu KB</small></td>"
-                           "<td class=c><button class=ic title=Delete onclick=\"deldoc(%s,%s)\">%s</button></td></tr>",
-                 title, name, (unsigned long)((doc.bytes + 1023) / 1024), jsName, jsTitle, TRASH_SVG);
+        if (libraryIsGuide(doc.fileName)) {
+            // The firmware's own guide: it would be back at the next start, so no bin
+            snprintf(buf, len, "<tr><td><b>%s</b><br><small>%s, %lu KB, comes with the firmware</small></td><td></td></tr>",
+                     title, name, (unsigned long)((doc.bytes + 1023) / 1024));
+        } else {
+            snprintf(buf, len, "<tr><td><b>%s</b><br><small>%s, %lu KB</small></td>"
+                               "<td class=c><button class=ic title=Delete onclick=\"deldoc(%s,%s)\">%s</button></td></tr>",
+                     title, name, (unsigned long)((doc.bytes + 1023) / 1024), jsName, jsTitle, TRASH_SVG);
+        }
         server.sendContent(buf);
     }
     if (n == 0) server.sendContent("<tr><td>Nothing to read yet.</td></tr>");
@@ -1169,6 +1175,10 @@ static void handleLibraryUploadPiece() {
             uploadError = "Give the file a plain name ending in .md or .txt";
             return;
         }
+        if (libraryIsGuide(clean.c_str())) {
+            uploadError = "That is the name of the user guide, which comes with the firmware. Give the file another name";
+            return;
+        }
         if (!SD_MMC.exists(libraryDir())) SD_MMC.mkdir(libraryDir());
         uploadPath = String(libraryDir()) + "/" + clean;
         uploadFile = SD_MMC.open(uploadPartPath(), FILE_WRITE);
@@ -1208,6 +1218,10 @@ static void handleLibraryUpload() {
 
 static void handleLibraryDelete() {
     if (!allowed()) return;
+    if (libraryIsGuide(server.arg("f").c_str())) {
+        server.send(400, "text/plain", "The user guide comes with the firmware and stays");
+        return;
+    }
     if (!libraryDelete(server.arg("f").c_str())) {
         server.send(404, "text/plain", "No such document");
         return;

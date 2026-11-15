@@ -7,6 +7,8 @@
 // the SD card, put there from the web interface or a computer. The reader in
 // ui.cpp lays them out; this keeps the list, loads a document into PSRAM as
 // ASCII, and remembers the page each one was left at.
+// One document comes with the firmware: the user guide, docs/guide.md as it
+// was when the firmware was built (scripts/embed_guide.py).
 
 static const int MAX_DOCUMENTS = 64;
 static const size_t MAX_DOCUMENT_BYTES = 512 * 1024;
@@ -16,6 +18,13 @@ struct Document {
     char title[48]; // the first heading, or the file name
     uint32_t bytes;
 };
+
+// Keeps the user guide among the documents: writes it to /doc when the card
+// has none or another version, so the guide in the library is always the one
+// of this firmware. Nothing else in /doc is touched. Call after the card is
+// mounted, before libraryScan().
+void libraryInstallGuide();
+bool libraryIsGuide(const char *fileName); // the firmware's own: it is not deleted or written over
 
 void libraryScan(); // reads /doc (call after the card is mounted, and after uploads)
 int libraryCount();

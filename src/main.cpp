@@ -411,7 +411,8 @@ void setup() {
     configInit();
 
     if (!audioInit()) Serial.println("Audio init failed");
-    libraryScan(); // the card is mounted by audioInit
+    libraryInstallGuide(); // the card is mounted by audioInit
+    libraryScan();
     libraryMounts = storageMounts();
     uiStart();
     buttonsInit();
@@ -474,6 +475,7 @@ void loop() {
     // card is lent to a computer.
     if (storageMounts() != libraryMounts && audioState() == AUDIO_IDLE && uiCanRecord()) {
         libraryMounts = storageMounts();
+        libraryInstallGuide();
         libraryScan();
     }
     if (batteryRanOut()) {
