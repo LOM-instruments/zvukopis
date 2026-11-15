@@ -137,10 +137,11 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 
 /* A document rendered from Markdown (the guide, the specification) */
 .doc h1 { margin: 0 0 14px; font-size: clamp(28px, 4vw, 46px); font-weight: 400; line-height: 1.08; letter-spacing: -.015em; }
-.doc h1 + p em { font-size: clamp(18px, 2vw, 24px); line-height: 1.25; color: var(--muted); font-style: normal; }
+.doc h1 + p em, .doc .sub em { font-size: clamp(18px, 2vw, 24px); line-height: 1.25; color: var(--muted); font-style: normal; }
 .doc h2 { margin: 34px 0 10px; padding-top: 18px; border-top: var(--line) solid var(--text); font-size: 22px; font-weight: 400; line-height: 1.2; }
 .doc h2::before { content: ""; display: inline-block; width: .5em; height: .5em; margin-right: .45em; background: var(--accent); vertical-align: .08em; }
-.doc p, .doc li { max-width: 66ch; font-size: 17px; }
+/* The lists take the size of the text too: their own width is counted in it */
+.doc p, .doc li, .doc ol, .doc ul { max-width: 66ch; font-size: 17px; }
 .doc li { margin-bottom: .5em; }
 .doc blockquote { margin: 12px 0; padding: 6px 14px; border-left: 3px solid var(--text); background: #fff; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; max-width: 66ch; }
 .doc table { border-collapse: collapse; width: 100%; max-width: 66rem; margin: 10px 0 18px; font-size: 15px; background: #fff; }
@@ -149,6 +150,19 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 .doc th:empty { display: none; }
 .doc hr { border: 0; border-top: var(--line) solid var(--text); margin: 30px 0 14px; }
 .doc hr + p { font-size: 14px; color: var(--muted); }
+
+/* The user guide: a band for each section with its title in the first cell, as on the project page,
+   and a list of contents after the introduction. On a wide screen the list has a column of its own
+   at the right, where it stays in view and marks the section being read. */
+.guide h1.title { font-size: clamp(26px, 3.4vw, 44px); line-height: 1.08; letter-spacing: -.015em; }
+/* A section that begins with a list starts level with its title, as one that begins with a paragraph does */
+.guide .doc > :first-child { margin-top: 0; }
+.toc .cell ol { margin: 0; padding: 0; max-width: none; list-style: none; columns: 15em; column-gap: 28px; font-size: 16px; line-height: 1.3; }
+.toc .cell li { margin: 0; break-inside: avoid; }
+/* The whole line of an entry takes the finger, not only its letters */
+.toc a { display: block; padding: .3em 0; text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.site-footer em { font-style: normal; }
 
 @media (min-width: 720px) {
   :root { --edge: 20px; }
@@ -195,4 +209,28 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 }
 @media (min-width: 1300px) {
   .band.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 899px) {
+  .guide .band { border-bottom-width: 3px; }
+}
+@media (min-width: 900px) {
+  .guide .text { grid-column: 4 / -1; }
+  /* A section's title stays at the top of its cell while the section is read */
+  .sections .title { position: sticky; top: 22px; }
+}
+@media (min-width: 1200px) {
+  .guide { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .guide > .band { grid-column: 1 / span 9; grid-row: 1; }
+  .guide > .sections { grid-column: 1 / span 9; grid-row: 2; }
+  .guide .band { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+  .guide > .toc { grid-column: 10 / span 3; grid-row: 1 / span 2; border-left: var(--line) solid var(--text); border-bottom: var(--line) solid var(--text); }
+  .toc > .band { display: block; position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; border-bottom: 0; }
+  .toc .cell + .cell { border-left: 0; padding-top: 0; }
+  .toc .cell:first-child { padding-bottom: 12px; }
+  .toc .title { font-size: 15px; color: var(--muted); }
+  .toc .cell ol { columns: auto; font-size: clamp(16px, .42vw + 10px, 18px); }
+  .toc a { position: relative; display: inline-block; vertical-align: top; }
+  .toc a[aria-current] { text-decoration: underline; }
+  .toc a[aria-current]::before { content: ""; position: absolute; left: -.95em; top: .7em; width: .5em; height: .5em; background: var(--accent); }
+  .guide .doc p, .guide .doc li, .guide .doc ol, .guide .doc ul { font-size: clamp(17px, .5vw + 10.4px, 20px); }
 }

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zvukopis user guide</title>
 <meta name="description" content="How to record, listen and look after your moments with Zvukopis, the pocket recorder for sonic moments.">
-<link rel="stylesheet" href="lom.css">
+<link rel="stylesheet" href="lom.css?v=3">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha512-xeUh+KxNyTufZOje++oQHstlMQ8/rpyzPuM+gjMFYK3z5ILJGE7l2NvYL+XfliKURMpBIKKp1XoPN/qswlSMFA==" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -25,15 +25,117 @@
   </span>
 </nav>
 <main>
-<section class="band"><div class="cell c12 doc" id="doc"><p>Loading&hellip;</p></div></section>
-<footer class="band site-footer"><div class="cell c12"><p>This page is the latest version of <a href="guide.md">guide.md</a>, also available on your Zvukopis after flashing.</p></div></footer>
+<!-- The guide is guide.md, the file the firmware carries too. The script below lays it out: the title
+     and the introduction, the list of contents, and a band for each section with its title in the
+     first cell. -->
+<div class="guide">
+  <section class="band">
+    <div class="cell c3"><h1 class="title" id="guide-title">Zvukopis user guide</h1></div>
+    <div class="cell text doc" id="guide-intro"><p>Loading&hellip;</p></div>
+  </section>
+  <nav class="toc" aria-labelledby="guide-contents" hidden>
+    <div class="band">
+      <div class="cell c3"><h2 class="title" id="guide-contents">Contents</h2></div>
+      <div class="cell text"><ol id="guide-toc"></ol></div>
+    </div>
+  </nav>
+  <div class="sections" id="guide-sections"></div>
+</div>
+<footer class="band site-footer"><div class="cell c12" id="guide-foot"><p>This page is the latest version of <a href="guide.md">guide.md</a>, also available on your Zvukopis after flashing.</p></div></footer>
 </main>
 <script>
-  fetch('guide.md').then(r => r.text()).then(md => {
-    document.getElementById('doc').innerHTML = marked.parse(md);
+(function () {
+  const $ = id => document.getElementById(id);
+  const intro = $('guide-intro'), sections = $('guide-sections'), list = $('guide-toc'), foot = $('guide-foot');
+
+  // "The web interface" becomes "the-web-interface": the section's address on this page
+  function addressOf(title, taken) {
+    const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'section';
+    let address = base;
+    for (let n = 2; taken.has(address); n++) address = base + '-' + n;
+    taken.add(address);
+    return address;
+  }
+
+  function layOut(markdown) {
+    const source = document.createElement('div');
+    source.innerHTML = marked.parse(markdown);
+    const nodes = Array.from(source.children);
+    // A rule after the last section sets off the guide's closing line, which goes to the foot of the page
+    const lastOf = tag => nodes.map(n => n.tagName).lastIndexOf(tag);
+    const closingFrom = lastOf('HR') > lastOf('H2') ? lastOf('HR') : nodes.length;
+    const taken = new Set();
+    const closing = [];
+    let into = intro;
+    intro.textContent = '';
+    nodes.forEach((node, at) => {
+      if (at === closingFrom) return;
+      if (at > closingFrom) { closing.push(node); return; }
+      if (node.tagName === 'H1') { $('guide-title').textContent = node.textContent; return; }
+      if (node.tagName !== 'H2') {
+        // The line under the title, set in italics in the file, is the guide's subtitle
+        if (into === intro && !intro.firstChild && node.tagName === 'P' && node.children.length === 1 && node.firstElementChild.tagName === 'EM' && node.textContent === node.firstElementChild.textContent) node.className = 'sub';
+        into.append(node);
+        return;
+      }
+      const address = addressOf(node.textContent, taken);
+      const band = document.createElement('section'), head = document.createElement('div');
+      band.className = 'band';
+      band.id = address;
+      head.className = 'cell c3';
+      node.removeAttribute('id');
+      node.className = 'title';
+      head.append(node);
+      into = document.createElement('div');
+      into.className = 'cell text doc';
+      band.append(head, into);
+      sections.append(band);
+      const item = document.createElement('li'), link = document.createElement('a');
+      link.href = '#' + address;
+      link.textContent = node.textContent;
+      item.append(link);
+      list.append(item);
+    });
+    foot.prepend(...closing);
+    document.querySelector('.toc').hidden = !list.firstChild;
+  }
+
+  // The list of contents marks the section being read: the last one whose top has passed
+  // a third of the window's height, or the last of all at the very end of the page
+  function follow() {
+    const bands = Array.from(sections.children);
+    const links = new Map(Array.from(list.querySelectorAll('a'), a => [a.hash.slice(1), a]));
+    let current = null;
+    function mark() {
+      let now = null;
+      for (const band of bands) {
+        if (band.getBoundingClientRect().top > innerHeight / 3) break;
+        now = band.id;
+      }
+      if (bands.length && innerHeight + scrollY >= document.documentElement.scrollHeight - 2) now = bands[bands.length - 1].id;
+      if (now === current) return;
+      if (current) links.get(current).removeAttribute('aria-current');
+      if (now) links.get(now).setAttribute('aria-current', 'location');
+      current = now;
+    }
+    addEventListener('scroll', mark, { passive: true });
+    addEventListener('resize', mark);
+    mark();
+  }
+
+  fetch('guide.md').then(r => {
+    if (!r.ok) throw new Error(r.status);
+    return r.text();
+  }).then(markdown => {
+    layOut(markdown);
+    follow();
+    // An address with a section in it (guide.html#the-library) could not be followed before the sections were there
+    const wanted = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (wanted) wanted.scrollIntoView();
   }).catch(() => {
-    document.getElementById('doc').innerHTML = '<p>Could not load it; it is at <a href="guide.md">guide.md</a>.</p>';
+    intro.innerHTML = '<p>Could not load it; it is at <a href="guide.md">guide.md</a>.</p>';
   });
+})();
 </script>
 </body>
 </html>
