@@ -167,6 +167,39 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
    and the accent colour of a link under the pointer can be read */
 .toc { background: var(--text); color: #fff; }
 .site-footer em { font-style: normal; }
+/* The pictures of the device's screens that stand with a section of the guide. On a phone and a
+   medium screen they are a row of small pictures before the section's text; on a wide screen they
+   stand under the section's title, two side by side, a section's only picture larger. A press on
+   one shows it large (the dialog below). */
+.screens { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 14px; align-content: start; max-width: 640px; padding: 0 var(--edge) 16px; }
+.screens figure { margin: 0; min-width: 0; }
+.screens a { display: block; cursor: zoom-in; }
+.screens a:focus-visible { outline-color: var(--text); }
+.screens img { display: block; width: 100%; height: auto; background: #fff; border: var(--line) solid var(--text); }
+.screens figcaption { margin-top: 5px; font-size: 14px; line-height: 1.3; color: var(--muted); }
+/* A section's only picture: its caption may run on beside it */
+.screens figure:only-of-type { grid-column: 1 / -1; }
+.screens figure:only-of-type a { max-width: 164px; }
+/* On a phone two side by side, at the size of a section's only picture, however wide the phone */
+@media (max-width: 545px) { .screens { grid-template-columns: repeat(2, minmax(0, 164px)); } }
+/* Words for a reader who cannot see the picture */
+.unseen { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.screens .note { grid-column: 1 / -1; margin: 0; font-size: 14px; }
+.pictured > .text { padding-top: 0; border-top: 0; }
+/* A picture shown large over the page, with a caption as wide as itself. In a low window it keeps a
+   height at which it can be read and the frame scrolls, with the buttons held at its foot. */
+.look:not([open]) { display: none; }
+.look { padding: var(--edge) var(--edge) 0; border: var(--line) solid var(--text); border-radius: 0; background: var(--bg); color: var(--text); }
+.look::backdrop { background: rgba(0, 0, 0, .6); }
+.look figure { display: table; margin: 0; }
+.look img { display: block; width: auto; height: auto; object-fit: contain; max-width: min(478px, calc(100vw - 4 * var(--edge) - 8px)); max-height: max(calc(100dvh - 210px), 480px); background: #fff; border: var(--line) solid var(--text); }
+.look figcaption { display: table-caption; caption-side: bottom; margin-top: 10px; font-size: 15px; line-height: 1.4; }
+.look .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; position: sticky; bottom: 0; margin: 0; padding: 12px 0 var(--edge); background: var(--bg); }
+.look .count { margin-right: auto; padding-left: 4px; font-size: 14px; color: var(--muted); }
+.look button { padding: 7px 12px 8px; border: var(--line) solid var(--text); border-radius: 0; background: transparent; color: var(--text); font: 15px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif; cursor: pointer; }
+.look button:hover, .look button:focus-visible { background: var(--accent); }
+.look button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+.look button[aria-disabled="true"] { border-color: var(--tile); background: transparent; color: var(--muted); cursor: default; }
 
 @media (min-width: 720px) {
   :root { --edge: 20px; }
@@ -223,7 +256,12 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
 }
 @media (min-width: 900px) {
   .guide .text { grid-column: 4 / -1; }
-  /* A section's title stays at the top of its cell while the section is read */
+  /* The title's cell runs down beside the pictures and the text, which share the other column */
+  .pictured > .cell:first-child { grid-row: 1 / span 2; }
+  .pictured > .screens { grid-column: 4 / -1; grid-row: 1; padding-top: 22px; border-left: var(--line) solid var(--text); }
+  .pictured > .text { grid-row: 2; border-left: var(--line) solid var(--text); }
+  /* A section's title stays at the top of its cell while the section is read (from 1200 px only in a
+     section without pictures: there the title's cell ends where the pictures begin) */
   .sections .title { position: sticky; top: 22px; }
 }
 @media (min-width: 1200px) {
@@ -231,6 +269,16 @@ mark { background: var(--accent); color: var(--text); padding: 1px 5px 2px; -web
   .guide > .band { grid-column: 1 / span 9; grid-row: 1; }
   .guide > .sections { grid-column: 1 / span 9; grid-row: 2; }
   .guide .band { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+  /* The pictures go under the title: the title's cell is the first row, the pictures the second, the text runs beside both */
+  .guide .band.pictured { grid-template-rows: auto 1fr; }
+  .pictured > .cell:first-child { grid-row: 1; padding-bottom: 16px; }
+  /* Not wider than in a window of 1920 px, so that two side by side never outgrow a section's only picture */
+  .pictured > .screens { grid-column: 1 / span 3; grid-row: 2; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 480px; padding: 0 var(--edge) 30px; border-left: 0; }
+  .pictured > .text { grid-row: 1 / span 2; padding-top: 22px; }
+  .screens .large { grid-column: span 2; }
+  .screens .large a, .screens figure:only-of-type a { max-width: clamp(220px, 16vw, 300px); }
+  /* A larger picture with others under it is as wide as they are together */
+  .screens .large:not(:only-of-type) a { max-width: none; }
   .guide > .toc { grid-column: 10 / span 3; grid-row: 1 / span 2; border-left: var(--line) solid var(--text); border-bottom: var(--line) solid var(--text); }
   .toc > .band { display: block; position: sticky; top: 0; max-height: 100dvh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--muted) var(--text); border-bottom: 0; }
   /* The rows run from edge to edge of the column */

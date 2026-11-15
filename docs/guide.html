@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zvukopis user guide</title>
 <meta name="description" content="How to record, listen and look after your moments with Zvukopis, the pocket recorder for sonic moments.">
-<link rel="stylesheet" href="lom.css?v=3">
+<link rel="stylesheet" href="lom.css?v=4">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha512-xeUh+KxNyTufZOje++oQHstlMQ8/rpyzPuM+gjMFYK3z5ILJGE7l2NvYL+XfliKURMpBIKKp1XoPN/qswlSMFA==" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -27,7 +27,7 @@
 <main>
 <!-- The guide is guide.md, the file the firmware carries too. The script below lays it out: the title
      and the introduction, the list of contents, and a band for each section with its title in the
-     first cell. -->
+     first cell and, where there are any, pictures of the screens the section explains. -->
 <div class="guide">
   <section class="band">
     <div class="cell c3"><h1 class="title" id="guide-title">Zvukopis user guide</h1></div>
@@ -43,10 +43,147 @@
 </div>
 <footer class="band site-footer"><div class="cell c12" id="guide-foot"><p>This page is the latest version of <a href="guide.md">guide.md</a>, also available on your Zvukopis after flashing.</p></div></footer>
 </main>
+<!-- A picture of a screen, shown large over the page when it is pressed -->
+<dialog class="look" id="guide-look" aria-labelledby="guide-look-caption">
+  <figure id="guide-look-figure">
+    <figcaption id="guide-look-caption" aria-live="polite"></figcaption>
+  </figure>
+  <p class="row">
+    <button type="button" id="guide-look-previous">Previous</button>
+    <button type="button" id="guide-look-next">Next</button>
+    <span class="count" id="guide-look-count" role="status"></span>
+    <button type="button" id="guide-look-close" autofocus>Close</button>
+  </p>
+</dialog>
 <script>
 (function () {
   const $ = id => document.getElementById(id);
   const intro = $('guide-intro'), sections = $('guide-sections'), list = $('guide-toc'), foot = $('guide-foot');
+
+  // The pictures of the device's screens, by the address of the section they stand beside. They are
+  // the files in hand/, which the project page plays on the photo of the device. For each: the file's
+  // name, the caption, what the picture shows in words, and whether it gets the larger size. The words
+  // stand unseen after the caption, for a reader who cannot see the picture, and under the large picture.
+  // The pictures were taken with the button guide turned off, which the page says once (NOTE).
+  const SCREENS = {
+    'the-main-screen': [
+      ['01-main', 'The main screen, here with a recording scheduled', 'The main screen of Zvukopis: the date and time, the SD card and the battery in the top line, then the count of moments, the recording time left and the buttons for the library and the calendar. Below them the list starts with New recording, followed by the next scheduled recording and five moments with their waveforms.'],
+    ],
+    'recording': [
+      ['02-recording', 'The recording screen', 'The recording screen: a large black dot, the word Recording, and a line that says the recording started at 14:45 and can run for up to 6 hours.'],
+    ],
+    'listening': [
+      ['03-playing', 'A moment playing', 'The main screen while Moment 43 plays: its row is outlined, a stop mark stands in place of the play triangle, the time reads 0:04 of 0:25, and a playhead stands in the waveform.'],
+      ['04-varispeed', 'The same moment at three times the speed', 'The same screen while the moment plays at three times the normal speed: its row shows 3.0x and the time played, 0:13.'],
+    ],
+    'what-else-you-can-do-with-a-moment': [
+      ['05-moment-menu', 'The menu of a moment', 'The menu of Moment 43 over the dimmed main screen: the tags Sound, Music, Note, Biophony and Anthropophony, then Frequency analysis, Delete and Cancel. Biophony is highlighted and has a check mark.'],
+      ['06-spectrogram', 'The spectrogram, on the scale of 0 to 12\u00a0kHz', 'The spectrogram of Moment 43, 25 seconds of birdsong: time runs along the bottom, frequency up the side from 0 to 12 kHz, and three phrases of the song show as groups of dark marks.'],
+      ['08-analysis-options', 'The menu of the analysis', 'A menu titled Analysis over the spectrogram: Spectrogram, Spectrum (FFT), the scales 0 to 48 kHz, 0 to 24 kHz and 0 to 12 kHz, and Back to the moments. Dots mark the view and the scale in use.'],
+      ['09-spectrum', 'The spectrum', 'The spectrum of Moment 43 as a graph: loudness in dB up the side, frequency from 0 to 12 kHz along the bottom, and a curve that is highest between about 1 and 7 kHz.'],
+    ],
+    'the-calendar': [
+      ['10-calendar', 'The calendar', 'The calendar showing November 2026, with one to four dots under seven of its days. Day 14 is highlighted, and the line under the month reads Saturday 14 November, 1 moment, 0:25.'],
+    ],
+    'the-library': [
+      ['16-reader', 'A document from the library, open for reading', 'Page 1 of 54 of a document called Sounds: a heading, a line in italics that names Henry David Thoreau\'s Walden, and the beginning of the text.'],
+    ],
+    'sleep-and-battery': [
+      ['17-sleep', 'The sleep screen, here without the two pointers', 'The sleep screen: the top lines say that Zvukopis has been asleep since 14:47 and records at 06:30 on 15 November, and the middle of the screen holds a quote about listening by Pauline Oliveros.'],
+    ],
+    'the-web-interface': [
+      ['14-hotspot', 'The screen of the web interface on its own hotspot. The code, the network\'s name and the password in this picture are examples.', 'The Web interface screen while Zvukopis runs its own Wi-Fi network: a QR code to scan with a phone camera, the name and the password of the network under it, and the address of the page, which ends in a key.'],
+    ],
+    'settings-in-order': [
+      ['13-settings', 'Settings, the first ten entries', 'The Settings screen with ten entries, each with a short line under its name: Mic gain, Varispeed, Scheduled recordings, Web interface, Web interface on own hotspot, which is selected, Sync clock, Button guide, USB card reader, USB microphone and Format SD card.', true],
+      ['11-schedule', 'Scheduled recordings', 'The list of scheduled recordings: Schedule a recording at the top, then one every day at 06:30 for 30 minutes, one on Sunday 15 November at 21:00 and one on Thursday 19 November at 04:45.'],
+      ['12-schedule-editor', 'Changing a planned recording', 'The screen for changing a planned recording, with the rows Day, Time, Length, Repeat and Save. Time is selected, and small arrows above and below its hours show that the side switch changes them.'],
+    ],
+  };
+  const NOTE = 'The pictures in this guide show the screens with the button guide turned off. A new Zvukopis has it turned on, so its screens also show the hints at the bottom. Click or tap a picture to see it larger.';
+
+  // A press on a picture shows it large, with the other pictures a step away. A press with a
+  // modifier key, or in a browser without dialogs, opens the picture's file the browser's own way.
+  const look = $('guide-look'), large = document.createElement('img'), shots = [];
+  large.width = 478;
+  large.height = 784;
+  $('guide-look-figure').prepend(large);
+  let shown = 0;
+  function show(at) {
+    if (at < 0 || at >= shots.length) return;
+    shown = at;
+    if (large.src !== shots[at].file) {
+      large.src = shots[at].file;
+      // A file that has not come yet leaves the frame empty until it has: the picture before it must
+      // not stand under the new caption. One that is already there changes at once, without a blink.
+      if (large.complete) large.style.visibility = '';
+      else {
+        large.style.visibility = 'hidden';
+        large.onload = large.onerror = () => { if (large.complete) large.style.visibility = ''; };
+      }
+    }
+    large.alt = shots[at].alt;
+    // In a low window the large picture keeps a height at which it can be read (the stylesheet's part);
+    // it is also never less than a quarter larger than the picture in the page, up to the file's own size
+    large.style.minHeight = Math.min(784, Math.round(shots[at].picture.getBoundingClientRect().height * 1.25)) + 'px';
+    $('guide-look-caption').textContent = shots[at].caption;
+    $('guide-look-count').textContent = (at + 1) + ' of ' + shots.length;
+    // Not "disabled": a button that held the keyboard's place would lose it
+    $('guide-look-previous').setAttribute('aria-disabled', at === 0);
+    $('guide-look-next').setAttribute('aria-disabled', at === shots.length - 1);
+  }
+  function enlarge(at, event) {
+    if (!look.showModal || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    show(at);
+    look.showModal();
+  }
+  $('guide-look-previous').addEventListener('click', () => show(shown - 1));
+  $('guide-look-next').addEventListener('click', () => show(shown + 1));
+  $('guide-look-close').addEventListener('click', () => look.close());
+  look.addEventListener('keydown', event => {
+    if (event.key === 'ArrowLeft') show(shown - 1);
+    if (event.key === 'ArrowRight') show(shown + 1);
+  });
+  // A press beside the picture's frame, on the darkened page, closes it
+  look.addEventListener('click', event => {
+    const frame = look.getBoundingClientRect();
+    if (event.target === look && (event.clientX < frame.left || event.clientX > frame.right || event.clientY < frame.top || event.clientY > frame.bottom)) look.close();
+  });
+
+  function picturesOf(address) {
+    const pictures = SCREENS[address];
+    if (!pictures) return null;
+    const box = document.createElement('div');
+    box.className = 'screens';
+    for (const [name, caption, alt, large] of pictures) {
+      const figure = document.createElement('figure'), link = document.createElement('a'), picture = document.createElement('img'), words = document.createElement('figcaption');
+      if (large || pictures.length === 1) figure.className = 'large';
+      link.href = 'hand/' + name + '.jpg';
+      picture.width = 478;
+      picture.height = 784;
+      picture.alt = 'Show larger: ' + caption;
+      picture.loading = 'lazy';
+      picture.decoding = 'async';
+      picture.src = link.href;
+      const described = document.createElement('span');
+      described.className = 'unseen';
+      described.textContent = (caption.endsWith('.') ? ' ' : '. ') + alt;
+      words.append(caption, described);
+      link.append(picture);
+      figure.append(link, words);
+      box.append(figure);
+      const at = shots.push({ file: link.href, caption, alt, picture }) - 1;
+      link.addEventListener('click', event => enlarge(at, event));
+      if (at === 0) {
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = NOTE;
+        box.append(note);
+      }
+    }
+    return box;
+  }
 
   // "The web interface" becomes "the-web-interface": the section's address on this page
   function addressOf(title, taken) {
@@ -79,8 +216,8 @@
         return;
       }
       const address = addressOf(node.textContent, taken);
-      const band = document.createElement('section'), head = document.createElement('div');
-      band.className = 'band';
+      const band = document.createElement('section'), head = document.createElement('div'), pictures = picturesOf(address);
+      band.className = pictures ? 'band pictured' : 'band';
       band.id = address;
       head.className = 'cell c3';
       node.removeAttribute('id');
@@ -88,7 +225,9 @@
       head.append(node);
       into = document.createElement('div');
       into.className = 'cell text doc';
-      band.append(head, into);
+      band.append(head);
+      if (pictures) band.append(pictures);
+      band.append(into);
       sections.append(band);
       const item = document.createElement('li'), link = document.createElement('a');
       link.href = '#' + address;
@@ -98,10 +237,13 @@
     });
     foot.prepend(...closing);
     document.querySelector('.toc').hidden = !list.firstChild;
+    // A heading that was renamed in guide.md loses its pictures: say so where a developer looks
+    for (const address of Object.keys(SCREENS)) if (!taken.has(address)) console.warn('guide.html: the guide has no section "' + address + '" for its pictures');
   }
 
-  // The list of contents marks the section being read: the last one whose top has passed
-  // a third of the window's height, or the last of all at the very end of the page
+  // The list of contents marks the section being read: the last one whose top has passed a line
+  // near the top of the window (a third of its height, but no lower than the shortest section is
+  // tall, so that a jump to a short section marks that one), or the last of all at the page's end
   function follow() {
     const bands = Array.from(sections.children);
     const links = new Map(Array.from(list.querySelectorAll('a'), a => [a.hash.slice(1), a]));
@@ -109,7 +251,7 @@
     function mark() {
       let now = null;
       for (const band of bands) {
-        if (band.getBoundingClientRect().top > innerHeight / 3) break;
+        if (band.getBoundingClientRect().top > Math.min(innerHeight / 3, 120)) break;
         now = band.id;
       }
       if (bands.length && innerHeight + scrollY >= document.documentElement.scrollHeight - 2) now = bands[bands.length - 1].id;
