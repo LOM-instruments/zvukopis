@@ -129,7 +129,7 @@ With the USB cable in a computer or a tablet, Settings > *USB microphone* turns 
 
 Hold the side switch in, or press the Settings button again, to leave.
 
-## If something is odd
+## Troubleshooting
 
 - **The screen says it is asleep.** Hold the Sleep button for a second to wake Zvukopis up.
 - **Nothing happens at all.** Hold the Sleep button for ten seconds to restart.
