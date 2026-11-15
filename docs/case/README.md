@@ -7,8 +7,7 @@ four countersunk M2.5×6 bolts, hex or Torx. The build steps are on the
 
 | Version | Date | Files | Notes |
 |---|---|---|---|
-| v2 | 2026-11-13 | [zvukopis-case-v2.stl](zvukopis-case-v2.stl), [zvukopis-case-v2.step](zvukopis-case-v2.step), [zvukopis-case-v2.png](zvukopis-case-v2.png) | Wider bolt holes (3 mm) with shallower countersinks, stronger walls, the speaker holes moved 0.6 mm. The same outline, and it goes together like v1. Comes with a STEP file for changing it. |
-| v1 | 2026-11-02 | [zvukopis-case-v1.stl](zvukopis-case-v1.stl), [zvukopis-case-v1.png](zvukopis-case-v1.png) | The first case. Prints on an FDM or a resin printer. |
+| v1 | 2026-11-15 | [zvukopis-case-v1.stl](zvukopis-case-v1.stl), [zvukopis-case-v1.step](zvukopis-case-v1.step), [zvukopis-case-v1.png](zvukopis-case-v1.png) | The first case. Prints on an FDM or a resin printer. Comes with a STEP file for changing it. |
 
 A new version gets the next number in both file names, a row here, and a row
 in the case list on the project page (`docs/index.html`, the Build section,
