@@ -12,3 +12,5 @@ four countersunk M2.5×6 bolts, hex or Torx. The build steps are on the
 A new version gets the next number in both file names, a row here, and a row
 in the case list on the project page (`docs/index.html`, the Build section,
 by the title), where the 3D view and the parts list also name the file.
+The exploded view is drawn from the STEP file by
+`scripts/make_exploded_view.py`.
