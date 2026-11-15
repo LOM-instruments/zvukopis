@@ -25,8 +25,9 @@ with the gain on the side switch.
 ## Using it
 
 The [user guide](docs/guide.md) covers everything below screen by screen; it
-is also on the project page, and it reads on the device (a copy sits in
-`library/` next to the sample document). In short:
+is also on the project page, and it reads on the device, where it comes with
+the firmware (every build takes `docs/guide.md` in, and the device keeps it in
+its library). In short:
 
 - **Record:** press the side switch in on *New recording*. Press again to stop.
   With an SD card in, a recording can run for up to 6 hours.
@@ -36,7 +37,7 @@ is also on the project page, and it reads on the device (a copy sits in
 - **Tag, analyse, delete:** hold the switch in on a moment.
 - **Calendar:** up from *New recording*, then press in.
 - **Library:** the book button next to the calendar, shown once the card has
-  documents. Up and down turn the pages; the page you left at is remembered.
+  documents (there is always one, the user guide). Up and down turn the pages; the page you left at is remembered.
 - **Spectrogram:** up and down step through four contrast levels; hold in for
   the spectrum, a scale of 0 to 24 or 0 to 12 kHz, or to go back.
 - **Settings:** the small button next to the USB port (the board calls it BOOT).
@@ -45,7 +46,7 @@ is also on the project page, and it reads on the device (a copy sits in
   and resetting the settings (for handing the device on; the card stays).
 - **Quick record:** while asleep, hold the side switch in. The recording
   screen comes up and the recording starts right after it (the panel's
-  refresh is audible to the mic, so it goes first; about 3 s from the press).
+  refresh is audible to the mic, so it goes first; about 2 s from the press).
   A short knock is ignored. Press in again to stop.
 - **Which firmware:** the version (date and commit) is at the top of
   Settings, and in the web interface's first line. The project page installs
@@ -74,7 +75,9 @@ own. ZIPs stay under 4 GB, so a bigger collection goes day by day.
 ### Library
 
 Documents go in `/doc` on the card, uploaded from the web interface or copied
-there with the USB card reader. Markdown (`.md`) and plain text (`.txt`) files
+there with the USB card reader. The user guide is always among them: the
+firmware writes its own copy there, `zvukopis-guide.md`, whenever the card has
+none or another version. Markdown (`.md`) and plain text (`.txt`) files
 up to 512 KB; the first `#` heading is the title. Headings, paragraphs,
 `> quotes`, lists, rules, *italic* and **bold** are laid out in Atkinson
 Hyperlegible; the text is shown as ASCII, with typographic quotes and dashes
@@ -169,7 +172,8 @@ For development, `src/wifi_config.example.h` can be copied to
   (`tinyusb_audio`) and a small name server for the hotspot (`CaptiveDns`).
 - `scripts/` tools: `make_fonts.py` renders the UI fonts, `import_quotes.py`
   builds the sleep-screen quotes, `serial_session.py` drives the device over
-  USB for testing, `make_release.py` prepares the web flasher.
+  USB for testing, `make_release.py` prepares the web flasher, `embed_guide.py` takes the
+  user guide into every build.
 - `docs/` the web flasher, served by GitHub Pages; `docs/case/` the case,
   an STL and an exploded view per version.
 

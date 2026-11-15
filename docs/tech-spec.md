@@ -2,9 +2,8 @@
 
 The Waveshare ESP32-S3-ePaper-3.97 board running the Zvukopis firmware, as a
 sound recorder. Figures marked *measured* come from an anechoic room with a
-94 dB SPL calibrator on 2026-10-30; the absolute levels are preliminary (the
-calibrator was held to the board's microphone pinhole without a sealed
-coupler), the relative ones are solid.
+94 dB SPL reference; the absolute levels are preliminary, the relative ones
+are solid.
 
 ## Board
 
@@ -70,7 +69,7 @@ floor while the headroom it buys (clipping above 145 dB SPL) is of no use.
 | Files | `/moments/YYYY-MM-DD/YYYY-MM-DDTHH-MM-SS_tag.wav` |
 | Card writing | Through a 4 s PSRAM ring, so the card's pauses don't drop samples; the file is synced every 5 s, so a power cut costs the last seconds only |
 | Moments | Up to 500 in the list |
-| Quick record | From sleep, about 3 s from the press to the first sample (0.8 s hold, then the panel refresh, which the microphone would otherwise hear) |
+| Quick record | From sleep, about 1.7 s from the press to the first sample (0.8 s hold, then about 0.7 s for waking the panel and the partial refresh that brings up the recording screen, which the microphone would otherwise hear; *measured*) |
 
 ## Analysis on the device
 
