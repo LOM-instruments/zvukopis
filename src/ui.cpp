@@ -2086,11 +2086,16 @@ static void addLine(uint32_t firstWord, uint16_t count, uint8_t kind) {
 
 // Lays out one block of text (a paragraph, heading, quote line or list item)
 // into words and lines. Inline *italic*, _italic_ and **bold** markers are
-// stripped off the ends of words and set the style.
+// stripped off the ends of words and set the style. `Code marks` are taken
+// out and what they hold is shown as it is, its asterisks and underscores too.
 static void layoutBlock(const char *start, const char *end, uint8_t kind) {
     uint32_t firstWord = wordTotal, lineStart = wordTotal;
     int width = 0, maxWidth = SW - 2 * MARGIN - lineIndent(kind);
     uint8_t style = 0;
+    bool code = false; // between two code marks, which may be words apart
+    int codeMarks = 0; // they come in pairs: a last one without its partner stays a character
+    for (const char *c = start; c < end; c++) codeMarks += *c == '`';
+    codeMarks -= codeMarks % 2;
     const char *p = start;
     while (p < end && wordTotal < wordCapacity) {
         while (p < end && (*p == ' ' || *p == '\t' || *p == '\n')) p++;
@@ -2099,18 +2104,32 @@ static void layoutBlock(const char *start, const char *end, uint8_t kind) {
         while (p < end && *p != ' ' && *p != '\t' && *p != '\n') p++;
         char *we = (char *)p;
         uint8_t wordStyle = style, after = style;
+        // Code marks are taken out, and what stands between two of them is
+        // kept as it is. Emphasis markers count only outside the code: before
+        // the place where it begins in this word, and after where it ends.
+        char *kept = (char *)w, *codeFrom = code ? kept : nullptr, *codeTo = kept;
+        for (const char *c = w; c < we; c++) {
+            if (*c != '`' || codeMarks == 0) { *kept++ = *c; continue; }
+            codeMarks--;
+            code = !code;
+            if (!codeFrom) codeFrom = kept;
+            codeTo = kept;
+        }
+        we = kept;
+        if (!codeFrom) codeFrom = we; // no code in this word
+        if (code) codeTo = we;        // the code runs on into the next word
         // markers at the front switch a style on for this word, at the back off
         // after it; closing markers may sit before punctuation ("*so*, he said")
-        while (we - w > 1) {
-            if (we - w > 2 && w[0] == '*' && w[1] == '*') { wordStyle |= STYLE_BOLD; after |= STYLE_BOLD; w += 2; }
+        while (we - w > 1 && w < codeFrom) {
+            if (we - w > 2 && codeFrom - w > 1 && w[0] == '*' && w[1] == '*') { wordStyle |= STYLE_BOLD; after |= STYLE_BOLD; w += 2; }
             else if (*w == '*' || *w == '_') { wordStyle |= STYLE_ITALIC; after |= STYLE_ITALIC; w++; }
             else break;
         }
         char *tail = we;
-        while (tail > w && strchr(".,;:!?)\"'", tail[-1])) tail--;
+        while (tail > w && tail > codeTo && strchr(".,;:!?)\"'", tail[-1])) tail--;
         size_t punctuation = we - tail;
-        while (tail - w > 1) {
-            if (tail - w > 2 && tail[-1] == '*' && tail[-2] == '*') { after &= ~STYLE_BOLD; wordStyle |= STYLE_BOLD; tail -= 2; }
+        while (tail - w > 1 && tail > codeTo) {
+            if (tail - w > 2 && tail - codeTo > 1 && tail[-1] == '*' && tail[-2] == '*') { after &= ~STYLE_BOLD; wordStyle |= STYLE_BOLD; tail -= 2; }
             else if (tail[-1] == '*' || tail[-1] == '_') { after &= ~STYLE_ITALIC; wordStyle |= STYLE_ITALIC; tail--; }
             else break;
         }
