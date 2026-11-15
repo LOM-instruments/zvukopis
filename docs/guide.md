@@ -7,7 +7,7 @@ Zvukopis is a pocket recorder for sonic moments. A moment is a recording: the so
 ## The buttons
 
 - **The side switch.** The rocker on the left edge. Move it up or down to choose, press it in to confirm the choice, and hold it in for more options. This is the main controller of the device.
-- **The Settings button.** The small button on the right side of the device marked with a cog icon on the case.
+- **The Settings button.** The small button on the right side of the device marked with a cog icon on the case. Press it to open Settings, and press it again to leave.
 - **The Sleep button.** The small button on the right side of the device marked with a moon icon on the case. It is placed above the Settings button.
 
 The button guide at the bottom of every screen says what the switch does right there: "Up or down", "Press in" and "Hold in". Once you know your way around, you can turn it off in Settings > *Button guide*, which leaves that space to the screens themselves. The two pointers on the sleep screen, which show how to wake Zvukopis and how to start a quick record, are turned off with it.
@@ -84,13 +84,13 @@ If Zvukopis ever stops responding, hold the Sleep button for ten seconds: it res
 
 The web interface is a page that Zvukopis itself offers over Wi-Fi, to a phone or a computer: on it you can record remotely, download your moments and change the settings. To start it, open Settings and choose *Web interface*. The screen shows the address and a QR code for it; on a phone or computer on the same Wi-Fi, scan the code or open the address as shown. The address ends in a key, a new one every time the web interface starts, so the page opens only for someone who can see the screen.
 
-**The first time**, when Zvukopis knows no Wi-Fi network yet, it makes its own. Select *Web interface on own hotspot* in Settings, scan the code on the screen with a phone camera, join, and the page opens by itself. Choose your Wi-Fi network there and enter its password. From then on Zvukopis joins that network when you start the web interface. *Web interface on own hotspot* makes its own network on purpose, for a field without Wi-Fi.
+**The first time**, when Zvukopis knows no Wi-Fi network yet, it makes its own. Select *Web interface* in Settings, scan the code on the screen with a phone camera, join, and the page opens by itself. Choose your Wi-Fi network there and enter its password. From then on Zvukopis joins that network when you start the web interface. *Web interface on own hotspot* makes its own network on purpose, for a field without Wi-Fi.
 
 The page has two tabs.
 
 **Recording.** This tab has a big Record button, a choice of the length after which the recording stops by itself, and the mic gain. Below them are the calendar of days with moments and the moments themselves, each of which can be played, downloaded or deleted. *Download all* saves every moment as WAV files in one ZIP, in a folder per day, which is the way to back Zvukopis up; a day chosen in the calendar can be downloaded on its own. One ZIP holds up to 4 GB, a little over six hours of recordings; when there is more than that, the page offers the days one at a time.
 
-**Settings.** This tab is where recordings are scheduled: each one has a date, a time and a length, and Zvukopis wakes up for it. The tab also holds the tags with their names and icons (the page calls them categories; you can add more, up to twelve, or remove the last one), varispeed, the clock and the time zone, the library (where you upload and remove documents) and the Wi-Fi networks Zvukopis knows.
+**Settings.** This tab is where recordings are scheduled: each one has a date, a time and a length, and Zvukopis wakes up for it. The tab also holds the tags with their names and icons (you can add more, up to twelve, or remove the last one), varispeed, the clock and the time zone, the library (where you upload and remove documents) and the Wi-Fi networks Zvukopis knows.
 
 The web interface stays on until you press the side switch in on the device, or until ten minutes pass with nothing done on the page; a recording that is running keeps it on. Wi-Fi uses some battery and can add a little noise to a recording made meanwhile.
 

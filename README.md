@@ -67,7 +67,7 @@ the address shown on the screen, which ends in a key that is new at every start
 
 The page has a *Recording* tab (record and stop, mic gain, a calendar of the
 days with moments, the moments with playback, download and delete) and a
-*Settings* tab (scheduled recordings, categories, varispeed, time and time
+*Settings* tab (scheduled recordings, tags, varispeed, time and time
 zone, library, Wi-Fi networks). *Download all* saves every moment as one ZIP of WAV files in
 day folders (a backup); a day picked in the calendar can be downloaded on its
 own. ZIPs stay under 4 GB, so a bigger collection goes day by day.
@@ -164,7 +164,7 @@ For development, `src/wifi_config.example.h` can be copied to
 - `src/` the firmware: `ui.cpp` (screens, input), `audio.cpp` (codec,
   recording, playback), `storage.cpp` (SD card, WAV files), `transfer.cpp`
   (web interface), `networks.cpp` (Wi-Fi), `clock.cpp` (RTC, NTP, time zone),
-  `config.cpp` (categories, schedule), `spectrum.cpp` (FFT analysis),
+  `config.cpp` (tags, schedule), `spectrum.cpp` (FFT analysis),
   `cardreader.cpp` (USB mass storage), `main.cpp` (sleep, scheduler).
 - `lib/` the e-paper driver (Waveshare), the ES8311 codec driver (Espressif),
   a copy of the Arduino `WebServer` library, hardened (its `NOTICE.md` lists

@@ -429,7 +429,7 @@ function addCategory(){
  const n=catRows().length+1;if(n>CATEGORY_MAX)return;
  const r=$('catrow').content.firstElementChild.cloneNode(true);r.dataset.slot=n;
  r.querySelector('input[id^=name]').id='name'+n;for(const i of r.querySelectorAll('input[type=radio]'))i.name='icon'+n;
- $('cats').appendChild(r);r.querySelector('input[id^=name]').focus();$('catnote').textContent='New categories are kept when you press Save.';catButtons()}
+ $('cats').appendChild(r);r.querySelector('input[id^=name]').focus();$('catnote').textContent='New tags are kept when you press Save.';catButtons()}
 function removeCategory(){
  const rows=catRows();if(rows.length<=1)return;rows[rows.length-1].remove();
  $('catnote').textContent='Removed when you press Save; moments tagged with it lose the tag.';catButtons()}
@@ -708,7 +708,7 @@ static void sendCategoryRow(char *buf, size_t len, int slot, const Category &c) 
 
 static void sendCategories(char *buf, size_t len) {
     int count = configCategoryCount();
-    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Categories (%d)</h2>"
+    snprintf(buf, len, "<section class=band><div class=\"cell c3\"><h2>Tags (%d)</h2>"
                        "<p class=note id=catnote>What a moment can be tagged as, with a long press on Zvukopis. "
                        "Renaming one renames it on the moments already tagged; up to %d.</p></div>"
                        "<div class=\"cell c5\"><div id=cats>", count, CATEGORY_MAX);
@@ -716,7 +716,7 @@ static void sendCategories(char *buf, size_t len) {
     for (int slot = 1; slot <= count; slot++) sendCategoryRow(buf, len, slot, configCategory(slot));
     server.sendContent("</div></div><div class=\"cell c4\">"
                        "<div class=row><button class=black onclick=saveCategories()>Save</button></div>"
-                       "<div class=row><button id=addcat onclick=addCategory()>Add a category</button>"
+                       "<div class=row><button id=addcat onclick=addCategory()>Add a tag</button>"
                        "<button id=removecat onclick=removeCategory()>Remove the last</button></div>"
                        "</div></section><template id=catrow>");
     Category blank = {"", ICON_STAR};
@@ -957,14 +957,14 @@ static void handleCategories() {
     if (!allowed()) return;
     int count = server.arg("count").toInt();
     if (count < 1 || count > CATEGORY_MAX) {
-        server.send(400, "text/plain", "Between 1 and " + String(CATEGORY_MAX) + " categories");
+        server.send(400, "text/plain", "Between 1 and " + String(CATEGORY_MAX) + " tags");
         return;
     }
     Category list[CATEGORY_MAX];
     int before = configCategoryCount();
     if (count < before && audioState() == AUDIO_RECORDING) {
         // Untagging the removed category's moments rewrites files, which waits on the audio task
-        server.send(400, "text/plain", "Stop the recording first, then remove categories");
+        server.send(400, "text/plain", "Stop the recording first, then remove tags");
         return;
     }
     for (int slot = 1; slot <= count; slot++) {
@@ -978,7 +978,7 @@ static void handleCategories() {
         }
         if (n == 0) {
             if (slot > before) {
-                server.send(400, "text/plain", "Give the new category a name in plain letters: the screen's fonts have only ASCII");
+                server.send(400, "text/plain", "Give the new tag a name in plain letters: the screen's fonts have only ASCII");
                 return;
             }
             c = configCategory(slot); // left empty: keep the name
