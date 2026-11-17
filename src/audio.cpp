@@ -61,6 +61,10 @@ static const float SPEED_RETURN[RAMP_COUNT] = {0.92f, 0.85f, 0.75f}; // fraction
 // zero: the tape stops, then runs backwards (and on up to the top speed while held)
 static const float SCRUB_SPEED = 0.25f;
 static const float SCRUB_STEP[RAMP_COUNT] = {0.03f, 0.05f, 0.09f}; // per chunk: normal is 0.16 s from +0.25 to -0.25
+// With the speed staying, a moment left running backwards waits this long at
+// its start and then ends (playbackChunk); the count is the audio task's alone
+static const int START_WAIT_CHUNKS = 3000 / 16;
+static int waitedAtStart = 0;
 
 // Play, delete and tag name their moment by its number, never by its place in
 // the list: the place is found when the request is carried out, since the
@@ -638,6 +642,7 @@ static void startPlayback(int index) {
     speedDirection = 0;
     returning = false;
     restoreSpeed = false;
+    waitedAtStart = 0;
     underruns = 0;
     fileEnd = moments[index].length;
     if (!moments[index].samples) {
@@ -1042,6 +1047,16 @@ static size_t playbackChunk(const Moment &moment, int16_t *out, size_t frames) {
     if (missed) {
         underruns++;
         xTaskNotifyGive(readerTaskHandle);
+    }
+    // Left running backwards by itself (the speed stays and nothing is held), a
+    // moment that has reached its start waits there for a few seconds, in which
+    // a tap or a push up plays it forwards again, and then ends as it does at
+    // its other end. Without this it stood at the start for good, playing
+    // nothing, and kept the device from going to sleep.
+    if (pos < 0 && stepAfter < 0 && speedDirection == 0 && holdSetting && !returning) {
+        if (++waitedAtStart >= START_WAIT_CHUNKS) return 0;
+    } else {
+        waitedAtStart = 0;
     }
     return n;
 }
