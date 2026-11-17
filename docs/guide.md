@@ -54,7 +54,7 @@ If Zvukopis is asleep in your pocket and you want to quickly start recording, ho
 
 To listen to a moment, move to it in the list and press the side switch in. It plays through the small speaker at the back of the device, and a playhead runs along the waveform. Press in again to stop.
 
-While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal, or, if you prefer, the speed stays where you left it and a tap of the switch brings it back. How far the speed can go (two to six times), how quickly it changes, and what happens when you let go are all set under *Varispeed* in Settings, on the device or on the web interface.
+While it plays, hold the switch up or down and the speed changes like a tape reel: up is faster, down is slower, and past standstill the sound runs backwards. Let go and it eases back to normal, or, if you prefer, the speed stays where you left it and a tap of the switch brings it back. How far the speed can go (up to six times, or never above normal), how quickly it changes, and what happens when you let go are all set under *Varispeed* in Settings, on the device or on the web interface.
 
 ## What else you can do with a moment
 
@@ -118,7 +118,7 @@ With the USB cable in a computer or a tablet, Settings > *USB microphone* turns 
 ## Settings, in order
 
 - **Mic gain.** Sets how much the microphone's signal is amplified: *Auto*, or a fixed value from 18 to 54 dB in steps of 6 dB. A low value suits loud sounds and a high one quiet sounds.
-- **Varispeed.** Sets how the playback speed behaves when you hold the switch up or down: the top speed (2, 3, 4 or 6 times), the ramp (how quickly the speed changes) and whether letting go brings the speed back to normal or keeps it.
+- **Varispeed.** Sets how the playback speed behaves when you hold the switch up or down: the top speed (1, 2, 3, 4 or 6 times; at 1 the sound never runs faster than normal, so the switch only slows it down and turns it backwards), the ramp (how quickly the speed changes) and whether letting go brings the speed back to normal or keeps it.
 - **Scheduled recordings.** Opens the list of the recordings that are planned; the clock has to be set for them. *Schedule a recording* adds one: you set its day, its time, its length and whether it happens once or every day. To change a value, press in on it, move the switch up or down (holding it goes faster) and press in again; when everything is right, choose *Save*. In the list, pressing in on a planned recording lets you change it, and holding in removes it; Zvukopis asks first. Recordings can also be scheduled on the web interface, where the time can be set to the second.
 - **Web interface.** Starts the web interface on your Wi-Fi network, so that a phone or a computer on the same network can open its page. When no known network is in range, it starts on its own hotspot instead.
 - **Web interface on own hotspot.** Starts the web interface on a network that Zvukopis makes itself, for places without Wi-Fi.

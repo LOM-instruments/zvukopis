@@ -728,7 +728,9 @@ static void sendCategories(char *buf, size_t len) {
 static void sendVarispeed(char *buf, size_t len) {
     server.sendContent("<section class=band><div class=\"cell c3\"><h2>Varispeed</h2>"
                        "<p class=note>Holding the switch up or down while a moment plays changes the speed like a tape reel, "
-                       "through standstill into reverse. The ramp is how quickly it gets there. Letting go brings the speed back, "
+                       "through standstill into reverse. With a top speed of 1x the sound never runs faster than normal: "
+                       "the switch only slows it down and turns it backwards. "
+                       "The ramp is how quickly the speed changes. Letting go brings the speed back, "
                        "or keeps it, with a tap bringing it back.</p></div>"
                        "<div class=\"cell c9\"><div class=row><label>Top speed <select id=vmax onchange=\"saveVarispeed('max')\">");
     for (int top : VARISPEED_MAX_CHOICES) {

@@ -125,10 +125,12 @@ void audioSetMicGain(int db);
 int audioMicGainSetting();
 
 // Varispeed (holding up or down while a moment plays): the top speed, in
-// times normal (2, 3, 4 or 6), and how quickly the speed moves
+// times normal (1, 2, 3, 4 or 6), and how quickly the speed moves. With 1 the
+// sound never runs faster than normal: the switch slows it, stops it and
+// turns it backwards, up to normal speed in reverse.
 enum VarispeedRamp { RAMP_GENTLE, RAMP_NORMAL, RAMP_QUICK, RAMP_COUNT };
-static const int VARISPEED_MAX_CHOICES[] = {2, 3, 4, 6};
-static const int VARISPEED_MAX_CHOICE_COUNT = 4;
+static const int VARISPEED_MAX_CHOICES[] = {1, 2, 3, 4, 6};
+static const int VARISPEED_MAX_CHOICE_COUNT = 5;
 void audioSetVarispeed(int maxSpeed, int ramp, int hold); // kept in settings; -1 leaves that one as it is
 int audioVarispeedMax();
 int audioVarispeedRamp();

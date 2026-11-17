@@ -2579,7 +2579,7 @@ static void drawVarispeedPicker(const ViewState &v) {
         bool current;
         if (group == 0) {
             int top = VARISPEED_MAX_CHOICES[i];
-            snprintf(label, sizeof(label), "Up to %dx%s", top, top == 2 ? "  (tape-like)" : top == 6 ? "  (wild)" : "");
+            snprintf(label, sizeof(label), "Up to %dx%s", top, top == 1 ? "  (never faster)" : top == 2 ? "  (tape-like)" : top == 6 ? "  (wild)" : "");
             current = top == v.varispeedMax;
         } else if (group == 1) {
             int ramp = i - VARISPEED_MAX_CHOICE_COUNT;
