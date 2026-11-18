@@ -1,6 +1,6 @@
 # Zvukopis: technical specification
 
-The Waveshare ESP32-S3-ePaper-3.97 board running the Zvukopis firmware, as a
+The [Waveshare ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm?&aff_id=193968) board (affiliate link) running the Zvukopis firmware, as a
 sound recorder. Figures marked *measured* come from an anechoic room with a
 94 dB SPL reference; the absolute levels are preliminary, the relative ones
 are solid.
@@ -9,7 +9,7 @@ are solid.
 
 | | |
 |---|---|
-| Board | Waveshare ESP32-S3-ePaper-3.97 |
+| Board | [Waveshare ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm?&aff_id=193968) (affiliate link) |
 | Processor | ESP32-S3R8, dual core, 8 MB octal PSRAM, 16 MB flash |
 | Screen | 3.97" e-paper, 480 x 800, partial refresh about 0.55 s, full about 2.2 s at 21 °C and above (4 s from 11 to 20 °C, 5.5 s below; *measured*); the panel is rated for 0 to 50 °C |
 | Controls | Side rocker switch (up, down, press, hold), Settings button, Sleep button |
