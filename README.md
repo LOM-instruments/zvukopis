@@ -1,7 +1,8 @@
 # Zvukopis
 
-A pocket recorder for sonic moments, built on the Waveshare ESP32-S3-ePaper-3.97
-board: a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
+A pocket recorder for sonic moments, built on the Waveshare
+[ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm?&aff_id=193968)
+board (affiliate link): a 3.97" e-paper screen, a side rocker switch, a microphone, a speaker,
 a microSD slot and a battery, in a 3D-printed case.
 
 **Project page: [zvukopis.lom.audio](https://zvukopis.lom.audio).** It has the
@@ -112,8 +113,8 @@ exploded view per version, with a list of the versions.
 
 What you need:
 
-- The Waveshare [ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm)
-  board, from Waveshare or a distributor. Take the version *with lithium
+- The Waveshare [ESP32-S3-ePaper-3.97](https://www.waveshare.com/esp32-s3-epaper-3.97.htm?&aff_id=193968)
+  board (affiliate link), from Waveshare or a distributor. Take the version *with lithium
   battery* (or the kit, which adds a card, a cable and a card reader): the
   speaker is in every box, the battery is not. Any other 3.7 V lithium battery
   with an MX1.25 two-pin plug works too, if it takes a 200 mA charge (400 mAh or more).
